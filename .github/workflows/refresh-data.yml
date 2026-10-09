@@ -83,5 +83,7 @@ jobs:
             echo "nothing changed"
           else
             git commit -m "data: ${{ steps.set.outputs.set }} refresh $(date -u +%F)"
+            # main may have moved while the ingests ran; replay on top, keeping this run's data.
+            git pull --rebase -X theirs origin main
             git push
           fi
