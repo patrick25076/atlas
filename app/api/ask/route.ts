@@ -7,7 +7,10 @@ import countriesJson from "@/public/data/countries.json";
 import cityPlacesJson from "@/public/data/city-places.json";
 import weatherJson from "@/public/data/weather.json";
 import visaJson from "@/public/data/visa.json";
-import { expandWeather, visaFor, type City, type CityPlaces, type CountryInfo, type Deal, type DealsFile, type VisaFile, type WeatherCompact } from "@/lib/types";
+import airportsJson from "@/public/data/airports.json";
+import { nearestGateways } from "@/lib/geo";
+import { reachFrom } from "@/lib/ground";
+import { expandWeather, visaFor, type Airport, type City, type CityPlaces, type CountryInfo, type Deal, type DealsFile, type VisaFile, type WeatherCompact } from "@/lib/types";
 
 // POST /api/ask { question, home?: "RO" } → a short answer grounded in the deals file and the
 // place facts, plus the deals it used so the UI can highlight them. Runs on Bedrock with the
@@ -18,6 +21,7 @@ const COUNTRIES = countriesJson as unknown as Record<string, CountryInfo>;
 const PLACES = cityPlacesJson as unknown as Record<string, CityPlaces>;
 const WEATHER = (weatherJson as unknown as WeatherCompact).syms ? expandWeather(weatherJson as unknown as WeatherCompact) : null;
 const VISA = visaJson as unknown as VisaFile;
+const AIRPORTS = airportsJson as unknown as Airport[];
 
 const hits = new Map<string, { n: number; at: number }>();
 function limited(ip: string): boolean {
@@ -53,7 +57,7 @@ export async function POST(request: Request) {
   const ip = request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || "local";
   if (limited(ip)) return NextResponse.json({ status: "error", note: "Too many questions this hour.", text: "", used: [] }, { status: 429 });
 
-  let body: { question?: string; home?: string };
+  let body: { question?: string; home?: string; origin?: { lat?: number; lon?: number; label?: string } };
   try {
     body = await request.json();
   } catch {
@@ -62,6 +66,10 @@ export async function POST(request: Request) {
   const question = (body.question ?? "").trim().slice(0, 400);
   const home = /^[A-Z]{2}$/.test(body.home ?? "") ? body.home! : "RO";
   if (!question) return NextResponse.json({ error: "question required" }, { status: 400 });
+  const origin =
+    body.origin && Number.isFinite(body.origin.lat) && Number.isFinite(body.origin.lon)
+      ? { lat: body.origin.lat!, lon: body.origin.lon!, label: body.origin.label?.slice(0, 60) || "their location" }
+      : null;
 
   const used = new Map<string, Deal>();
   // Values pasted into env UIs often carry a newline; trim both.
@@ -73,6 +81,48 @@ export async function POST(request: Request) {
   const model = bedrock((process.env.ASK_MODEL ?? "us.openai.gpt-6-astra").trim());
 
   const tools = {
+    home_airports: tool({
+      description: "The airports worth driving to from where the visitor is, with drive time, distance and size. Use for 'which airport should I fly from'.",
+      inputSchema: jsonSchema<Record<string, never>>({ type: "object", properties: {} }),
+      execute: async () => {
+        if (!origin) return { error: "the visitor's location is unknown" };
+        return nearestGateways(AIRPORTS, origin.lat, origin.lon, { maxKm: 350, limit: 6 }).map((g) => ({
+          iata: g.airport.iata,
+          name: g.airport.name,
+          city: g.airport.city,
+          size: g.airport.size,
+          driveMinutes: g.driveMin,
+          km: Math.round(g.km),
+          dealsFromHere: DEALS.deals.filter((d) => d.gw === g.airport.iata).length,
+        }));
+      },
+    }),
+    ground_reach: tool({
+      description:
+        "Towns reachable by train, coach or ferry from the visitor's location within a time limit (expected door-to-door minutes, not a timetable), biggest towns first. Use for 'where can I go by train in N hours'.",
+      inputSchema: jsonSchema<{ maxHours?: number; limit?: number }>({
+        type: "object",
+        properties: { maxHours: { type: "number", description: "default 5, max 10" }, limit: { type: "number", description: "default 12, max 25" } },
+      }),
+      execute: async (a) => {
+        if (!origin) return { error: "the visitor's location is unknown" };
+        const max = Math.min(600, Math.max(60, Math.round((a.maxHours ?? 5) * 60)));
+        const r = reachFrom(origin.lat, origin.lon, max);
+        const seen = new Set<string>();
+        const towns = r.reached
+          .filter((s) => s.pop >= 15_000)
+          .sort((x, y) => y.pop - x.pop)
+          .filter((s) => {
+            const name = s.town ?? s.name;
+            if (seen.has(name)) return false;
+            seen.add(name);
+            return true;
+          })
+          .slice(0, Math.min(25, a.limit ?? 12))
+          .map((s) => ({ town: s.town ?? s.name, population: s.pop, minutes: s.minutes, changes: s.changes, mode: s.mode }));
+        return { from: origin.label, maxMinutes: max, towns };
+      },
+    }),
     cheapest_deals: tool({
       description:
         "Cheapest return getaways from the home airports (real Kiwi.com prices, searched nightly). One result per city. Filter by max price in EUR, nights, direct flights only, warm (>= 20 C this weekend), country code, or a city name.",
@@ -152,7 +202,7 @@ export async function POST(request: Request) {
   try {
     const result = await generateText({
       model,
-      system: `You are Atlas, a travel concierge for someone living in Romania (passport ${home}). Answer in at most four short sentences, plain words, no bullet lists. Only state prices, dates and facts that the tools returned; never invent a price. Prices are return fares found on Kiwi.com on ${DEALS.updated.slice(0, 10)} and can change. When you recommend deals, name the city, the price and the dates. If nothing in the data fits, say so and suggest the closest thing.`,
+      system: `You are Atlas, a travel concierge for someone${origin ? ` in ${origin.label}` : " in Romania"} (passport ${home}). Answer in at most four short sentences, plain words, no bullet lists. Only state prices, dates, times and facts that the tools returned; never invent a price. Deal prices are return fares found on Kiwi.com on ${DEALS.updated.slice(0, 10)} and can change; ground times are estimates, not timetables. When you recommend deals, name the city, the price and the dates. If nothing in the data fits, say so and suggest the closest thing.`,
       prompt: question,
       tools,
       stopWhen: stepCountIs(4),

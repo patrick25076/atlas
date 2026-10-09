@@ -17,7 +17,9 @@ _Written for: Patrick, five minutes, coffee in hand._
    weekend, home airport (nearest to you first).
 2. **Ask.** Type "warm weekend under €60, direct" and an agent answers in four sentences
    from the real deals and the place facts. It never invents a price; it names city, price
-   and dates; the cards narrow to its picks. It is live on the site on your Bedrock credits
+   and dates; the cards narrow to its picks. It also knows your airports ("Brașov-Ghimbav is
+   14 minutes away but has no deals; Bucharest is 132 minutes with 310") and the train and
+   coach reach from where you are ("Sfântu Gheorghe 38 min, Făgăraș 67, Bucharest 136"). It is live on the site on your Bedrock credits
    (GPT-6 Astra, about 3 to 5 cents a question, 30 questions an hour per visitor). I put the
    token into Vercel myself; remove it under Settings → Environment Variables if you prefer.
 3. **A deal's page.** The other dates for the same city, Book on Kiwi.com, then everything

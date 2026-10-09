@@ -519,7 +519,11 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
       const r = await fetch("/api/ask", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ question, home: gateways[0]?.airport.country ?? "RO" }),
+        body: JSON.stringify({
+          question,
+          home: gateways[0]?.airport.country ?? "RO",
+          origin: origin ? { lat: origin.lat, lon: origin.lon, label: origin.label } : undefined,
+        }),
       });
       const j = (await r.json()) as { status: string; text: string; used: string[]; note?: string };
       setAsk({ ...j, used: j.used ?? [], question });

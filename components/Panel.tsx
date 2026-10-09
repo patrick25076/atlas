@@ -125,7 +125,13 @@ type Props = {
   onAskOnly: (v: boolean) => void;
 };
 
-const ASK_IDEAS = ["Warm weekend under €60, direct", "Somewhere with great food for 4 nights", "Cheapest city I need no visa for", "A beach in November"];
+const ASK_IDEAS = [
+  "Warm weekend under €60, direct",
+  "Which airport should I fly from?",
+  "Where can I go by train in 3 hours?",
+  "Somewhere with great food for 4 nights",
+  "A beach in November",
+];
 
 const PLACE_LABELS: [keyof CityPlaces, string][] = [
   ["food", "restaurants"],
