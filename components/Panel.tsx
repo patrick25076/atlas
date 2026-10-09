@@ -74,6 +74,7 @@ type Props = {
   onOrigin: (a: Airport) => void;
   fares: FaresResponse | null;
   anyFares: boolean;
+  fareSource: string;
   airlines: Record<string, string>;
   pricedOnly: boolean;
   onPricedOnly: (v: boolean) => void;
@@ -738,7 +739,7 @@ export default function Panel(p: Props) {
                         {place.air.fare.airline ? ` with ${p.airlines[place.air.fare.airline] ?? place.air.fare.airline}` : ""}
                         {place.air.fareGateway && place.air.fareGateway.iata !== place.air.gateway.iata ? ` from ${place.air.fareGateway.iata}` : ""}.{" "}
                         <a href={place.air.fare.url} target="_blank" rel="noreferrer">
-                          Book on Aviasales ↗
+                          Book ↗
                         </a>
                       </>
                     ) : (
@@ -775,7 +776,7 @@ export default function Panel(p: Props) {
               ? ""
               : !p.reach && p.totalPlaces === 0
                 ? "Searching flights, trains and coaches…"
-                : `Door-to-door estimates by air, train, coach and ferry within 10 h.${p.anyFares ? " Prices are cached one-way fares." : ""}`}
+                : `Door-to-door estimates by air, train, coach and ferry within 10 h.${p.anyFares ? ` Prices are ${p.fareSource}.` : ""}`}
           </div>
           <Chips band={p.band} onBand={p.onBand}>
             <button className={`chip${p.bigOnly ? " on" : ""}`} onClick={() => p.onBigOnly(!p.bigOnly)}>
@@ -918,10 +919,9 @@ export default function Panel(p: Props) {
                 <div className="status">
                   €{selected.fare.price} one way on {shortDate(selected.fare.departureAt)}
                   {selected.fare.airline ? ` with ${p.airlines[selected.fare.airline] ?? selected.fare.airline}` : ""}, {stops(selected.fare.transfers)}, ~
-                  {formatDuration(selected.fare.durationMin ?? flightMinutes(selected.km))}. Cached from recent Aviasales searches; the live price is on
-                  the booking page.{" "}
+                  {formatDuration(selected.fare.durationMin ?? flightMinutes(selected.km))}. Price as found; the live one is on the booking page.{" "}
                   <a href={selected.fare.url} target="_blank" rel="noreferrer">
-                    Book on Aviasales ↗
+                    Book ↗
                   </a>
                 </div>
               ) : (
@@ -950,7 +950,7 @@ export default function Panel(p: Props) {
             {p.fares === null
               ? "Checking fares…"
               : p.fares.status === "ok"
-                ? `Cheapest cached one-way fares, next 3 months: ${p.fares.fares.length} priced.`
+                ? `Cheapest one-way fares (${p.fareSource}): ${p.fares.fares.length} priced.`
                 : p.fares.status === "no-token"
                   ? "Route map from the 2014 network; live one-way fares need the Travelpayouts token (SETUP §2). For priced getaways use the Deals tab."
                   : `Fares unavailable: ${p.fares.note ?? "error"}`}

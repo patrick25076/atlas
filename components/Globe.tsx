@@ -664,6 +664,9 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
     return (holidays[home] ?? []).filter((h) => h.national && h.date >= today && h.date <= horizon).slice(0, 5);
   }, [gateways, holidays]);
   const anyFares = Object.values(faresByGateway).some((f) => f.status === "ok" && f.fares.length > 0);
+  const fareSource = Object.values(faresByGateway).some((f) => f.note?.includes("Kiwi"))
+    ? "one-way fares found on Kiwi.com (weekly search)"
+    : "cached one-way fares from Aviasales searches";
 
   // Trips: open-jaw loops from the gateways, searched on the server.
   useEffect(() => {
@@ -1113,6 +1116,7 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
         }}
         fares={fares}
         anyFares={anyFares}
+        fareSource={fareSource}
         airlines={airlines}
         pricedOnly={pricedOnly}
         onPricedOnly={setPricedOnly}
@@ -1181,7 +1185,7 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
         >
           Airports: {manifest.airports?.source} · {manifest.airports?.licence} · {manifest.airports?.fetchedAt.slice(0, 10)}
           {" · "}Network: {manifest.routes?.source} · {manifest.routes?.note?.split(".")[0]}
-          {anyFares ? " · Fares: Aviasales cache via Travelpayouts · EUR" : ""}
+          {anyFares ? ` · Fares: ${fareSource} · EUR` : ""}
           {wantReach && reach ? ` · Ground: ${reach.feeds.length} GTFS feeds (${groundFeeds}) · expected times, not a timetable` : ""}
           {weather ? ` · Weather: MET Norway (CC BY 4.0) ${weather.updated.slice(0, 10)}` : ""}
           {` · ${Object.keys(manifest).length} sources, hover for all`}
