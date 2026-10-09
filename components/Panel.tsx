@@ -33,6 +33,7 @@ export type Intel = {
   places?: CityPlaces;
   pop?: number;
   heritage?: { name: string; km: number }[];
+  visa?: { passport: string; text: string | null; updated: string };
 };
 
 function people(n: number): string {
@@ -199,6 +200,11 @@ function PlaceIntel({ intel, summary }: { intel: Intel; summary: PlaceSummary | 
             {c.calling ?? ""}
             {c.calling && c.driving ? " · " : ""}
             {c.driving ? `drive on the ${c.driving}` : ""}
+          </span>
+        )}
+        {intel.visa?.text && (
+          <span title={`Passport Index dataset (MIT), as of ${intel.visa.updated}. Indicative: check the embassy before you book.`}>
+            Visa ({intel.visa.passport} passport): {intel.visa.text}
           </span>
         )}
         {a?.warning && <span className="warn">Travel warning (German Foreign Office, {a.updated})</span>}

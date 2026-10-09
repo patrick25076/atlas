@@ -23,10 +23,11 @@ import type {
   ReachResponse,
   ReachStation,
   Route,
+  VisaFile,
   WeatherCompact,
   WeatherFile,
 } from "@/lib/types";
-import { expandWeather } from "@/lib/types";
+import { expandWeather, visaFor } from "@/lib/types";
 import Panel, { BANDS, MODE_LABEL, type Band, type Intel, type View } from "./Panel";
 
 // The bundler cannot resolve MapLibre's worker from import.meta.url; see scripts/copy-worker.mjs.
@@ -151,6 +152,7 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
   const [weather, setWeather] = useState<WeatherFile | null>(null);
   const [cityPlaces, setCityPlaces] = useState<Record<string, CityPlaces>>({});
   const [heritage, setHeritage] = useState<HeritageRow[]>([]);
+  const [visa, setVisa] = useState<VisaFile | null>(null);
   const [manifest, setManifest] = useState<Manifest | null>(null);
   const [summary, setSummary] = useState<PlaceSummary | null>(null);
   const [warmOnly, setWarmOnly] = useState(false);
@@ -188,7 +190,8 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
       load("weather.json"),
       load("city-places.json"),
       load("heritage.json"),
-    ]).then(([a, r, al, c, m, co, h, w, cp, he]) => {
+      load("visa.json"),
+    ]).then(([a, r, al, c, m, co, h, w, cp, he, vi]) => {
       setAirports(a ?? []);
       setRoutes(r ?? []);
       setAirlines(al ?? {});
@@ -199,6 +202,7 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
       setWeather(w && (w as WeatherCompact).syms ? expandWeather(w as WeatherCompact) : null);
       setCityPlaces(cp ?? {});
       setHeritage(he ?? []);
+      setVisa(vi);
     });
   }, []);
 
@@ -421,6 +425,10 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
       holidays: countryCode ? (holidays[countryCode] ?? []).filter((h) => h.date >= today && h.date <= horizon).slice(0, 2) : undefined,
       places: code ? cityPlaces[code] : undefined,
       pop: city?.pop ?? selected.ground?.pop ?? undefined,
+      visa:
+        visa && countryCode && gateways[0] && gateways[0].airport.country !== countryCode
+          ? { passport: gateways[0].airport.country, text: visaFor(visa, gateways[0].airport.country, countryCode), updated: visa.updated }
+          : undefined,
       heritage: heritage
         .map((h) => ({ name: h[0], km: Math.round(haversineKm(selected.lat, selected.lon, h[1], h[2])) }))
         .filter((h) => h.km <= 60)
@@ -428,7 +436,7 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
         .slice(0, 3),
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selected, cities, countries, weather, holidays, cityPlaces, heritage]);
+  }, [selected, cities, countries, weather, holidays, cityPlaces, heritage, visa, gateways]);
 
   // One paragraph from Wikivoyage for the selected place, by city name.
   useEffect(() => {

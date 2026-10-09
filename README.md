@@ -44,6 +44,7 @@ Built source by source. Every number on the globe says where it came from
 | GeoNames cities15000 | CC BY 4.0 | 34k towns with population; city population, town names for stations, "big places" ranking | `pnpm ingest:geonames`, monthly |
 | Wikidata: World Heritage Sites | CC0 | 1,887 sites; the nearest within 60 km on the card | `pnpm ingest:heritage`, monthly |
 | Wikidata: country facts | CC0 | Plugs, voltage, official languages, calling code, driving side | with `ingest:countries` |
+| Passport Index dataset (imorte, continuing ilyankou) | MIT | Visa requirement for the visitor's passport at each destination, labelled indicative with the dataset date | `pnpm ingest:visa`, monthly |
 
 ## Stack decisions
 

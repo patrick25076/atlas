@@ -160,5 +160,14 @@
     "fetchedAt": "2026-10-09T20:03:50.333Z",
     "rows": 1887,
     "file": "public/data/heritage.json"
+  },
+  "visa": {
+    "source": "Passport Index dataset (imorte, continuing ilyankou)",
+    "url": "https://raw.githubusercontent.com/imorte/passport-index-data/main/passport-index-tidy-iso2.csv",
+    "licence": "MIT",
+    "note": "Visa requirements by passport and destination, indicative, as of 2026-02-17.",
+    "fetchedAt": "2026-10-09T20:08:56.818Z",
+    "rows": 39601,
+    "file": "public/data/visa.json"
   }
 }

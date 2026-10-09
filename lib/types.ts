@@ -32,6 +32,38 @@ export type City = {
 /** [name, lat, lon, country] per World Heritage site (public/data/heritage.json). */
 export type HeritageRow = [string, number, number, string];
 
+/** Visa requirements (public/data/visa.json): one character per destination per passport. */
+export type VisaFile = {
+  updated: string;
+  source: string;
+  countries: string[];
+  passports: Record<string, string>;
+  days: Record<string, Record<string, number>>;
+};
+
+export const VISA_TEXT: Record<string, string> = {
+  F: "visa-free, up to 90 days",
+  S: "visa-free, short stay",
+  L: "visa-free, longer stay",
+  A: "visa on arrival",
+  T: "electronic travel authorisation",
+  E: "e-visa before travel",
+  V: "visa required",
+  N: "no admission",
+  H: "home country",
+};
+
+export function visaFor(v: VisaFile, passport: string, destination: string): string | null {
+  const row = v.passports[passport];
+  const i = v.countries.indexOf(destination);
+  if (!row || i < 0) return null;
+  const code = row[i];
+  if (!code || code === "?") return null;
+  const days = v.days[passport]?.[destination];
+  if ((code === "S" || code === "L") && days) return `visa-free, up to ${days} days`;
+  return VISA_TEXT[code] ?? null;
+}
+
 /** One record per country (public/data/countries.json). */
 export type CountryInfo = {
   name: string;

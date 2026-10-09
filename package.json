@@ -23,6 +23,7 @@
     "ingest:geonames": "tsx scripts/ingest/geonames.ts",
     "ingest:heritage": "tsx scripts/ingest/heritage.ts",
     "ingest:ferries": "tsx scripts/ingest/ferries.ts",
+    "ingest:visa": "tsx scripts/ingest/visa.ts",
     "check:tp": "tsx scripts/check-travelpayouts.ts"
   },
   "dependencies": {
