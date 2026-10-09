@@ -466,19 +466,23 @@ a {
     bottom: 0;
     width: auto;
     max-width: none;
-    height: 52vh;
+    height: 60vh;
     border-radius: var(--radius) var(--radius) 0 0;
-    padding: 12px 16px;
+    padding: 10px 14px;
+    gap: 8px;
+  }
+  .ideas,
+  .provenance {
+    display: none;
   }
   .brand {
     left: 16px;
     top: 12px;
   }
-  .provenance {
-    bottom: calc(52vh + 8px);
-    right: 8px;
-  }
   .maplibregl-ctrl-bottom-right {
-    bottom: calc(52vh + 36px);
+    bottom: calc(60vh + 12px);
+  }
+  .tabs .tab {
+    padding: 7px 4px;
   }
 }

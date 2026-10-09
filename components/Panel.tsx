@@ -474,7 +474,7 @@ export default function Panel(p: Props) {
                 </button>
               </form>
               {!p.ask && !p.asking && (
-                <div className="chips">
+                <div className="chips ideas">
                   {ASK_IDEAS.map((q) => (
                     <button key={q} className="chip" onClick={() => p.onAsk(q)}>
                       {q}

@@ -48,7 +48,7 @@ const CLUTTER = [
 // bottom sheet on phones (the sheet takes 52vh, see globals.css).
 function panelPadding() {
   if (typeof window !== "undefined" && window.innerWidth <= 720) {
-    return { left: 16, right: 16, top: 60, bottom: Math.round(window.innerHeight * 0.52) + 24 };
+    return { left: 16, right: 16, top: 60, bottom: Math.round(window.innerHeight * 0.6) + 24 };
   }
   return { left: 430, top: 60, right: 60, bottom: 60 };
 }

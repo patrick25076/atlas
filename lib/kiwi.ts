@@ -86,18 +86,42 @@ export function kiwiDate(iso: string): string {
   return `${d}/${m}/${y}`;
 }
 
-export async function searchFlight(args: SearchArgs): Promise<KiwiResult> {
-  await ensureSession();
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+export async function searchFlight(args: SearchArgs, attempt = 0): Promise<KiwiResult> {
+  try {
+    await ensureSession();
+  } catch (err) {
+    // The server sheds load with 503s now and then; wait and try again, three times.
+    if (attempt < 3) {
+      await sleep(2000 * (attempt + 1));
+      return searchFlight(args, attempt + 1);
+    }
+    throw err;
+  }
   const id = ++rpcId;
   const r = await post({ jsonrpc: "2.0", id, method: "tools/call", params: { name: "search-flight", arguments: { adults: 1, currency: "EUR", ...args } } });
   if (r.status === 404 || r.status === 400) {
     // Session expired: start over once.
     session = null;
     await ensureSession();
-    return searchFlight(args);
+    return searchFlight(args, attempt);
+  }
+  if (r.status === 503 || r.status === 429) {
+    if (attempt < 3) {
+      await sleep(2000 * (attempt + 1));
+      return searchFlight(args, attempt + 1);
+    }
+    throw new Error(`kiwi mcp: ${r.status}`);
   }
   const reply = r.events.find((e) => e.id === id) as { result?: { content?: { type: string; text?: string }[]; isError?: boolean }; error?: { message: string } } | undefined;
-  if (!reply) throw new Error("kiwi mcp: no reply");
+  if (!reply) {
+    if (attempt < 3) {
+      await sleep(1500 * (attempt + 1));
+      return searchFlight(args, attempt + 1);
+    }
+    throw new Error("kiwi mcp: no reply");
+  }
   if (reply.error) throw new Error(`kiwi mcp: ${reply.error.message}`);
   const text = reply.result?.content?.find((c) => c.type === "text")?.text ?? "";
   if (reply.result?.isError) throw new Error(`kiwi mcp: ${text.slice(0, 200)}`);

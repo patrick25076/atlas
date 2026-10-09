@@ -214,5 +214,14 @@
     "fetchedAt": "2026-10-09T22:56:56.756Z",
     "rows": 1287,
     "file": "public/data/deals.json"
+  },
+  "oneway": {
+    "source": "Kiwi.com flight search (public MCP), one-way",
+    "url": "https://mcp.kiwi.com/",
+    "licence": "Kiwi.com public MCP, no key; prices and booking links as returned",
+    "note": "Cheapest one-way dates out of and back into OTP, CLJ, IAS, TSR for 117 cities, 2026-10-11 to 2026-11-25. 235 searches failed.",
+    "fetchedAt": "2026-10-09T23:05:28.505Z",
+    "rows": 4201,
+    "file": "public/data/oneway.json"
   }
 }
