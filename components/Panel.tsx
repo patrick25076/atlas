@@ -610,7 +610,7 @@ export default function Panel(p: Props) {
                 </h2>
                 <div className="status">
                   {trip.nights} nights, {trip.outDate} to {trip.backDate}. {trip.countries} countr{trip.countries === 1 ? "y" : "ies"},{" "}
-                  {trip.travelHours} h of travel door to door. Flights are cached one-way fares; train and coach tickets come on top.
+                  {trip.travelHours} h of travel door to door. Flights are one-way fares as found (Kiwi.com or Aviasales); train and coach tickets come on top.
                 </div>
                 <div>
                   {trip.legs.map((l, i) =>
