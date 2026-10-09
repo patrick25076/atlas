@@ -22,7 +22,9 @@ _Written for: Patrick, five minutes, coffee in hand._
    coach reach from where you are ("Sfântu Gheorghe 38 min, Făgăraș 67, Bucharest 136"). It is live on the site on your Bedrock credits
    (GPT-6 Astra, about 3 to 5 cents a question, 30 questions an hour per visitor). I put the
    token into Vercel myself; remove it under Settings → Environment Variables if you prefer.
-3. **A deal's page.** The other dates for the same city, Book on Kiwi.com, then everything
+3. **A deal's page.** The other dates for the same city, Book on Kiwi.com, **Check other
+   dates** (pick a departure date and nights; it re-prices that route live on Kiwi, ±2 days,
+   with booking links; works from the live site, 5 seconds), then everything
    about the place: the week's weather, sea temperature where known, population, local time
    and the hour shift from you, daylight, currency and today's rate, plugs, languages, calling
    code, driving side, visa for a Romanian passport, travel warnings, the next holiday there,
@@ -79,6 +81,14 @@ live site they also go into Vercel → Settings → Environment Variables → Pr
 - Visa data is the Passport Index dataset of February 2026, labelled indicative.
 - Deals start from Romanian airports; a visitor elsewhere sees a note and can use Explore.
 - The Trips tab takes a couple of seconds the first time after a deploy (it loads the graph).
+
+## Fixed on the way
+
+- The live site had been drawing a black globe with dots: MapLibre's worker file was never
+  deployed (a postinstall copy Vercel doesn't run). It is committed now; the map renders.
+- Kiwi blocked this laptop's IP after ~2,000 searches in one night. Both ingests now stop
+  after eight failures in a row and never overwrite a good file; the nightly search runs from
+  GitHub's runners, which have their own addresses (first run triggered at 02:21 your time).
 
 ## Numbers, for the record
 
