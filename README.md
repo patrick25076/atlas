@@ -32,7 +32,7 @@ Built source by source. Every number on the globe says where it came from
 | Travelpayouts airports.json | free static data | City code → airports mapping for the fares API | `pnpm ingest:tp-airports`, monthly |
 | Travelpayouts / Aviasales Data API | free with token (SETUP §2) | Cheapest cached one-way fare per destination, booking links with the marker | live, cached 1 h per origin |
 | GTFS feeds (`scripts/ingest/feeds.ts`): gtfs.de long-distance (CC BY 4.0), Romanian railways (OGL-ROU 1.0), SNCF TGV/Intercités/TER (ODbL), Eurostar (Etalab 2.0), FlixBus + FlixTrain Europe (ODbL) | per feed | Ground graph: 7.4k stations, 220k direct connections, walking transfers; `/api/reach` Dijkstra with expected waits | `pnpm ingest:gtfs`, weekly |
-| MET Norway locationforecast | CC BY 4.0 | 7-day forecast for 2,805 cities; weather strip, "Warm this weekend" | `pnpm ingest:weather`, nightly |
+| MET Norway locationforecast + oceanforecast | CC BY 4.0 | 7-day forecast for 2,805 cities; weather strip, "Warm this weekend"; sea temperature for cities within 15 km of a ferry port | `pnpm ingest:weather`, nightly |
 | Frankfurter (ECB rates) | free, commercial OK | Today's rate per euro, 104 countries | `pnpm ingest:countries`, daily |
 | Wikidata | CC0 | Plug types and voltage, 223 countries | monthly |
 | German Federal Foreign Office | open data | Travel warnings, full and partial, 200 countries | daily |

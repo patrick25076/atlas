@@ -129,8 +129,8 @@
     "source": "MET Norway locationforecast",
     "url": "https://api.met.no/weatherapi/locationforecast/2.0/documentation",
     "licence": "CC BY 4.0 (Norwegian Meteorological Institute)",
-    "note": "7-day forecast for cities with a large or medium airport.",
-    "fetchedAt": "2026-10-09T19:46:13.079Z",
+    "note": "7-day forecast for cities with a large or medium airport; sea temperature where a ferry port is within 15 km.",
+    "fetchedAt": "2026-10-09T20:16:00.284Z",
     "rows": 2805,
     "file": "public/data/weather.json"
   },
