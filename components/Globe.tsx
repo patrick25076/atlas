@@ -480,6 +480,17 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
   }, [dealsShown, dealsAll, ask, askOnly]);
   const deal = selectedDeal ? (dealsAll.find((d) => dealKey(d) === selectedDeal) ?? null) : null;
 
+  // Home airports in the deals file, nearest to the visitor first.
+  const dealGateways = useMemo(() => {
+    const list = dealsFile?.gateways ?? [];
+    if (!origin) return list;
+    const km = (iata: string) => {
+      const a = byIata.get(iata);
+      return a ? haversineKm(origin.lat, origin.lon, a.lat, a.lon) : 1e9;
+    };
+    return [...list].sort((a, b) => km(a) - km(b));
+  }, [dealsFile, origin, byIata]);
+
   async function askAgent(question: string) {
     setAsking(true);
     setSelectedDeal(null);
@@ -1097,6 +1108,7 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
           setSelectedDeal(null);
         }}
         dealsFile={dealsFile}
+        dealGateways={dealGateways}
         deals={dealsList}
         deal={deal}
         ask={ask}

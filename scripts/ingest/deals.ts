@@ -88,8 +88,21 @@ async function worker() {
 }
 await Promise.all(Array.from({ length: CONCURRENCY }, worker));
 
+// DEALS_MERGE=1 keeps the other gateways' deals from the existing file (adding an airport
+// without re-searching the rest).
+let gatewaysOut = GATEWAYS;
+if (process.env.DEALS_MERGE) {
+  try {
+    const prev = JSON.parse(await readFile(OUT, "utf8")) as DealsFile;
+    for (const d of prev.deals) if (!GATEWAYS.includes(d.gw)) deals.push(d);
+    gatewaysOut = [...new Set([...prev.gateways, ...GATEWAYS])];
+    console.log(`merged with ${prev.deals.length} existing deals from ${prev.gateways.join(", ")}`);
+  } catch {
+    console.log("no existing deals file to merge");
+  }
+}
 deals.sort((a, b) => a.price - b.price);
-const file: DealsFile = { updated: new Date().toISOString(), window: { from, to }, gateways: GATEWAYS, nights: [MIN_NIGHTS, MAX_NIGHTS], deals };
+const file: DealsFile = { updated: new Date().toISOString(), window: { from, to }, gateways: gatewaysOut, nights: [MIN_NIGHTS, MAX_NIGHTS], deals };
 await writeFile(OUT, JSON.stringify(file) + "\n");
 await recordManifest("deals", {
   source: "Kiwi.com flight search (public MCP)",

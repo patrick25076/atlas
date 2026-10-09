@@ -103,6 +103,7 @@ type Props = {
   around: string | null;
   onAround: (d: string | null) => void;
   dealsFile: DealsFile | null;
+  dealGateways: string[];
   deals: Deal[];
   deal: Deal | null;
   dealOptions: Deal[];
@@ -508,7 +509,7 @@ export default function Panel(p: Props) {
               </div>
               <div className="status">
                 {p.dealsFile
-                  ? `Return flights, ${p.dealsFile.nights[0]} to ${p.dealsFile.nights[1]} nights, ${dateRange(p.dealsFile.window.from, p.dealsFile.window.to)}, from ${p.dealsFile.gateways.join(", ")}. Searched on Kiwi.com ${shortDate(p.dealsFile.updated)}, refreshed nightly.`
+                  ? `Return flights, ${p.dealsFile.nights[0]} to ${p.dealsFile.nights[1]} nights, ${dateRange(p.dealsFile.window.from, p.dealsFile.window.to)}, from ${p.dealGateways.join(", ")}. Searched on Kiwi.com ${shortDate(p.dealsFile.updated)}, refreshed nightly.`
                   : "No deals file yet. Run pnpm ingest:deals."}
               </div>
               <div className="chips">
@@ -526,12 +527,12 @@ export default function Panel(p: Props) {
                   </button>
                 )}
               </div>
-              {p.dealsFile && p.dealsFile.gateways.length > 1 && (
+              {p.dealGateways.length > 1 && (
                 <div className="chips">
                   <button className={`chip${p.dealGateway === "all" ? " on" : ""}`} onClick={() => p.onDealGateway("all")}>
                     Any airport
                   </button>
-                  {p.dealsFile.gateways.map((g) => (
+                  {p.dealGateways.map((g) => (
                     <button key={g} className={`chip${p.dealGateway === g ? " on" : ""}`} onClick={() => p.onDealGateway(g)}>
                       {g}
                     </button>
