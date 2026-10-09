@@ -2,71 +2,82 @@
 
 _Written for: Patrick, five minutes, coffee in hand._
 
-**Open it:** https://atlas-kappa-wheat.vercel.app (local: http://localhost:3210, the dev
-server from last night is still running)
+**Open it:** https://atlas-kappa-wheat.vercel.app  
+(local copy: http://localhost:3210, the dev server from last night is still running)
 
 ## What it does now
 
-1. **Deals** (the home tab): the cheapest return getaways from Bucharest, Cluj, Iași and
-   Timișoara for the next six weeks, 2 to 7 nights. Real prices and booking links from
-   Kiwi.com, searched every night (1,287 itineraries over 117 cities; Venice €32, Milan €37,
-   Gdańsk €38, Tirana €38, Bologna €39, all direct). Cards with a photo, price, dates, airline,
-   and a reason to go. Filters: nights, direct only, warm this weekend, airport.
-2. **Ask**: type "warm weekend under €60, direct" and an agent answers in four sentences from
-   the real deals and place facts, never inventing a price, and the cards narrow to its picks.
-   Runs on your Bedrock credits (GPT-6 Astra). It is live on the site: I put your Bedrock
-   token into Vercel's production env, capped at 30 questions an hour per visitor. Each
-   question costs about 3 to 5 cents. Remove it in Vercel → Settings → Environment Variables
-   if you'd rather not.
-3. **A deal's page**: dates and the other dates for the same city, Book on Kiwi.com, then
-   the place card: weather for the week, sea temperature where known, population, local time,
-   daylight, currency and today's rate, plugs, languages, calling code, driving side, visa
-   for a Romanian passport, travel warnings, next holiday there, World Heritage sites nearby,
-   how many restaurants/bars/nightlife/culture/nature, and a Wikivoyage paragraph.
-4. **Explore**: every place within 10 hours by plane, train, coach or ferry with the best
-   way there. Dots only; an arc only for the place you pick. 12,959 stations across RO, FR,
-   DE (long distance), ES, BE, IE, Eurostar, FlixBus, plus 3,507 ferry crossings.
-5. **Trips**: 3-countries-in-5-days loops, priced from Kiwi one-way fares (searched nightly).
-6. **Share**: every view is a link.
-7. **It refreshes itself**: GitHub Actions re-runs every ingest (daily: deals, one-way,
-   weather, rates, holidays; weekly: ground graph, towns; monthly: Overture, ferries,
-   heritage, visa) and commits, which redeploys.
+1. **Deals** (the home tab). The cheapest return getaways for the next six weeks, 2 to 7
+   nights, from Bucharest, Cluj, Iași, Timișoara, and now Brașov, Sibiu and Craiova. Real
+   prices and booking links from Kiwi.com, searched every night. Tonight's board: Venice
+   €32, Milan €37, Gdańsk €38, Tirana €38, Bologna €39, all direct. Cards show a photo, price,
+   dates, airline, flight time and a reason to go. Filters: nights, direct only, warm this
+   weekend, home airport (nearest to you first).
+2. **Ask.** Type "warm weekend under €60, direct" and an agent answers in four sentences
+   from the real deals and the place facts. It never invents a price; it names city, price
+   and dates; the cards narrow to its picks. It is live on the site on your Bedrock credits
+   (GPT-6 Astra, about 3 to 5 cents a question, 30 questions an hour per visitor). I put the
+   token into Vercel myself; remove it under Settings → Environment Variables if you prefer.
+3. **A deal's page.** The other dates for the same city, Book on Kiwi.com, then everything
+   about the place: the week's weather, sea temperature where known, population, local time
+   and the hour shift from you, daylight, currency and today's rate, plugs, languages, calling
+   code, driving side, visa for a Romanian passport, travel warnings, the next holiday there,
+   World Heritage sites nearby, how many restaurants, bars, nightlife and cultural places, and a
+   Wikivoyage paragraph. Events appear here the moment you give me a Ticketmaster key.
+4. **Explore.** Every place within ten hours by plane, train, coach or ferry with the best
+   way there, door to door. Dots only; an arc only for the place you pick. The ground graph has
+   12,959 stations (RO, FR, DE long-distance, ES, BE, IE, Eurostar, FlixBus) and 3,507 ferry
+   crossings.
+5. **Trips.** Three-countries-in-five-days loops priced from Kiwi one-way fares: "Vienna →
+   Brno → Bratislava, 6 nights, €74 in flights, 3 countries", with booking links. Chips for
+   leaving around a Romanian holiday.
+6. **Share.** Every view is a link; the Share chip copies it. A shared link shows a card
+   with tonight's five cheapest deals (the Open Graph image). Add to Home Screen works.
+7. **It refreshes itself.** GitHub Actions re-runs every source: daily (deals, one-way
+   fares, weather, rates, advisories, holidays, airports), weekly (ground graph, towns),
+   monthly (Overture places, ferries, heritage, visa). Each run commits and redeploys.
 
 ## What I need from you, in order of impact
 
 | # | What | Why | Minutes |
 |---|---|---|---|
-| 1 | **Travelpayouts** token + marker ([SETUP §2](../SETUP.md)) | affiliate links that pay, one-way fares for Explore; also the hub for Airalo, Omio, Kiwitaxi, cars | 5 |
-| 2 | **Ticketmaster** consumer key (§10) | events on every place card (code is ready) | 5 |
-| 3 | **LiteAPI** sandbox key (§5) | hotels with live prices and your margin | 10 |
-| 4 | **Viator** Basic key (§6), **Tiqets** (§7), **DiscoverCars** (§8) | tours, tickets, car hire that pay commission | 10 each |
-| 5 | **opentransportdata.swiss** key (§11) | Switzerland in the ground graph | 5 |
-| 6 | ÖBB download (§9) | Austria in the ground graph | 2 |
-| 7 | **Kiwi.com affiliate** (Travelpayouts has a Kiwi programme) | the booking links from Deals currently carry no marker, so they earn nothing yet | 5 |
+| 1 | **Kiwi.com affiliate** through Travelpayouts, plus the **Travelpayouts** token and marker ([SETUP §2](../SETUP.md)) | the Book buttons carry no marker yet, so they earn nothing; the token also unlocks one-way fares in Explore and the Airalo/Omio/Kiwitaxi/car programmes | 10 |
+| 2 | **Ticketmaster** consumer key (§10, free) | events on every place card; the code is ready | 5 |
+| 3 | **LiteAPI** sandbox key (§5) | hotels with live prices and your margin, plus their review scores and sentiment | 10 |
+| 4 | **Viator** Basic key (§6), **Tiqets** (§7), **DiscoverCars** (§8) | tours, tickets and car hire that pay commission | 10 each |
+| 5 | **opentransportdata.swiss** key (§11, free) | Switzerland in the ground graph | 5 |
+| 6 | ÖBB click-to-accept download (§9) | Austria in the ground graph | 2 |
 
 Paste keys into `C:\dev\atlas\.env.local` (names in `.env.example`) and tell me. For the
 live site they also go into Vercel → Settings → Environment Variables → Production.
 
 ## Decisions you may want to take
 
-- **Kiwi.com as the price source.** It's their public MCP server, no key, no stated limits,
-  and the links are bookable. The commercial terms are not published, so treat it as the
-  bridge until Travelpayouts/Kiwi affiliate links are in place.
-- **The agent model.** GPT-6 Astra on Bedrock is good but pricey (~$11/$55 per million
-  tokens). `ASK_MODEL` in env switches it; a cheaper Bedrock model would do for this job.
-- **Your home airports.** The deals search covers OTP, CLJ, IAS, TSR. `DEALS_GATEWAYS` in
-  the workflow changes that (SBZ, CRA, SUJ are easy additions).
-- **Destinations list.** 117 cities in `scripts/ingest/destinations.ts`; add codes to widen.
+- **Kiwi.com as the price source.** Their public MCP server for agents: no key, no stated
+  limits (it throttled once after ~700 searches; the client now retries), bookable links.
+  The commercial terms are not published, so treat it as the bridge until the affiliate
+  programme is in place. Fallback paths already exist (Travelpayouts).
+- **The agent model.** `ASK_MODEL` in env switches it; a cheaper Bedrock model is fine for
+  this job if the bill matters.
+- **Home airports and destinations.** `DEALS_GATEWAYS` in the workflow; the 117 cities live
+  in `scripts/ingest/destinations.ts`. Both are one-line changes.
+- **Reviews.** Google, Tripadvisor and Yelp all forbid storing reviews. The honest route to
+  the "five bad reviews about the same thing" intelligence you described is LiteAPI's hotel
+  reviews and sentiment (needs the key), and later Viator's.
+- **Events from city pages.** Possible, but each city is its own format and it is scraping.
+  Ticketmaster first; if you want city pages, say which cities.
 
 ## Caveats, in plain words
 
-- Prices are what Kiwi returned at search time; the booking page shows the live one.
-  Nightly refresh keeps them within a day.
-- Ferry crossings and ground times are estimates, labelled as such. No timetable source for
-  ferries exists without accounts.
-- Sea temperature exists only where MET Norway's ocean model covers (Nordic/Baltic).
-- Reviews: no legitimate review source works without accounts (Google, Tripadvisor, Yelp
-  all forbid storing them). LiteAPI's hotel reviews and sentiment come with the LiteAPI key.
-- Events: Ticketmaster only, once you give the key. City-page scraping is possible but each
-  city is its own format; say the word and I'll start with Bucharest.
-- Visa data is the Passport Index dataset of February 2026, indicative.
+- Prices are what Kiwi returned at search time (nightly); the booking page shows the live one.
+- Ferry crossings and ground times are estimates and say so. No open ferry timetables exist.
+- Sea temperature only where MET Norway's ocean model covers (Nordic and Baltic).
+- Visa data is the Passport Index dataset of February 2026, labelled indicative.
+- Deals start from Romanian airports; a visitor elsewhere sees a note and can use Explore.
+- The Trips tab takes a couple of seconds the first time after a deploy (it loads the graph).
+
+## Numbers, for the record
+
+22 data sources, 13 commits tonight, 1,287 return deals + 4,201 one-way fares searched,
+2,805 cities with weather, 2,707 with place counts, 12,959 stations, 3,507 ferries, 1,887
+World Heritage sites, 253 countries of facts, 199 passports of visa rules.

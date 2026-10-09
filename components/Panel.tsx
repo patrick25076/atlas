@@ -104,6 +104,7 @@ type Props = {
   onAround: (d: string | null) => void;
   dealsFile: DealsFile | null;
   dealGateways: string[];
+  farFromDeals: boolean;
   deals: Deal[];
   deal: Deal | null;
   dealOptions: Deal[];
@@ -502,6 +503,12 @@ export default function Panel(p: Props) {
                   ) : (
                     <div className="status">{p.ask.note ?? "No answer."}</div>
                   )}
+                </div>
+              )}
+              {p.farFromDeals && (
+                <div className="status">
+                  These getaways start in Romania ({p.dealGateways.join(", ")}). From where you are, use Explore for routes and times; priced
+                  deals for other home airports come with the next build.
                 </div>
               )}
               <div className="hero">

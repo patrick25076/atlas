@@ -491,6 +491,18 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
     return [...list].sort((a, b) => km(a) - km(b));
   }, [dealsFile, origin, byIata]);
 
+  // The deals are searched from the Romanian airports; a visitor elsewhere should know that.
+  const farFromDeals = useMemo(() => {
+    if (!origin || !dealsFile?.gateways.length) return false;
+    const nearest = Math.min(
+      ...dealsFile.gateways.map((g) => {
+        const a = byIata.get(g);
+        return a ? haversineKm(origin.lat, origin.lon, a.lat, a.lon) : 1e9;
+      }),
+    );
+    return nearest > 400;
+  }, [origin, dealsFile, byIata]);
+
   async function askAgent(question: string) {
     setAsking(true);
     setSelectedDeal(null);
@@ -1109,6 +1121,7 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
         }}
         dealsFile={dealsFile}
         dealGateways={dealGateways}
+        farFromDeals={farFromDeals}
         deals={dealsList}
         deal={deal}
         ask={ask}
