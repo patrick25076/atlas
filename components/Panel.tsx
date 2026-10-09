@@ -29,6 +29,7 @@ export type Intel = {
   countryCode?: string;
   country?: CountryInfo;
   weather?: WeatherDay[];
+  sea?: number;
   holidays?: Holiday[];
   places?: CityPlaces;
   pop?: number;
@@ -174,6 +175,7 @@ function PlaceIntel({ intel, summary }: { intel: Intel; summary: PlaceSummary | 
         </div>
       )}
       <div className="facts">
+        {intel.sea != null && <span title="MET Norway ocean forecast at the nearest port">Sea {intel.sea}°</span>}
         {intel.pop ? <span>{people(intel.pop)} people</span> : null}
         {time && (
           <span>
@@ -339,7 +341,7 @@ export default function Panel(p: Props) {
           By air
         </button>
         <button className={`chip${p.view === "ground" ? " on" : ""}`} onClick={() => p.onView("ground")}>
-          By train and coach
+          By land and sea
         </button>
         <button className={`chip${p.view === "trips" ? " on" : ""}`} onClick={() => p.onView("trips")}>
           Trips

@@ -3,6 +3,7 @@
 // it warm this weekend". Terms: identify the app in the User-Agent, stay under 20 requests a
 // second, honour Expires. We run nightly, well under that.
 import { readFile, writeFile } from "node:fs/promises";
+import { haversineKm } from "../../lib/geo";
 import { recordManifest } from "./manifest";
 import { compactWeather, type City, type WeatherDay as Day } from "../../lib/types";
 
@@ -75,12 +76,52 @@ async function worker() {
 }
 await Promise.all(Array.from({ length: CONCURRENCY }, worker));
 
-await writeFile(OUT, JSON.stringify(compactWeather(new Date().toISOString(), out)) + "\n");
+// Sea temperature for coastal cities: a city within 15 km of a ferry port (scripts/ingest/
+// ferries.ts) is on the water, and the port is a point the ocean forecast can answer for.
+const sea: Record<string, number> = {};
+try {
+  const ferries = JSON.parse(await readFile("public/data/ferries.json", "utf8")) as [string, number, number, number, number, number][];
+  const ports: [number, number][] = [];
+  for (const f of ferries) ports.push([f[1], f[2]], [f[3], f[4]]);
+  const coastal: [string, number, number][] = [];
+  for (const [code, c] of targets) {
+    let best: [number, number] | null = null;
+    let bestKm = 15;
+    for (const p of ports) {
+      if (Math.abs(p[0] - c.lat) > 0.2 || Math.abs(p[1] - c.lon) > 0.3) continue;
+      const km = haversineKm(c.lat, c.lon, p[0], p[1]);
+      if (km < bestKm) {
+        bestKm = km;
+        best = p;
+      }
+    }
+    if (best) coastal.push([code, best[0], best[1]]);
+  }
+  const q2 = [...coastal];
+  async function seaWorker() {
+    for (let next = q2.shift(); next; next = q2.shift()) {
+      const [code, lat, lon] = next;
+      const res = await fetch(`https://api.met.no/weatherapi/oceanforecast/2.0/complete?lat=${lat.toFixed(3)}&lon=${lon.toFixed(3)}`, {
+        headers: { "User-Agent": UA, Accept: "application/json" },
+      });
+      if (!res.ok) continue;
+      const body = (await res.json()) as { properties?: { timeseries?: { data: { instant: { details: { sea_water_temperature?: number } } } }[] } };
+      const t = body.properties?.timeseries?.[0]?.data.instant.details.sea_water_temperature;
+      if (typeof t === "number") sea[code] = Math.round(t);
+    }
+  }
+  await Promise.all(Array.from({ length: CONCURRENCY }, seaWorker));
+  console.log(`sea temperature: ${Object.keys(sea).length} of ${coastal.length} coastal cities`);
+} catch {
+  console.log("no ferries.json yet; skipping sea temperature");
+}
+
+await writeFile(OUT, JSON.stringify(compactWeather(new Date().toISOString(), out, sea)) + "\n");
 await recordManifest("weather", {
   source: "MET Norway locationforecast",
   url: "https://api.met.no/weatherapi/locationforecast/2.0/documentation",
   licence: "CC BY 4.0 (Norwegian Meteorological Institute)",
-  note: `${DAYS}-day forecast for cities with a large or medium airport.`,
+  note: `${DAYS}-day forecast for cities with a large or medium airport; sea temperature where a ferry port is within 15 km.`,
   fetchedAt: new Date().toISOString(),
   rows: Object.keys(out).length,
   file: OUT,

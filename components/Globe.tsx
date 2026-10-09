@@ -422,6 +422,7 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
       countryCode,
       country: countryCode ? countries[countryCode] : undefined,
       weather: code ? weather?.cities[code] : undefined,
+      sea: code ? weather?.sea[code] : undefined,
       holidays: countryCode ? (holidays[countryCode] ?? []).filter((h) => h.date >= today && h.date <= horizon).slice(0, 2) : undefined,
       places: code ? cityPlaces[code] : undefined,
       pop: city?.pop ?? selected.ground?.pop ?? undefined,

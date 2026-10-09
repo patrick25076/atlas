@@ -85,7 +85,8 @@ export type CityPlaces = Partial<Record<"food" | "cafe" | "bar" | "night" | "cul
 
 /** One forecast day, per city code, after expanding the compact file. */
 export type WeatherDay = { d: string; tmax: number; tmin: number; rain: number; sym: string };
-export type WeatherFile = { updated: string; cities: Record<string, WeatherDay[]> };
+/** `sea`: current sea surface temperature in °C for coastal cities. */
+export type WeatherFile = { updated: string; cities: Record<string, WeatherDay[]>; sea: Record<string, number> };
 
 /** On disk (public/data/weather.json): days run from `start` + `o`; `s` indexes `syms`. */
 export type WeatherCompact = {
@@ -93,6 +94,7 @@ export type WeatherCompact = {
   start: string;
   syms: string[];
   cities: Record<string, { o: number; t: number[]; n: number[]; r: number[]; s: number[] }>;
+  sea?: Record<string, number>;
 };
 
 export function expandWeather(c: WeatherCompact): WeatherFile {
@@ -107,10 +109,10 @@ export function expandWeather(c: WeatherCompact): WeatherFile {
       sym: c.syms[w.s[i]] ?? "",
     }));
   }
-  return { updated: c.updated, cities };
+  return { updated: c.updated, cities, sea: c.sea ?? {} };
 }
 
-export function compactWeather(updated: string, cities: Record<string, WeatherDay[]>): WeatherCompact {
+export function compactWeather(updated: string, cities: Record<string, WeatherDay[]>, sea: Record<string, number> = {}): WeatherCompact {
   const dates = Object.values(cities).flatMap((d) => d.map((x) => x.d));
   const start = dates.length ? dates.reduce((a, b) => (a < b ? a : b)) : new Date().toISOString().slice(0, 10);
   const base = Date.parse(start);
@@ -131,7 +133,7 @@ export function compactWeather(updated: string, cities: Record<string, WeatherDa
       s: days.map((d) => symIndex(d.sym)),
     };
   }
-  return { updated, start, syms, cities: out };
+  return { updated, start, syms, cities: out, sea };
 }
 
 export type ManifestEntry = {
