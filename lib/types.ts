@@ -24,8 +24,13 @@ export type City = {
   lon: number;
   /** IANA time zone, e.g. Europe/Bucharest. */
   tz?: string;
+  /** Population of the biggest GeoNames town within 20 km. */
+  pop?: number;
   airports: string[];
 };
+
+/** [name, lat, lon, country] per World Heritage site (public/data/heritage.json). */
+export type HeritageRow = [string, number, number, string];
 
 /** One record per country (public/data/countries.json). */
 export type CountryInfo = {
@@ -35,10 +40,16 @@ export type CountryInfo = {
   rate?: number;
   plugs?: string[];
   voltage?: number;
+  languages?: string[];
+  calling?: string;
+  driving?: "left" | "right";
   advisory?: { warning: boolean; partial: boolean; situation: boolean; situationPart: boolean; updated: string };
 };
 
 export type Holiday = { date: string; name: string; localName: string; national: boolean };
+
+/** Counts of places within ~5 km of a city centre (public/data/city-places.json, Overture). */
+export type CityPlaces = Partial<Record<"food" | "cafe" | "bar" | "night" | "culture" | "nature" | "shop" | "stay", number>>;
 
 /** One forecast day, per city code, after expanding the compact file. */
 export type WeatherDay = { d: string; tmax: number; tmin: number; rain: number; sym: string };
@@ -149,6 +160,10 @@ export type ReachStation = {
   links: number;
   /** Departures per day. */
   depDay: number;
+  /** Population of the nearest town over 15,000 within 10 km (GeoNames), 0 when none. */
+  pop: number;
+  /** That town's name, when it differs from the station name. */
+  town?: string;
 };
 
 export type ReachResponse = {

@@ -85,7 +85,7 @@
     "url": "https://api.travelpayouts.com/data/en/countries.json",
     "licence": "Travelpayouts static data (free for partner use)",
     "note": "Country name and currency code.",
-    "fetchedAt": "2026-10-09T19:45:13.685Z",
+    "fetchedAt": "2026-10-09T19:54:05.909Z",
     "rows": 253,
     "file": "public/data/countries.json"
   },
@@ -94,16 +94,16 @@
     "url": "https://api.frankfurter.dev/v1/latest?base=EUR",
     "licence": "Free, commercial use allowed",
     "note": "Rates per EUR as of 2026-10-09.",
-    "fetchedAt": "2026-10-09T19:45:13.685Z",
+    "fetchedAt": "2026-10-09T19:54:05.909Z",
     "rows": 104,
     "file": "public/data/countries.json"
   },
   "plugs": {
-    "source": "Wikidata (P2853 plug type, P2884 mains voltage)",
+    "source": "Wikidata (plug type, mains voltage, official languages, calling code, driving side)",
     "url": "https://query.wikidata.org/",
     "licence": "CC0",
-    "note": "Plug types and voltage per country.",
-    "fetchedAt": "2026-10-09T19:45:13.685Z",
+    "note": "Practical country facts.",
+    "fetchedAt": "2026-10-09T19:54:05.909Z",
     "rows": 223,
     "file": "public/data/countries.json"
   },
@@ -112,7 +112,7 @@
     "url": "https://www.auswaertiges-amt.de/opendata/travelwarning",
     "licence": "Open data of the Auswärtiges Amt",
     "note": "Full and partial travel warnings per country.",
-    "fetchedAt": "2026-10-09T19:45:13.685Z",
+    "fetchedAt": "2026-10-09T19:54:05.909Z",
     "rows": 200,
     "file": "public/data/countries.json"
   },
@@ -133,5 +133,32 @@
     "fetchedAt": "2026-10-09T19:46:13.079Z",
     "rows": 2805,
     "file": "public/data/weather.json"
+  },
+  "towns": {
+    "source": "GeoNames cities15000",
+    "url": "https://download.geonames.org/export/dump/cities15000.zip",
+    "licence": "CC BY 4.0",
+    "note": "Towns over 15,000 people with population; 2394 airport cities got a population.",
+    "fetchedAt": "2026-10-09T20:01:34.111Z",
+    "rows": 34156,
+    "file": "public/data/towns.json"
+  },
+  "cityPlaces": {
+    "source": "Overture Maps places 2026-09-23.1",
+    "url": "https://docs.overturemaps.org/guides/places/",
+    "licence": "CDLA-Permissive 2.0",
+    "note": "Counts of restaurants, cafés, bars, nightlife, culture, nature, shops and lodging within ~5 km of each city centre. No places stored.",
+    "fetchedAt": "2026-10-09T20:01:43.290Z",
+    "rows": 2707,
+    "file": "public/data/city-places.json"
+  },
+  "heritage": {
+    "source": "UNESCO World Heritage Sites via Wikidata (P1435 = Q9259)",
+    "url": "https://query.wikidata.org/",
+    "licence": "CC0",
+    "note": "Site names and coordinates; the card lists sites within 60 km.",
+    "fetchedAt": "2026-10-09T20:03:50.333Z",
+    "rows": 1887,
+    "file": "public/data/heritage.json"
   }
 }

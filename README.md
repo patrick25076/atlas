@@ -39,6 +39,11 @@ Built source by source. Every number on the globe says where it came from
 | Nager.Date | open source | 2,878 public holidays, 204 countries, next 400 days; home holidays become trip-date chips | `pnpm ingest:holidays`, weekly |
 | Wikivoyage | CC BY-SA 4.0 | One paragraph per place, live via `/api/place`, cached a day, attributed | live |
 | Travelpayouts cities.json | free static data | City names, coordinates, time zones (local time on the card) | `pnpm ingest:tp-airports`, monthly |
+| Overture Maps places (S3 parquet via DuckDB) | CDLA-Permissive 2.0 | Counts of restaurants, cafés, bars, nightlife, culture, nature, shops, lodging within ~5 km of 2,707 cities; no places stored | `pnpm ingest:overture`, monthly |
+| Overture Maps transportation (water segments) | CDLA-Permissive 2.0 | Named ferry routes with ports → estimated crossings in the ground graph | `pnpm ingest:ferries`, monthly |
+| GeoNames cities15000 | CC BY 4.0 | 34k towns with population; city population, town names for stations, "big places" ranking | `pnpm ingest:geonames`, monthly |
+| Wikidata: World Heritage Sites | CC0 | 1,887 sites; the nearest within 60 km on the card | `pnpm ingest:heritage`, monthly |
+| Wikidata: country facts | CC0 | Plugs, voltage, official languages, calling code, driving side | with `ingest:countries` |
 
 ## Stack decisions
 

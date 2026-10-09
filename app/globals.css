@@ -250,6 +250,10 @@ a {
 .facts .warn {
   color: var(--danger);
 }
+.facts b {
+  color: var(--text);
+  font-weight: 600;
+}
 
 .provenance {
   position: absolute;

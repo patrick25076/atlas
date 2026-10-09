@@ -90,6 +90,15 @@ https://atlas-kappa-wheat.vercel.app.
 2. Save the zip as `data/raw/gtfs/at-oebb.zip` (the folder is gitignored).
 3. Tell me; I'll add a local-file entry to `scripts/ingest/feeds.ts` and rerun `pnpm ingest:gtfs`.
 
+## 10. Ticketmaster Discovery API (events, free key)
+
+Concerts, sport and theatre in about 30 countries, 5,000 calls a day for free.
+
+1. https://developer.ticketmaster.com → Create account → My Apps → New App. Copy the
+   Consumer Key into `.env.local` as `TICKETMASTER_KEY`.
+2. Tell me; events for the selected place (next 30 days) go on the card, with the
+   affiliate link once you join their programme on Impact.
+
 ## 4. Neon Postgres (free tier): trips, users, fare watches
 
 Needed only once the agent, accounts or watches land. Not yet.

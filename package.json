@@ -19,6 +19,10 @@
     "ingest:countries": "tsx scripts/ingest/countries.ts",
     "ingest:holidays": "tsx scripts/ingest/holidays.ts",
     "ingest:weather": "tsx scripts/ingest/weather.ts",
+    "ingest:overture": "tsx scripts/ingest/overture-places.ts",
+    "ingest:geonames": "tsx scripts/ingest/geonames.ts",
+    "ingest:heritage": "tsx scripts/ingest/heritage.ts",
+    "ingest:ferries": "tsx scripts/ingest/ferries.ts",
     "check:tp": "tsx scripts/check-travelpayouts.ts"
   },
   "dependencies": {

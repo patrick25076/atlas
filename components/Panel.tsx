@@ -2,11 +2,13 @@
 
 import { useMemo, useState } from "react";
 import { flightMinutes, formatDuration } from "@/lib/geo";
+import { sunTimes, tzOffsetMinutes } from "@/lib/sun";
 import type { Place, PlaceMode } from "@/lib/places";
 import type { TripsResult } from "@/lib/trips";
 import type { PlaceSummary } from "@/app/api/place/route";
 import type {
   Airport,
+  CityPlaces,
   CountryInfo,
   Destination,
   FaresResponse,
@@ -22,11 +24,35 @@ import { countryName, type Origin } from "./Globe";
 export type Intel = {
   code?: string;
   tz?: string;
+  lat?: number;
+  lon?: number;
   countryCode?: string;
   country?: CountryInfo;
   weather?: WeatherDay[];
   holidays?: Holiday[];
+  places?: CityPlaces;
+  pop?: number;
+  heritage?: { name: string; km: number }[];
 };
+
+function people(n: number): string {
+  return n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M` : n >= 1000 ? `${Math.round(n / 1000)}k` : String(n);
+}
+
+const PLACE_LABELS: [keyof CityPlaces, string][] = [
+  ["food", "restaurants"],
+  ["cafe", "cafés"],
+  ["bar", "bars"],
+  ["night", "nightlife"],
+  ["culture", "culture"],
+  ["nature", "parks & nature"],
+  ["shop", "shopping"],
+  ["stay", "places to stay"],
+];
+
+function count(n: number): string {
+  return n >= 1000 ? `${(n / 1000).toFixed(n >= 10000 ? 0 : 1)}k` : String(n);
+}
 
 export type View = "all" | "fly" | "ground" | "trips";
 export type Band = "all" | "short" | "medium" | "long";
@@ -111,8 +137,24 @@ function rate(r: number): string {
 function PlaceIntel({ intel, summary }: { intel: Intel; summary: PlaceSummary | null }) {
   const c = intel.country;
   let time: string | null = null;
+  let daylight: string | null = null;
+  let shift: string | null = null;
   try {
-    time = intel.tz ? new Intl.DateTimeFormat("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: intel.tz }).format(new Date()) : null;
+    if (intel.tz) {
+      const fmt = new Intl.DateTimeFormat("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: intel.tz });
+      time = fmt.format(new Date());
+      if (intel.lat != null && intel.lon != null) {
+        const sun = sunTimes(intel.lat, intel.lon);
+        if (sun) daylight = `${fmt.format(sun.sunrise)} to ${fmt.format(sun.sunset)}`;
+      }
+      const here = Intl.DateTimeFormat().resolvedOptions().timeZone;
+      const there = tzOffsetMinutes(intel.tz);
+      const home = tzOffsetMinutes(here);
+      if (there != null && home != null && there !== home) {
+        const h = (there - home) / 60;
+        shift = `${h > 0 ? "+" : ""}${Number.isInteger(h) ? h : h.toFixed(1)} h from you`;
+      }
+    }
   } catch {
     time = null;
   }
@@ -131,7 +173,14 @@ function PlaceIntel({ intel, summary }: { intel: Intel; summary: PlaceSummary | 
         </div>
       )}
       <div className="facts">
-        {time && <span>Local time {time}</span>}
+        {intel.pop ? <span>{people(intel.pop)} people</span> : null}
+        {time && (
+          <span>
+            Local time {time}
+            {shift ? ` (${shift})` : ""}
+          </span>
+        )}
+        {daylight && <span>Daylight {daylight}</span>}
         {c?.currency && (
           <span>
             {c.currency}
@@ -144,6 +193,14 @@ function PlaceIntel({ intel, summary }: { intel: Intel; summary: PlaceSummary | 
             {c.voltage ? ` · ${c.voltage} V` : ""}
           </span>
         )}
+        {c?.languages && c.languages.length > 0 && <span>{c.languages.slice(0, 3).join(", ")}</span>}
+        {(c?.calling || c?.driving) && (
+          <span>
+            {c.calling ?? ""}
+            {c.calling && c.driving ? " · " : ""}
+            {c.driving ? `drive on the ${c.driving}` : ""}
+          </span>
+        )}
         {a?.warning && <span className="warn">Travel warning (German Foreign Office, {a.updated})</span>}
         {a && !a.warning && a.partial && <span className="warn">Partial travel warning for some regions (German Foreign Office)</span>}
         {intel.holidays?.[0] && (
@@ -152,6 +209,22 @@ function PlaceIntel({ intel, summary }: { intel: Intel; summary: PlaceSummary | 
           </span>
         )}
       </div>
+      {intel.heritage && intel.heritage.length > 0 && (
+        <div className="facts" title="UNESCO World Heritage Sites via Wikidata (CC0), within 60 km">
+          <span>
+            World Heritage nearby: {intel.heritage.map((h) => `${h.name} (${h.km} km)`).join(" · ")}
+          </span>
+        </div>
+      )}
+      {intel.places && (
+        <div className="facts" title="Overture Maps places within about 5 km of the centre, CDLA-Permissive 2.0">
+          {PLACE_LABELS.filter(([k]) => (intel.places?.[k] ?? 0) > 0).map(([k, label]) => (
+            <span key={k}>
+              <b>{count(intel.places![k]!)}</b> {label}
+            </span>
+          ))}
+        </div>
+      )}
       {summary && (
         <div className="status">
           {summary.extract.length > 320 ? `${summary.extract.slice(0, 320).replace(/\s+\S*$/, "")}…` : summary.extract}{" "}

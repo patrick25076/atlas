@@ -34,10 +34,14 @@ const NEAR_ORIGIN_KM = 30;
  * Arad 22, a town like Făgăraș 7, the halt Ozun 5). Scaled so that 7+ neighbours or a busy
  * line (60 departures a day) clears the "big places" bar of 0.33.
  */
-export function stationImportance(s: Pick<ReachStation, "links" | "depDay">): number {
+export function stationImportance(s: Pick<ReachStation, "links" | "depDay" | "pop">): number {
   const topology = Math.min(1, Math.max(0, s.links - 2) / 10);
   const busyness = Math.min(1, s.depDay / 60);
-  return topology * 0.6 + busyness * 0.4;
+  const base = topology * 0.6 + busyness * 0.4;
+  // A town of 15,000 scores 0.35 and clears the bar; a million people scores 1. Without a town
+  // nearby only a busy junction gets through.
+  if (s.pop >= 15_000) return Math.max(base, 0.35 + 0.65 * Math.min(1, Math.log10(s.pop / 15_000) / Math.log10(1e6 / 15_000)));
+  return base * 0.5;
 }
 
 export function groundMode(mode: string): PlaceMode {
@@ -131,11 +135,13 @@ export function combinePlaces(input: {
       }
       continue;
     }
-    const prev = ground.get(s.name);
+    // Stations of one town are one place, named after the town.
+    const label = s.town || s.name;
+    const prev = ground.get(label);
     if (prev && prev.minutes <= s.minutes) continue;
-    ground.set(s.name, {
+    ground.set(label, {
       key: `ground:${s.id}`,
-      name: s.name,
+      name: label,
       lat: s.lat,
       lon: s.lon,
       mode: groundMode(s.mode),

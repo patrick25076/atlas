@@ -12,10 +12,12 @@ import type { PlaceSummary } from "@/app/api/place/route";
 import type {
   Airport,
   City,
+  CityPlaces,
   CountryInfo,
   Destination,
   FaresResponse,
   Gateway,
+  HeritageRow,
   Holiday,
   Manifest,
   ReachResponse,
@@ -65,6 +67,13 @@ export function priceColor(eur: number): RGBA {
 }
 /** Routes known only from the 2014 network, once live fares are on screen. */
 const DIM: RGBA = [140, 150, 170, 70];
+/** Weekend high in °C → cold blue through warm amber to hot coral. */
+export function tempColor(c: number): RGBA {
+  if (c < 10) return [96, 140, 240, 220];
+  if (c < 20) return [76, 201, 240, 220];
+  if (c < 27) return [255, 180, 84, 230];
+  return [255, 107, 107, 230];
+}
 
 const regionNames = typeof Intl !== "undefined" ? new Intl.DisplayNames(["en"], { type: "region" }) : null;
 export function countryName(code: string): string {
@@ -140,6 +149,8 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
   const [countries, setCountries] = useState<Record<string, CountryInfo>>({});
   const [holidays, setHolidays] = useState<Record<string, Holiday[]>>({});
   const [weather, setWeather] = useState<WeatherFile | null>(null);
+  const [cityPlaces, setCityPlaces] = useState<Record<string, CityPlaces>>({});
+  const [heritage, setHeritage] = useState<HeritageRow[]>([]);
   const [manifest, setManifest] = useState<Manifest | null>(null);
   const [summary, setSummary] = useState<PlaceSummary | null>(null);
   const [warmOnly, setWarmOnly] = useState(false);
@@ -175,7 +186,9 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
       load("countries.json"),
       load("holidays.json"),
       load("weather.json"),
-    ]).then(([a, r, al, c, m, co, h, w]) => {
+      load("city-places.json"),
+      load("heritage.json"),
+    ]).then(([a, r, al, c, m, co, h, w, cp, he]) => {
       setAirports(a ?? []);
       setRoutes(r ?? []);
       setAirlines(al ?? {});
@@ -184,6 +197,8 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
       setCountries(co ?? {});
       setHolidays(h ?? {});
       setWeather(w && (w as WeatherCompact).syms ? expandWeather(w as WeatherCompact) : null);
+      setCityPlaces(cp ?? {});
+      setHeritage(he ?? []);
     });
   }, []);
 
@@ -398,13 +413,22 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
     return {
       code: code ?? undefined,
       tz: city?.tz,
+      lat: selected.lat,
+      lon: selected.lon,
       countryCode,
       country: countryCode ? countries[countryCode] : undefined,
       weather: code ? weather?.cities[code] : undefined,
       holidays: countryCode ? (holidays[countryCode] ?? []).filter((h) => h.date >= today && h.date <= horizon).slice(0, 2) : undefined,
+      places: code ? cityPlaces[code] : undefined,
+      pop: city?.pop ?? selected.ground?.pop ?? undefined,
+      heritage: heritage
+        .map((h) => ({ name: h[0], km: Math.round(haversineKm(selected.lat, selected.lon, h[1], h[2])) }))
+        .filter((h) => h.km <= 60)
+        .sort((a, b) => a.km - b.km)
+        .slice(0, 3),
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selected, cities, countries, weather, holidays]);
+  }, [selected, cities, countries, weather, holidays, cityPlaces, heritage]);
 
   // One paragraph from Wikivoyage for the selected place, by city name.
   useEffect(() => {
@@ -696,13 +720,17 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
             getPosition: (p) => [p.lon, p.lat],
             radiusUnits: "pixels",
             getRadius: (p) => (p.key === selectedPlace ? 7 : p.air ? 4 : 2.2 + p.importance * 2),
-            getFillColor: (p) => arcColor(p.minutes),
+            getFillColor: (p) => {
+              if (!warmOnly) return arcColor(p.minutes);
+              const t = weekendMax(cityCodeFor(p));
+              return t == null ? DIM : tempColor(t);
+            },
             stroked: true,
             lineWidthUnits: "pixels",
             getLineWidth: (p) => (p.mode === "plane" ? 0 : 1),
             getLineColor: [255, 255, 255, 140],
             pickable: true,
-            updateTriggers: { getRadius: [selectedPlace] },
+            updateTriggers: { getRadius: [selectedPlace], getFillColor: [warmOnly, weather] },
             onClick: (info) => focusPlace((info.object as Place | undefined)?.key ?? null),
           })
         : null,
@@ -787,7 +815,7 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
     overlay.setProps({ layers: layers.filter(Boolean) as Layer[] });
     // focus* helpers only read refs and state setters; listing them would re-run this on every render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [airports, shown, gateways, gatewayIata, origin, selectedDest, live, view, reachBand, selectedStation, pathForSelected, placesShown, selectedPlace, trips, trip]);
+  }, [airports, shown, gateways, gatewayIata, origin, selectedDest, live, view, reachBand, selectedStation, pathForSelected, placesShown, selectedPlace, trips, trip, warmOnly, weather]);
 
   const groundFeeds = reach ? reach.feeds.map((f) => f.attribution.split(" via ")[0].split(" (")[0]).join(", ") : "";
 

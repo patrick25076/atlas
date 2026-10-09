@@ -56,18 +56,33 @@ await recordManifest("fx", {
   file: OUT,
 });
 
-// Plugs and voltage.
+// Plugs, voltage, official languages, calling code, driving side.
 const SPARQL =
   "https://query.wikidata.org/sparql?format=json&query=" +
   encodeURIComponent(
-    `SELECT ?iso2 (GROUP_CONCAT(DISTINCT ?plugLabel;separator="|") AS ?plugs) (SAMPLE(?voltage) AS ?v) WHERE {
+    `SELECT ?iso2
+       (GROUP_CONCAT(DISTINCT ?plugLabel;separator="|") AS ?plugs) (SAMPLE(?voltage) AS ?v)
+       (GROUP_CONCAT(DISTINCT ?langLabel;separator="|") AS ?langs) (SAMPLE(?calling) AS ?calling) (SAMPLE(?sideLabel) AS ?side)
+     WHERE {
       ?c wdt:P297 ?iso2.
       OPTIONAL { ?c wdt:P2853 ?plug. ?plug rdfs:label ?plugLabel FILTER(LANG(?plugLabel)="en") }
       OPTIONAL { ?c wdt:P2884 ?voltage }
+      OPTIONAL { ?c wdt:P37 ?lang. ?lang rdfs:label ?langLabel FILTER(LANG(?langLabel)="en") }
+      OPTIONAL { ?c wdt:P474 ?calling }
+      OPTIONAL { ?c wdt:P1622 ?sideItem. ?sideItem rdfs:label ?sideLabel FILTER(LANG(?sideLabel)="en") }
     } GROUP BY ?iso2`,
   );
 const wd = (await get(SPARQL, "application/sparql-results+json")) as {
-  results: { bindings: { iso2: { value: string }; plugs?: { value: string }; v?: { value: string } }[] };
+  results: {
+    bindings: {
+      iso2: { value: string };
+      plugs?: { value: string };
+      v?: { value: string };
+      langs?: { value: string };
+      calling?: { value: string };
+      side?: { value: string };
+    }[];
+  };
 };
 let plugged = 0;
 for (const b of wd.results.bindings) {
@@ -77,13 +92,19 @@ for (const b of wd.results.bindings) {
   if (plugs.length) c.plugs = plugs;
   const v = Number(b.v?.value);
   if (Number.isFinite(v) && v > 0) c.voltage = v;
+  const langs = (b.langs?.value ?? "").split("|").filter(Boolean).slice(0, 4);
+  if (langs.length) c.languages = langs;
+  if (b.calling?.value) c.calling = b.calling.value;
+  const side = (b.side?.value ?? "").toLowerCase();
+  if (side.includes("left")) c.driving = "left";
+  else if (side.includes("right")) c.driving = "right";
   if (plugs.length || c.voltage) plugged++;
 }
 await recordManifest("plugs", {
-  source: "Wikidata (P2853 plug type, P2884 mains voltage)",
+  source: "Wikidata (plug type, mains voltage, official languages, calling code, driving side)",
   url: "https://query.wikidata.org/",
   licence: "CC0",
-  note: "Plug types and voltage per country.",
+  note: "Practical country facts.",
   fetchedAt: now,
   rows: plugged,
   file: OUT,

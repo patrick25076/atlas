@@ -27,6 +27,9 @@ type Station = {
   nbrs: Set<number>;
   /** Departures per week, summed over feeds. */
   dep: number;
+  /** Nearest GeoNames town within 10 km (biggest wins) and its population. */
+  town?: string;
+  pop?: number;
 };
 type Edge = { from: number; to: number; minutes: number; tripsPerWeek: number; mode: string };
 
@@ -191,6 +194,32 @@ function modeOf(routeType: string, fallback: Feed["mode"]): string {
   return fallback === "mixed" ? "other" : fallback;
 }
 
+// Ferries (scripts/ingest/ferries.ts): ports become stations, crossings become edges both ways.
+// Added before walking transfers so a port links to the station next to it.
+let ferryEdges = 0;
+try {
+  const ferries = JSON.parse(await readFile("public/data/ferries.json", "utf8")) as [string, number, number, number, number, number][];
+  const portName = (route: string, end: 0 | 1) => {
+    const parts = route.split(/\s+[-–—]\s+/);
+    return parts.length === 2 ? `${parts[end].trim()} (port)` : `${route} (port)`;
+  };
+  for (const [name, lat1, lon1, lat2, lon2, km] of ferries) {
+    const a = stationFor(portName(name, 0), lat1, lon1, "ferries");
+    const b = stationFor(portName(name, 1), lat2, lon2, "ferries");
+    if (a === b) continue;
+    const minutes = Math.round(30 + (km / 30) * 60);
+    for (const [from, to] of [[a, b], [b, a]] as const) {
+      const key = `${from}>${to}>ferry`;
+      const prev = edgeAgg.get(key);
+      if (!prev || minutes < prev.minutes) edgeAgg.set(key, { from, to, minutes, tripsPerWeek: 7, mode: "ferry" });
+    }
+    ferryEdges++;
+  }
+  console.log(`ferries: ${ferryEdges} crossings`);
+} catch {
+  console.log("no public/data/ferries.json yet (pnpm ingest:ferries); skipping ferries");
+}
+
 // Walking transfers: a coach stop and the rail station of the same town are different nodes,
 // so connect every pair of stations within 1.5 km (5 min plus 4.5 km/h).
 const WALK_KM = 1.5;
@@ -223,14 +252,51 @@ for (const s of stations.values()) {
 }
 console.log(`walking transfers: ${walks} station pairs`);
 
+// Towns (scripts/ingest/geonames.ts): the biggest town within 10 km names the station's place
+// and gives it a population, so "București Nord" is Bucharest and halts stay halts.
+try {
+  const towns = JSON.parse(await readFile("public/data/towns.json", "utf8")) as [string, number, number, string, number][];
+  const TC = 0.2;
+  const tcells = new Map<string, typeof towns>();
+  for (const t of towns) {
+    const k = `${Math.floor(t[1] / TC)},${Math.floor(t[2] / TC)}`;
+    const list = tcells.get(k);
+    if (list) list.push(t);
+    else tcells.set(k, [t]);
+  }
+  let named = 0;
+  for (const s of stations.values()) {
+    const cl = Math.floor(s.lat / TC);
+    const co = Math.floor(s.lon / TC);
+    let best: (typeof towns)[number] | null = null;
+    for (let dl = -1; dl <= 1; dl++) {
+      for (let dn = -1; dn <= 1; dn++) {
+        for (const t of tcells.get(`${cl + dl},${co + dn}`) ?? []) {
+          if ((!best || t[4] > best[4]) && haversineKm(s.lat, s.lon, t[1], t[2]) <= 10) best = t;
+        }
+      }
+    }
+    if (best) {
+      s.town = best[0];
+      s.pop = best[4];
+      named++;
+    }
+  }
+  console.log(`towns: ${named} of ${stations.size} stations within 10 km of a town over 15,000 people`);
+} catch {
+  console.log("no public/data/towns.json yet (pnpm ingest:geonames); stations keep their own names");
+}
+
 // Compact arrays keep the file small: edges are [from, to, minutes, tripsPerWeek, modeIndex].
 const MODES = ["rail", "coach", "ferry", "other", "walk"];
 const graph = {
   generatedAt: new Date().toISOString(),
   feeds: feeds.map((f) => ({ id: f.id, name: f.name, licence: f.licence, attribution: f.attribution })),
   modes: MODES,
-  // [name, lat, lon, neighbouring stations, departures per day]
-  stations: [...stations.values()].map((s) => [s.name, s.lat, s.lon, s.nbrs.size, Math.round(s.dep / 7)] as const),
+  // [name, lat, lon, neighbouring stations, departures per day, population, town (when it differs)]
+  stations: [...stations.values()].map(
+    (s) => [s.name, s.lat, s.lon, s.nbrs.size, Math.round(s.dep / 7), s.pop ?? 0, s.town && s.town !== s.name ? s.town : ""] as const,
+  ),
   edges: [...edgeAgg.values()].map((e) => [e.from, e.to, e.minutes, e.tripsPerWeek, MODES.indexOf(e.mode)] as const),
 };
 
