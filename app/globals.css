@@ -208,6 +208,12 @@ a {
   color: var(--text);
   font-weight: 600;
 }
+.statusrow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
 
 /* place intelligence */
 .intel {

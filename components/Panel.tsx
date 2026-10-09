@@ -286,22 +286,40 @@ function Chips(p: { band: Band; onBand: (b: Band) => void; children?: React.Reac
 
 export default function Panel(p: Props) {
   const [query, setQuery] = useState("");
+  const [copied, setCopied] = useState(false);
   const hits = useMemo(() => searchAirports(p.airports, query), [p.airports, query]);
   const selected = p.selectedDest ? p.destinations.find((d) => d.airport.iata === p.selectedDest) : null;
   const place = p.selectedPlace ? p.places.find((x) => x.key === p.selectedPlace) : null;
 
   return (
     <aside className="panel">
-      <div className="status">
-        {p.origin ? (
-          <>
-            From <b>{p.origin.label}</b>
-            {p.origin.source === "default" && " (location off, showing a default)"}
-            {p.origin.source === "ip" && " (roughly, from your network)"}
-            {p.origin.source === "gps" && " (GPS)"}
-          </>
-        ) : (
-          "Finding where you are…"
+      <div className="status statusrow">
+        <span>
+          {p.origin ? (
+            <>
+              From <b>{p.origin.label}</b>
+              {p.origin.source === "default" && " (location off, showing a default)"}
+              {p.origin.source === "ip" && " (roughly, from your network)"}
+              {p.origin.source === "gps" && " (GPS)"}
+            </>
+          ) : (
+            "Finding where you are…"
+          )}
+        </span>
+        {p.origin && (
+          <button
+            className="chip"
+            title="Copy a link to this view"
+            onClick={() => {
+              navigator.clipboard?.writeText(window.location.href).then(
+                () => setCopied(true),
+                () => setCopied(false),
+              );
+              setTimeout(() => setCopied(false), 1500);
+            }}
+          >
+            {copied ? "Copied" : "Share"}
+          </button>
         )}
       </div>
 

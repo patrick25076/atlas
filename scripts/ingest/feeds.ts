@@ -57,6 +57,35 @@ export const FEEDS: Feed[] = [
     countries: ["EU"],
     mode: "mixed",
   },
+  {
+    id: "es-renfe",
+    name: "Renfe: high-speed, long-distance and media distancia",
+    url: "https://ssl.renfe.com/gtransit/Fichero_AV_LD/google_transit.zip",
+    licence: "CC BY 4.0",
+    attribution: "Renfe via data.renfe.com",
+    countries: ["ES"],
+    mode: "rail",
+  },
+  {
+    id: "be-sncb",
+    name: "SNCB/NMBS (Belgium)",
+    url: "https://files.mobilitydatabase.org/mdb-1859/latest.zip",
+    licence: "SNCB open data (see gtfs.be)",
+    attribution: "NMBS-SNCB via Mobility Database (mdb-1859)",
+    countries: ["BE"],
+    mode: "rail",
+  },
+  {
+    id: "ie-rail",
+    name: "Irish Rail",
+    url: "https://files.mobilitydatabase.org/mdb-2637/latest.zip",
+    licence: "NTA open data (transportforireland.ie)",
+    attribution: "Iarnród Éireann via Mobility Database (mdb-2637)",
+    countries: ["IE"],
+    mode: "rail",
+  },
+  // Not yet: CP Portugal (mdb-2057) and Trenitalia (mdb-1052) list no licence in the catalog;
+  // NS Netherlands is not in it; Trafiklab (SE/NO) feeds need a key. Verify before adding.
   // ÖBB (Austria): CC BY 4.0 but the download sits behind a click-to-accept page at
   // https://data.oebb.at/de/datensaetze~soll-fahrplan-gtfs~ . Manual step (SETUP.md §9).
 ];

@@ -206,6 +206,18 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
     });
   }, []);
 
+  // The address bar follows the globe, so any view is a link: ?from=lat,lon,label&view=all&place=air:BUH
+  useEffect(() => {
+    if (!origin) return;
+    const q = new URLSearchParams();
+    q.set("from", `${origin.lat.toFixed(3)},${origin.lon.toFixed(3)},${origin.label}`);
+    if (view !== "all") q.set("view", view);
+    if (view === "trips" && days !== 5) q.set("days", String(days));
+    if (selectedPlace) q.set("place", selectedPlace);
+    const url = `${window.location.pathname}?${q.toString()}`;
+    if (url !== `${window.location.pathname}${window.location.search}`) window.history.replaceState(null, "", url);
+  }, [origin, view, days, selectedPlace]);
+
   // Airport → city code, so one city with several airports is one place.
   const cityOf = useMemo(() => {
     const m = new Map<string, string>();
@@ -248,9 +260,21 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
     return t.length ? Math.max(...t) : null;
   };
 
-  // Where the user is: the network hint at once, the browser's position when allowed, a fixed
-  // city when neither exists, so the globe always has a story to tell.
+  // Where the user is: a shared link wins, then the network hint at once, the browser's
+  // position when allowed, a fixed city when nothing else, so the globe always has a story.
   useEffect(() => {
+    const q = new URLSearchParams(window.location.search);
+    const from = q.get("from")?.split(",");
+    if (from && from.length >= 2 && Number.isFinite(Number(from[0])) && Number.isFinite(Number(from[1]))) {
+      setOrigin({ lat: Number(from[0]), lon: Number(from[1]), label: from.slice(2).join(",") || "shared location", source: "search" });
+      const v = q.get("view");
+      if (v === "all" || v === "fly" || v === "ground" || v === "trips") setView(v);
+      const d = Number(q.get("days"));
+      if ([3, 5, 7, 10].includes(d)) setDays(d);
+      const place = q.get("place");
+      if (place) setSelectedPlace(place);
+      return;
+    }
     const fallback: Origin = hint ? { ...hint, source: "ip" } : DEFAULT_ORIGIN;
     if (typeof navigator === "undefined" || !navigator.geolocation) {
       setOrigin(fallback);

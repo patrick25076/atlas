@@ -90,6 +90,14 @@ https://atlas-kappa-wheat.vercel.app.
 2. Save the zip as `data/raw/gtfs/at-oebb.zip` (the folder is gitignored).
 3. Tell me; I'll add a local-file entry to `scripts/ingest/feeds.ts` and rerun `pnpm ingest:gtfs`.
 
+## 11. Swiss timetables (opentransportdata.swiss, free key)
+
+Switzerland's full GTFS (trains, buses, boats) is open but needs a key.
+
+1. https://opentransportdata.swiss → register → API keys → "GTFS static" (or the open
+   data download page). Copy the key into `.env.local` as `OTD_SWISS_KEY`.
+2. Tell me; I add the feed to `scripts/ingest/feeds.ts` with the key and rebuild the graph.
+
 ## 10. Ticketmaster Discovery API (events, free key)
 
 Concerts, sport and theatre in about 30 countries, 5,000 calls a day for free.
