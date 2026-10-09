@@ -57,13 +57,13 @@ jobs:
           pnpm ingest:holidays
           pnpm ingest:weather
           DEALS_GATEWAYS=OTP,CLJ,IAS,TSR,SBZ,GHV,CRA pnpm ingest:deals
-          DEALS_GATEWAYS=OTP,CLJ,IAS,TSR pnpm ingest:oneway
 
       - name: Weekly sources
         if: steps.set.outputs.set == 'weekly' || steps.set.outputs.set == 'all'
         run: |
           pnpm ingest:geonames
           pnpm ingest:gtfs
+          DEALS_GATEWAYS=OTP,CLJ,IAS,TSR pnpm ingest:oneway
 
       - name: Monthly sources
         if: steps.set.outputs.set == 'monthly' || steps.set.outputs.set == 'all'

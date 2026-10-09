@@ -41,6 +41,8 @@ function toFare(it: KiwiItinerary): Fare {
 const fares: Fare[] = [];
 let calls = 0;
 let failed = 0;
+let streak = 0;
+const MAX_STREAK = 8;
 const jobs: [string, string][] = [];
 for (const gw of GATEWAYS) {
   for (const dst of DESTINATIONS) {
@@ -52,10 +54,15 @@ console.log(`${jobs.length} one-way searches, ${from} to ${to}`);
 
 async function worker() {
   for (let job = jobs.shift(); job; job = jobs.shift()) {
+    if (streak >= MAX_STREAK) {
+      jobs.length = 0;
+      break;
+    }
     const [a, b] = job;
     try {
       const r = await searchFlight({ flyFrom: a, flyTo: b, departureDate: kiwiDate(from), departureDateTo: kiwiDate(to) });
       calls++;
+      streak = 0;
       const seen = new Set<string>();
       for (const it of r.itineraries.sort((x, y) => x.price - y.price)) {
         const f = toFare(it);
@@ -67,13 +74,27 @@ async function worker() {
       if (calls % 50 === 0) console.log(`  ${calls} searches, ${fares.length} fares`);
     } catch (err) {
       failed++;
+      streak++;
       if (failed <= 5) console.log(`  ${a}→${b}: ${err instanceof Error ? err.message : err}`);
+      if (streak >= MAX_STREAK) console.log(`  ${MAX_STREAK} failures in a row (blocked?); stopping with what we have`);
     }
     await new Promise((r) => setTimeout(r, PAUSE_MS));
   }
 }
 await Promise.all(Array.from({ length: CONCURRENCY }, worker));
 
+// A blocked run must not wipe a good file: keep the previous fares when this run found few.
+if (fares.length < 500) {
+  try {
+    const prev = JSON.parse(await readFile(OUT, "utf8")) as { fares: Fare[] };
+    if (prev.fares.length > fares.length) {
+      console.log(`only ${fares.length} fares this run; keeping the previous ${prev.fares.length}`);
+      process.exit(0);
+    }
+  } catch {
+    // no previous file
+  }
+}
 await writeFile(OUT, JSON.stringify({ updated: new Date().toISOString(), window: { from, to }, gateways: GATEWAYS, fares }) + "\n");
 await recordManifest("oneway", {
   source: "Kiwi.com flight search (public MCP), one-way",

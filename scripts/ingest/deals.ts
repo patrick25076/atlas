@@ -55,12 +55,18 @@ function toDeal(gw: string, dst: string, it: KiwiItinerary, nights: number): Dea
 const deals: Deal[] = [];
 let calls = 0;
 let failed = 0;
+let streak = 0;
+const MAX_STREAK = 8; // Kiwi blocks the IP for a while after a few thousand searches; stop knocking.
 const jobs: [string, string][] = [];
 for (const gw of GATEWAYS) for (const dst of DESTINATIONS) if (dst !== gw && cityOf.get(gw) !== dst) jobs.push([gw, dst]);
 console.log(`${GATEWAYS.join(",")} × ${DESTINATIONS.length} destinations, ${from} to ${to}, ${MIN_NIGHTS}-${MAX_NIGHTS} nights`);
 
 async function worker() {
   for (let job = jobs.shift(); job; job = jobs.shift()) {
+    if (streak >= MAX_STREAK) {
+      jobs.length = 0;
+      break;
+    }
     const [gw, dst] = job;
     try {
       const r = await searchFlight({
@@ -78,10 +84,13 @@ async function worker() {
         .sort((a, b) => a.it.price - b.it.price)
         .slice(0, KEEP_PER_ROUTE);
       for (const { it, nights } of ok) deals.push(toDeal(gw, dst, it, nights));
+      streak = 0;
       if (calls % 25 === 0) console.log(`  ${calls} routes searched, ${deals.length} deals`);
     } catch (err) {
       failed++;
+      streak++;
       if (failed <= 5) console.log(`  ${gw}→${dst}: ${err instanceof Error ? err.message : err}`);
+      if (streak >= MAX_STREAK) console.log(`  ${MAX_STREAK} failures in a row (blocked?); stopping with what we have`);
     }
     await new Promise((r) => setTimeout(r, PAUSE_MS));
   }
@@ -91,10 +100,12 @@ await Promise.all(Array.from({ length: CONCURRENCY }, worker));
 // DEALS_MERGE=1 keeps the other gateways' deals from the existing file (adding an airport
 // without re-searching the rest).
 let gatewaysOut = GATEWAYS;
+const searchedGateways = new Set(deals.map((d) => d.gw));
 if (process.env.DEALS_MERGE) {
   try {
     const prev = JSON.parse(await readFile(OUT, "utf8")) as DealsFile;
-    for (const d of prev.deals) if (!GATEWAYS.includes(d.gw)) deals.push(d);
+    // Keep other airports' deals, and keep an airport's old deals when this run found none for it.
+    for (const d of prev.deals) if (!GATEWAYS.includes(d.gw) || !searchedGateways.has(d.gw)) deals.push(d);
     gatewaysOut = [...new Set([...prev.gateways, ...GATEWAYS])];
     console.log(`merged with ${prev.deals.length} existing deals from ${prev.gateways.join(", ")}`);
   } catch {
