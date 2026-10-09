@@ -1,10 +1,20 @@
 # Atlas
 
-Where can you go from here, how, and for how much. A travel-intelligence globe that starts
-from your location, finds the airports worth driving to, and draws what flies from each.
+The cheapest getaways from where you are, and what it is like there. A globe with three tabs:
+
+- **Deals**: real return prices for the next six weeks from the home airports (Kiwi.com,
+  searched nightly), as cards with a photo, dates, airline and a booking button.
+- **Explore**: every place within ten hours by plane, train, coach or ferry, with the best
+  way there and a door-to-door estimate.
+- **Trips**: three-countries-in-five-days loops priced from one-way fares.
+
+Plus **Ask**, a concierge agent over the same data, and a place card with weather, sea
+temperature, money, plugs, languages, visa for your passport, warnings, holidays, World
+Heritage nearby, how many restaurants and bars, and a Wikivoyage paragraph.
 
 Built source by source. Every number on the globe says where it came from
-(`public/data/manifest.json`, shown in the bottom-right chip).
+(`public/data/manifest.json`, shown in the bottom-right chip). `docs/MORNING.md` is the
+plain-language status and the list of keys still needed.
 
 ## Layout
 
