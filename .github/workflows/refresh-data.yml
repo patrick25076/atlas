@@ -56,8 +56,8 @@ jobs:
           pnpm ingest:countries
           pnpm ingest:holidays
           pnpm ingest:weather
-          pnpm ingest:deals
-          pnpm ingest:oneway
+          DEALS_GATEWAYS=OTP,CLJ,IAS,TSR,SBZ,GHV,CRA pnpm ingest:deals
+          DEALS_GATEWAYS=OTP,CLJ,IAS,TSR pnpm ingest:oneway
 
       - name: Weekly sources
         if: steps.set.outputs.set == 'weekly' || steps.set.outputs.set == 'all'

@@ -45,6 +45,9 @@ Built source by source. Every number on the globe says where it came from
 | Wikidata: World Heritage Sites | CC0 | 1,887 sites; the nearest within 60 km on the card | `pnpm ingest:heritage`, monthly |
 | Wikidata: country facts | CC0 | Plugs, voltage, official languages, calling code, driving side | with `ingest:countries` |
 | Passport Index dataset (imorte, continuing ilyankou) | MIT | Visa requirement for the visitor's passport at each destination, labelled indicative with the dataset date | `pnpm ingest:visa`, monthly |
+| Kiwi.com public MCP (`lib/kiwi.ts`) | no key; terms not published | **Deals**: cheapest return getaways from the home airports × 117 cities, 6-week window, 2-7 nights, with booking links; **one-way fares** for the trip finder; `/api/deals` live re-price | `pnpm ingest:deals`, `pnpm ingest:oneway`, nightly |
+| Amazon Bedrock (AI SDK) | your credits | **Ask**: a concierge over the deals and place facts, `/api/ask` (needs `AWS_BEARER_TOKEN_BEDROCK`) | live |
+| Ticketmaster Discovery | free key | events near a place, `/api/events` (needs `TICKETMASTER_KEY`) | live, cached 6 h |
 
 ## Refresh
 
