@@ -1,0 +1,4 @@
+# pnpm 11 reads allowBuilds (booleans). esbuild is pulled in by tsx.
+allowBuilds:
+  esbuild: true
+

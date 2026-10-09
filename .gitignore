@@ -1,0 +1,17 @@
+node_modules/
+.next/
+out/
+.vercel/
+.env
+.env.*
+!.env.example
+*.log
+.DS_Store
+tsconfig.tsbuildinfo
+next-env.d.ts
+# copied from node_modules on postinstall (scripts/copy-worker.mjs)
+public/maplibre-gl-worker.mjs
+# raw downloads and DuckDB scratch files; only the derived public/data/*.json is committed
+data/raw/
+*.duckdb
+*.duckdb.wal

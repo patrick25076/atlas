@@ -1,0 +1,20 @@
+{
+  "airports": {
+    "source": "OurAirports",
+    "url": "https://davidmegginson.github.io/ourairports-data/airports.csv",
+    "licence": "Public domain",
+    "note": "Airports with scheduled passenger service and an IATA code.",
+    "fetchedAt": "2026-10-09T17:02:26.516Z",
+    "rows": 4008,
+    "file": "public/data/airports.json"
+  },
+  "routes": {
+    "source": "OpenFlights routes",
+    "url": "https://raw.githubusercontent.com/jpatokal/openflights/master/data/routes.dat",
+    "licence": "ODbL 1.0",
+    "note": "Frozen June 2014. Indicative network only; not current, no prices.",
+    "fetchedAt": "2026-10-09T17:02:29.451Z",
+    "rows": 37594,
+    "file": "public/data/routes-openflights.json"
+  }
+}
