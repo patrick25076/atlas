@@ -2,10 +2,11 @@
 
 import { useMemo, useState } from "react";
 import { flightMinutes, formatDuration } from "@/lib/geo";
+import type { Place, PlaceMode } from "@/lib/places";
 import type { Airport, Destination, FaresResponse, Gateway, ReachResponse, ReachStation } from "@/lib/types";
 import { countryName, type Origin } from "./Globe";
 
-export type View = "fly" | "ground";
+export type View = "all" | "fly" | "ground";
 export type Band = "all" | "short" | "medium" | "long";
 export const BANDS: { key: Band; label: string; test: (min: number) => boolean }[] = [
   { key: "all", label: "All", test: () => true },
@@ -13,6 +14,9 @@ export const BANDS: { key: Band; label: string; test: (min: number) => boolean }
   { key: "medium", label: "2 to 5h", test: (m) => m >= 120 && m < 300 },
   { key: "long", label: "5h and more", test: (m) => m >= 300 },
 ];
+
+export const MODE_LABEL: Record<PlaceMode, string> = { plane: "Fly", rail: "Train", coach: "Coach", ferry: "Ferry", other: "Ride" };
+const MODE_TAG: Record<string, string> = { plane: "FLY", rail: "TRN", coach: "BUS", ferry: "FRY", walk: "WLK", other: "···" };
 
 type Props = {
   origin: Origin | null;
@@ -29,18 +33,23 @@ type Props = {
   onDest: (iata: string | null) => void;
   onOrigin: (a: Airport) => void;
   fares: FaresResponse | null;
+  anyFares: boolean;
   airlines: Record<string, string>;
   pricedOnly: boolean;
   onPricedOnly: (v: boolean) => void;
+  bigOnly: boolean;
+  onBigOnly: (v: boolean) => void;
   view: View;
   onView: (v: View) => void;
   reach: ReachResponse | null;
   reachShown: ReachStation[];
   selectedStation: number | null;
   onStation: (id: number | null) => void;
+  places: Place[];
+  totalPlaces: number;
+  selectedPlace: string | null;
+  onPlace: (key: string | null) => void;
 };
-
-const MODE_TAG: Record<string, string> = { rail: "TRN", coach: "BUS", ferry: "FRY", walk: "WLK", other: "···" };
 
 function shortDate(iso: string): string {
   const d = new Date(iso);
@@ -49,6 +58,10 @@ function shortDate(iso: string): string {
 
 function stops(n: number): string {
   return n ? `${n} stop${n === 1 ? "" : "s"}` : "direct";
+}
+
+function changes(n: number | undefined): string {
+  return n ? `${n} change${n === 1 ? "" : "s"}` : "direct";
 }
 
 function searchAirports(airports: Airport[], q: string): Airport[] {
@@ -63,10 +76,24 @@ function searchAirports(airports: Airport[], q: string): Airport[] {
   return [...exact, ...rest].slice(0, 6);
 }
 
+function Chips(p: { band: Band; onBand: (b: Band) => void; children?: React.ReactNode }) {
+  return (
+    <div className="chips">
+      {BANDS.map((b) => (
+        <button key={b.key} className={`chip${p.band === b.key ? " on" : ""}`} onClick={() => p.onBand(b.key)}>
+          {b.label}
+        </button>
+      ))}
+      {p.children}
+    </div>
+  );
+}
+
 export default function Panel(p: Props) {
   const [query, setQuery] = useState("");
   const hits = useMemo(() => searchAirports(p.airports, query), [p.airports, query]);
   const selected = p.selectedDest ? p.destinations.find((d) => d.airport.iata === p.selectedDest) : null;
+  const place = p.selectedPlace ? p.places.find((x) => x.key === p.selectedPlace) : null;
 
   return (
     <aside className="panel">
@@ -112,6 +139,9 @@ export default function Panel(p: Props) {
       )}
 
       <div className="chips">
+        <button className={`chip${p.view === "all" ? " on" : ""}`} onClick={() => p.onView("all")}>
+          Any way
+        </button>
         <button className={`chip${p.view === "fly" ? " on" : ""}`} onClick={() => p.onView("fly")}>
           By air
         </button>
@@ -120,7 +150,108 @@ export default function Panel(p: Props) {
         </button>
       </div>
 
-      {p.view === "ground" ? (
+      {p.view === "all" && (
+        <>
+          {place && (
+            <>
+              <h2>{MODE_LABEL[place.mode]} there</h2>
+              <div className="row active" onClick={() => p.onPlace(null)}>
+                <span className="code">{MODE_TAG[place.mode]}</span>
+                <span>
+                  <div className="name">{place.name}</div>
+                  <div className="sub">{place.country ? countryName(place.country) : place.ground?.mode}</div>
+                </span>
+                <span className="meta">
+                  <strong>{formatDuration(place.minutes)}</strong>
+                  {place.price != null ? `from €${place.price}` : ""}
+                </span>
+              </div>
+              <div className="status">
+                {place.mode === "plane" && place.air ? (
+                  <>
+                    Drive to {place.air.gateway.iata}, ~{formatDuration(flightMinutes(place.air.km))} in the air, plus airport time.
+                    {place.air.fare ? (
+                      <>
+                        {" "}
+                        €{place.air.fare.price} one way on {shortDate(place.air.fare.departureAt)}
+                        {place.air.fare.airline ? ` with ${p.airlines[place.air.fare.airline] ?? place.air.fare.airline}` : ""}
+                        {place.air.fareGateway && place.air.fareGateway.iata !== place.air.gateway.iata ? ` from ${place.air.fareGateway.iata}` : ""}.{" "}
+                        <a href={place.air.fare.url} target="_blank" rel="noreferrer">
+                          Book on Aviasales ↗
+                        </a>
+                      </>
+                    ) : (
+                      <>
+                        {" "}
+                        <a
+                          href={`https://www.google.com/travel/flights?q=flights+from+${place.air.gateway.iata}+to+${place.air.airport.iata}`}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          Check fares ↗
+                        </a>
+                      </>
+                    )}
+                    {place.ground ? ` Or ${formatDuration(place.ground.minutes)} by ${place.ground.mode}, ${changes(place.ground.changes)}.` : ""}
+                  </>
+                ) : (
+                  <>
+                    {changes(place.changes)} by {place.ground?.mode ?? place.mode}, in-vehicle time plus expected waits.
+                    {place.air ? ` Or fly via ${place.air.gateway.iata} in ~${formatDuration(place.air.minutes)} door to door${place.price != null ? ` from €${place.price}` : ""}.` : ""}
+                  </>
+                )}
+              </div>
+            </>
+          )}
+
+          <h2>
+            Places · {p.places.length}
+            {p.places.length !== p.totalPlaces ? ` of ${p.totalPlaces}` : ""}
+          </h2>
+          <div className="status">
+            {!p.origin
+              ? ""
+              : !p.reach && p.totalPlaces === 0
+                ? "Searching flights, trains and coaches…"
+                : `Door-to-door estimates by air, train and coach within 10 h.${p.anyFares ? " Prices are cached one-way fares." : ""}`}
+          </div>
+          <Chips band={p.band} onBand={p.onBand}>
+            <button className={`chip${p.bigOnly ? " on" : ""}`} onClick={() => p.onBigOnly(!p.bigOnly)}>
+              Big places
+            </button>
+            {p.anyFares && (
+              <button className={`chip${p.pricedOnly ? " on" : ""}`} onClick={() => p.onPricedOnly(!p.pricedOnly)}>
+                Priced only
+              </button>
+            )}
+          </Chips>
+          <div className="scroll">
+            {p.places.map((x) => (
+              <div
+                key={x.key}
+                className={`row${x.key === p.selectedPlace ? " active" : ""}`}
+                onClick={() => p.onPlace(x.key === p.selectedPlace ? null : x.key)}
+              >
+                <span className="code">{MODE_TAG[x.mode]}</span>
+                <span>
+                  <div className="name">{x.name}</div>
+                  <div className="sub">
+                    {x.mode === "plane"
+                      ? `via ${x.air?.gateway.iata}${x.country ? ` · ${countryName(x.country)}` : ""}`
+                      : `${changes(x.changes)}${x.country ? ` · ${countryName(x.country)}` : ""}`}
+                  </div>
+                </span>
+                <span className="meta">
+                  <strong>{formatDuration(x.minutes)}</strong>
+                  {x.price != null ? `from €${x.price}` : ""}
+                </span>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+
+      {p.view === "ground" && (
         <>
           <h2>Nearest stations</h2>
           <div>
@@ -142,17 +273,9 @@ export default function Panel(p: Props) {
 
           <h2>Places · {p.reachShown.length}</h2>
           <div className="status">
-            {p.reach
-              ? `${p.reach.reached.length} stations within 10 h. In-vehicle time plus an expected wait per leg, not a timetable.`
-              : ""}
+            {p.reach ? `${p.reach.reached.length} stations within 10 h. In-vehicle time plus an expected wait per leg, not a timetable.` : ""}
           </div>
-          <div className="chips">
-            {BANDS.map((b) => (
-              <button key={b.key} className={`chip${p.band === b.key ? " on" : ""}`} onClick={() => p.onBand(b.key)}>
-                {b.label}
-              </button>
-            ))}
-          </div>
+          <Chips band={p.band} onBand={p.onBand} />
           <div className="scroll">
             {p.reachShown.map((s) => (
               <div
@@ -163,7 +286,7 @@ export default function Panel(p: Props) {
                 <span className="code">{MODE_TAG[s.mode] ?? s.mode}</span>
                 <span>
                   <div className="name">{s.name}</div>
-                  <div className="sub">{s.changes ? `${s.changes} change${s.changes === 1 ? "" : "s"}` : "direct"}</div>
+                  <div className="sub">{changes(s.changes)}</div>
                 </span>
                 <span className="meta">
                   <strong>{formatDuration(s.minutes)}</strong>
@@ -172,135 +295,132 @@ export default function Panel(p: Props) {
             ))}
           </div>
         </>
-      ) : (
-      <>
-      <h2>Gateways</h2>
-      <div>
-        {p.gateways.length === 0 && <div className="status">No airport with scheduled flights within reach.</div>}
-        {p.gateways.map((g) => (
-          <div
-            key={g.airport.iata}
-            className={`row${g.airport.iata === p.gatewayIata ? " active" : ""}`}
-            onClick={() => p.onGateway(g.airport.iata)}
-          >
-            <span className="code">{g.airport.iata}</span>
-            <span>
-              <div className="name">{g.airport.name}</div>
-              <div className="sub">{[g.airport.city, countryName(g.airport.country)].filter(Boolean).join(", ")}</div>
-            </span>
-            <span className="meta">
-              <strong>{formatDuration(g.driveMin)}</strong>
-              {Math.round(g.km)} km · {p.routeCounts[g.airport.iata] ?? 0} routes
-            </span>
-          </div>
-        ))}
-      </div>
+      )}
 
-      {selected ? (
+      {p.view === "fly" && (
         <>
-          <h2>Destination</h2>
-          <div className="row active" onClick={() => p.onDest(null)}>
-            <span className="code">{selected.airport.iata}</span>
-            <span>
-              <div className="name">{selected.airport.name}</div>
-              <div className="sub">{[selected.airport.city, countryName(selected.airport.country)].filter(Boolean).join(", ")}</div>
-            </span>
-            <span className="meta">
-              {selected.fare ? (
-                <>
-                  <strong>from €{selected.fare.price}</strong>
-                  {shortDate(selected.fare.departureAt)} · {stops(selected.fare.transfers)}
-                </>
-              ) : (
-                <>
-                  <strong>~{formatDuration(flightMinutes(selected.km))}</strong>
-                  {Math.round(selected.km)} km
-                </>
-              )}
-            </span>
-          </div>
-          {selected.fare ? (
-            <div className="status">
-              €{selected.fare.price} one way on {shortDate(selected.fare.departureAt)}
-              {selected.fare.airline ? ` with ${p.airlines[selected.fare.airline] ?? selected.fare.airline}` : ""}, {stops(selected.fare.transfers)}, ~
-              {formatDuration(selected.fare.durationMin ?? flightMinutes(selected.km))}. Cached from recent Aviasales searches; the live price is on the
-              booking page.{" "}
-              <a href={selected.fare.url} target="_blank" rel="noreferrer">
-                Book on Aviasales ↗
-              </a>
-            </div>
-          ) : (
-            <div className="status">
-              {selected.airlines
-                ? `${selected.airlines} airline${selected.airlines === 1 ? "" : "s"} flew ${selected.from.iata} → ${selected.airport.iata} in the 2014 network. `
-                : ""}
-              No cached fare for this route right now.{" "}
-              <a
-                href={`https://www.google.com/travel/flights?q=flights+from+${selected.from.iata}+to+${selected.airport.iata}`}
-                target="_blank"
-                rel="noreferrer"
+          <h2>Gateways</h2>
+          <div>
+            {p.gateways.length === 0 && <div className="status">No airport with scheduled flights within reach.</div>}
+            {p.gateways.map((g) => (
+              <div
+                key={g.airport.iata}
+                className={`row${g.airport.iata === p.gatewayIata ? " active" : ""}`}
+                onClick={() => p.onGateway(g.airport.iata)}
               >
-                Check fares ↗
-              </a>
-            </div>
-          )}
-        </>
-      ) : null}
-
-      <h2>
-        Destinations · {p.destinations.length}
-        {p.destinations.length !== p.totalDestinations ? ` of ${p.totalDestinations}` : ""}
-      </h2>
-      <div className="status">
-        {p.fares === null
-          ? "Checking fares…"
-          : p.fares.status === "ok"
-            ? `Cheapest cached one-way fares, next 3 months: ${p.fares.fares.length} priced.`
-            : p.fares.status === "no-token"
-              ? "No fares yet: add the Travelpayouts token (SETUP §2)."
-              : `Fares unavailable: ${p.fares.note ?? "error"}`}
-      </div>
-      <div className="chips">
-        {BANDS.map((b) => (
-          <button key={b.key} className={`chip${p.band === b.key ? " on" : ""}`} onClick={() => p.onBand(b.key)}>
-            {b.label}
-          </button>
-        ))}
-        {p.fares?.status === "ok" && (
-          <button className={`chip${p.pricedOnly ? " on" : ""}`} onClick={() => p.onPricedOnly(!p.pricedOnly)}>
-            Priced only
-          </button>
-        )}
-      </div>
-      <div className="scroll">
-        {p.destinations.map((d) => (
-          <div
-            key={d.airport.iata}
-            className={`row${d.airport.iata === p.selectedDest ? " active" : ""}`}
-            onClick={() => p.onDest(d.airport.iata)}
-          >
-            <span className="code">{d.airport.iata}</span>
-            <span>
-              <div className="name">{d.airport.city ?? d.airport.name}</div>
-              <div className="sub">{countryName(d.airport.country)}</div>
-            </span>
-            <span className="meta">
-              {d.fare ? (
-                <>
-                  <strong>from €{d.fare.price}</strong>
-                  {shortDate(d.fare.departureAt)} · {stops(d.fare.transfers)}
-                </>
-              ) : (
-                <>
-                  <strong>~{formatDuration(flightMinutes(d.km))}</strong>
-                  {Math.round(d.km)} km
-                </>
-              )}
-            </span>
+                <span className="code">{g.airport.iata}</span>
+                <span>
+                  <div className="name">{g.airport.name}</div>
+                  <div className="sub">{[g.airport.city, countryName(g.airport.country)].filter(Boolean).join(", ")}</div>
+                </span>
+                <span className="meta">
+                  <strong>{formatDuration(g.driveMin)}</strong>
+                  {Math.round(g.km)} km · {p.routeCounts[g.airport.iata] ?? 0} routes
+                </span>
+              </div>
+            ))}
           </div>
-        ))}
-      </div>
-      </>
+
+          {selected ? (
+            <>
+              <h2>Destination</h2>
+              <div className="row active" onClick={() => p.onDest(null)}>
+                <span className="code">{selected.airport.iata}</span>
+                <span>
+                  <div className="name">{selected.airport.name}</div>
+                  <div className="sub">{[selected.airport.city, countryName(selected.airport.country)].filter(Boolean).join(", ")}</div>
+                </span>
+                <span className="meta">
+                  {selected.fare ? (
+                    <>
+                      <strong>from €{selected.fare.price}</strong>
+                      {shortDate(selected.fare.departureAt)} · {stops(selected.fare.transfers)}
+                    </>
+                  ) : (
+                    <>
+                      <strong>~{formatDuration(flightMinutes(selected.km))}</strong>
+                      {Math.round(selected.km)} km
+                    </>
+                  )}
+                </span>
+              </div>
+              {selected.fare ? (
+                <div className="status">
+                  €{selected.fare.price} one way on {shortDate(selected.fare.departureAt)}
+                  {selected.fare.airline ? ` with ${p.airlines[selected.fare.airline] ?? selected.fare.airline}` : ""}, {stops(selected.fare.transfers)}, ~
+                  {formatDuration(selected.fare.durationMin ?? flightMinutes(selected.km))}. Cached from recent Aviasales searches; the live price is on
+                  the booking page.{" "}
+                  <a href={selected.fare.url} target="_blank" rel="noreferrer">
+                    Book on Aviasales ↗
+                  </a>
+                </div>
+              ) : (
+                <div className="status">
+                  {selected.airlines
+                    ? `${selected.airlines} airline${selected.airlines === 1 ? "" : "s"} flew ${selected.from.iata} → ${selected.airport.iata} in the 2014 network. `
+                    : ""}
+                  No cached fare for this route right now.{" "}
+                  <a
+                    href={`https://www.google.com/travel/flights?q=flights+from+${selected.from.iata}+to+${selected.airport.iata}`}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    Check fares ↗
+                  </a>
+                </div>
+              )}
+            </>
+          ) : null}
+
+          <h2>
+            Destinations · {p.destinations.length}
+            {p.destinations.length !== p.totalDestinations ? ` of ${p.totalDestinations}` : ""}
+          </h2>
+          <div className="status">
+            {p.fares === null
+              ? "Checking fares…"
+              : p.fares.status === "ok"
+                ? `Cheapest cached one-way fares, next 3 months: ${p.fares.fares.length} priced.`
+                : p.fares.status === "no-token"
+                  ? "No fares yet: add the Travelpayouts token (SETUP §2)."
+                  : `Fares unavailable: ${p.fares.note ?? "error"}`}
+          </div>
+          <Chips band={p.band} onBand={p.onBand}>
+            {p.fares?.status === "ok" && (
+              <button className={`chip${p.pricedOnly ? " on" : ""}`} onClick={() => p.onPricedOnly(!p.pricedOnly)}>
+                Priced only
+              </button>
+            )}
+          </Chips>
+          <div className="scroll">
+            {p.destinations.map((d) => (
+              <div
+                key={d.airport.iata}
+                className={`row${d.airport.iata === p.selectedDest ? " active" : ""}`}
+                onClick={() => p.onDest(d.airport.iata)}
+              >
+                <span className="code">{d.airport.iata}</span>
+                <span>
+                  <div className="name">{d.airport.city ?? d.airport.name}</div>
+                  <div className="sub">{countryName(d.airport.country)}</div>
+                </span>
+                <span className="meta">
+                  {d.fare ? (
+                    <>
+                      <strong>from €{d.fare.price}</strong>
+                      {shortDate(d.fare.departureAt)} · {stops(d.fare.transfers)}
+                    </>
+                  ) : (
+                    <>
+                      <strong>~{formatDuration(flightMinutes(d.km))}</strong>
+                      {Math.round(d.km)} km
+                    </>
+                  )}
+                </span>
+              </div>
+            ))}
+          </div>
+        </>
       )}
     </aside>
   );

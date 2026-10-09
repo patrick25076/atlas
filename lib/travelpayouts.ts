@@ -1,13 +1,13 @@
 // Server-only. Travelpayouts Aviasales Data API: cached prices from recent user searches.
 // Free with a token (SETUP.md §2). Limit: 200 requests per hour per IP, so results are cached
 // for an hour per origin and month. Prices are indicative; the booking page shows the live one.
-import cityAirports from "@/public/data/city-airports.json";
-import type { Fare } from "./types";
+import citiesJson from "@/public/data/cities.json";
+import type { City, Fare } from "./types";
 
 const API = "https://api.travelpayouts.com/aviasales/v3/get_latest_prices";
 const CURRENCY = "eur";
 // City code → airports on the globe, biggest first (scripts/ingest/tp-airports.ts).
-const CITY: Record<string, string[]> = cityAirports;
+const CITY: Record<string, City> = citiesJson;
 
 export function hasToken(): boolean {
   return Boolean(process.env.TRAVELPAYOUTS_TOKEN);
@@ -51,7 +51,7 @@ export function bookingUrl(link: string, origin: string, dst: string, departureA
 export function normalise(raw: Record<string, unknown>, origin: string): Fare | null {
   // The API may answer with a city code (PAR); the globe wants that city's main airport (CDG).
   const code = str(raw.destination_airport) || str(raw.destination);
-  const dst = CITY[code]?.[0] ?? code;
+  const dst = CITY[code]?.airports[0] ?? code;
   const price = num(raw.price ?? raw.value);
   const departureAt = str(raw.departure_at) || str(raw.depart_date);
   if (!/^[A-Z]{3}$/.test(dst) || !Number.isFinite(price) || !departureAt) return null;

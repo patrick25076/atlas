@@ -9,7 +9,8 @@ type Graph = {
   generatedAt: string;
   feeds: { id: string; name: string; licence: string; attribution: string }[];
   modes: string[];
-  stations: [string, number, number][];
+  /** [name, lat, lon, neighbouring stations, departures per day] */
+  stations: [string, number, number, number, number][];
   edges: [number, number, number, number, number][];
 };
 const graph = graphJson as unknown as Graph;
@@ -78,6 +79,8 @@ export type Reached = {
   changes: number;
   mode: string;
   prev: number;
+  links: number;
+  depDay: number;
 };
 
 export type ReachResult = {
@@ -127,7 +130,7 @@ export function reachFrom(lat: number, lon: number, maxMinutes = 600, accessKm =
   const reached: Reached[] = [];
   for (let i = 0; i < n; i++) {
     if (best[i] > maxMinutes || legs[i] === 0) continue;
-    const [name, slat, slon] = graph.stations[i];
+    const [name, slat, slon, links, depDay] = graph.stations[i];
     reached.push({
       id: i,
       name,
@@ -137,6 +140,8 @@ export function reachFrom(lat: number, lon: number, maxMinutes = 600, accessKm =
       changes: Math.max(0, legs[i] - 1),
       mode: graph.modes[lastMode[i]] ?? "rail",
       prev: prev[i],
+      links: links ?? 0,
+      depDay: depDay ?? 0,
     });
   }
   reached.sort((a, b) => a.minutes - b.minutes);

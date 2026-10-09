@@ -17,15 +17,6 @@
     "rows": 37594,
     "file": "public/data/routes-openflights.json"
   },
-  "cityAirports": {
-    "source": "Travelpayouts airports.json",
-    "url": "https://api.travelpayouts.com/data/en/airports.json",
-    "licence": "Travelpayouts static data (free for partner use)",
-    "note": "City IATA code → airports on the globe, biggest first.",
-    "fetchedAt": "2026-10-09T17:27:30.985Z",
-    "rows": 3159,
-    "file": "public/data/city-airports.json"
-  },
   "airlines": {
     "source": "Travelpayouts airlines.json",
     "url": "https://api.travelpayouts.com/data/en/airlines.json",
@@ -40,7 +31,7 @@
     "url": "https://download.gtfs.de/germany/fv_free/latest.zip",
     "licence": "CC BY 4.0",
     "note": "gtfs.de. Direct connections with shortest in-vehicle time; not a timetable.",
-    "fetchedAt": "2026-10-09T17:42:00.354Z",
+    "fetchedAt": "2026-10-09T18:11:58.626Z",
     "rows": 16720,
     "file": "public/data/ground-graph.json"
   },
@@ -49,7 +40,7 @@
     "url": "https://files.mobilitydatabase.org/mdb-3236/latest.zip",
     "licence": "OGL-ROU 1.0 (Romanian Open Government Licence)",
     "note": "S.C. Informatică Feroviară S.A. via Mobility Database (mdb-3236). Direct connections with shortest in-vehicle time; not a timetable.",
-    "fetchedAt": "2026-10-09T17:42:11.404Z",
+    "fetchedAt": "2026-10-09T18:12:09.385Z",
     "rows": 61919,
     "file": "public/data/ground-graph.json"
   },
@@ -58,7 +49,7 @@
     "url": "https://files.mobilitydatabase.org/tdg-83582/latest.zip",
     "licence": "ODbL 1.0",
     "note": "SNCF via transport.data.gouv.fr (tdg-83582). Direct connections with shortest in-vehicle time; not a timetable.",
-    "fetchedAt": "2026-10-09T17:42:23.723Z",
+    "fetchedAt": "2026-10-09T18:12:21.501Z",
     "rows": 70922,
     "file": "public/data/ground-graph.json"
   },
@@ -67,7 +58,7 @@
     "url": "https://files.mobilitydatabase.org/tdg-82199/latest.zip",
     "licence": "Licence Ouverte / Etalab 2.0",
     "note": "Eurostar International Ltd. via transport.data.gouv.fr (tdg-82199). Direct connections with shortest in-vehicle time; not a timetable.",
-    "fetchedAt": "2026-10-09T17:42:25.339Z",
+    "fetchedAt": "2026-10-09T18:12:22.465Z",
     "rows": 177,
     "file": "public/data/ground-graph.json"
   },
@@ -76,8 +67,17 @@
     "url": "https://files.mobilitydatabase.org/tdg-11681/latest.zip",
     "licence": "ODbL 1.0",
     "note": "FlixBus via transport.data.gouv.fr (tdg-11681). Direct connections with shortest in-vehicle time; not a timetable.",
-    "fetchedAt": "2026-10-09T17:42:37.807Z",
+    "fetchedAt": "2026-10-09T18:12:33.849Z",
     "rows": 67800,
     "file": "public/data/ground-graph.json"
+  },
+  "cities": {
+    "source": "Travelpayouts cities.json + airports.json",
+    "url": "https://api.travelpayouts.com/data/en/cities.json",
+    "licence": "Travelpayouts static data (free for partner use)",
+    "note": "City IATA code → name, coordinates, airports on the globe (biggest first).",
+    "fetchedAt": "2026-10-09T18:06:28.364Z",
+    "rows": 3159,
+    "file": "public/data/cities.json"
   }
 }

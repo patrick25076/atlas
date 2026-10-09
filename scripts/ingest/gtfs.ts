@@ -17,7 +17,17 @@ const RAW = "data/raw/gtfs";
 const OUT = "public/data/ground-graph.json";
 const GRID = 200; // 1/200 degree ≈ 500 m: stops closer than that are one station
 
-type Station = { id: number; name: string; lat: number; lon: number; feeds: string[] };
+type Station = {
+  id: number;
+  name: string;
+  lat: number;
+  lon: number;
+  feeds: string[];
+  /** Neighbouring stations on any line: 2 for a halt in the middle of a line, 3+ for a junction. */
+  nbrs: Set<number>;
+  /** Departures per week, summed over feeds. */
+  dep: number;
+};
 type Edge = { from: number; to: number; minutes: number; tripsPerWeek: number; mode: string };
 
 const wanted = process.argv.slice(2);
@@ -49,7 +59,7 @@ function stationFor(name: string, lat: number, lon: number, feedId: string): num
   const key = `${Math.round(lat * GRID)},${Math.round(lon * GRID)}`;
   let s = stations.get(key);
   if (!s) {
-    s = { id: stations.size, name, lat: +lat.toFixed(5), lon: +lon.toFixed(5), feeds: [] };
+    s = { id: stations.size, name, lat: +lat.toFixed(5), lon: +lon.toFixed(5), feeds: [], nbrs: new Set(), dep: 0 };
     stations.set(key, s);
   }
   if (!s.feeds.includes(feedId)) s.feeds.push(feedId);
@@ -79,7 +89,7 @@ for (const feed of feeds) {
       FROM ${csv("stops.txt")}
       WHERE stop_lat IS NOT NULL AND stop_lon IS NOT NULL;
     CREATE TABLE trips AS
-      SELECT t.trip_id, t.service_id, r.route_type
+      SELECT t.trip_id, t.service_id, t.route_id, r.route_type
       FROM ${csv("trips.txt")} t JOIN ${csv("routes.txt")} r USING (route_id);
     CREATE TABLE st AS
       SELECT trip_id, stop_sequence::INT AS seq, stop_id,
@@ -129,6 +139,36 @@ for (const feed of feeds) {
       edges++;
     }
   }
+  // Station importance, independent of how a feed defines "route": which stations are next to
+  // each other on any trip (a halt has two neighbours, a junction three or more), and how many
+  // departures a week leave each one.
+  const hops = await db.runAndReadAll(`
+    WITH ordered AS (
+      SELECT trip_id, stop_id, LEAD(stop_id) OVER (PARTITION BY trip_id ORDER BY seq) AS next_stop FROM st
+    )
+    SELECT a.stop_name AS from_name, a.lat AS from_lat, a.lon AS from_lon,
+           b.stop_name AS to_name, b.lat AS to_lat, b.lon AS to_lon,
+           sum(COALESCE(sv.days, 1))::DOUBLE AS dep_per_week
+    FROM ordered o
+    JOIN stops a ON a.stop_id = o.stop_id
+    JOIN stops b ON b.stop_id = o.next_stop
+    JOIN trips t ON t.trip_id = o.trip_id
+    LEFT JOIN services sv ON sv.service_id = t.service_id
+    WHERE a.station <> b.station
+    GROUP BY 1, 2, 3, 4, 5, 6
+  `);
+  const byId = [...stations.values()];
+  for (const r of hops.getRowObjects() as Record<string, unknown>[]) {
+    const from = stationFor(String(r.from_name), Number(r.from_lat), Number(r.from_lon), feed.id);
+    const to = stationFor(String(r.to_name), Number(r.to_lat), Number(r.to_lon), feed.id);
+    if (from === to) continue;
+    const a = byId[from] ?? [...stations.values()][from];
+    const b = byId[to] ?? [...stations.values()][to];
+    a.nbrs.add(to);
+    b.nbrs.add(from);
+    a.dep += Number(r.dep_per_week);
+  }
+
   feedStats[feed.id] = { stations: stations.size - before, edges };
   console.log(`${feed.id}: +${stations.size - before} stations, ${edges} direct connections`);
 
@@ -189,7 +229,8 @@ const graph = {
   generatedAt: new Date().toISOString(),
   feeds: feeds.map((f) => ({ id: f.id, name: f.name, licence: f.licence, attribution: f.attribution })),
   modes: MODES,
-  stations: [...stations.values()].map((s) => [s.name, s.lat, s.lon] as const),
+  // [name, lat, lon, neighbouring stations, departures per day]
+  stations: [...stations.values()].map((s) => [s.name, s.lat, s.lon, s.nbrs.size, Math.round(s.dep / 7)] as const),
   edges: [...edgeAgg.values()].map((e) => [e.from, e.to, e.minutes, e.tripsPerWeek, MODES.indexOf(e.mode)] as const),
 };
 

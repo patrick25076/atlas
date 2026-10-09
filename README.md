@@ -10,9 +10,14 @@ Built source by source. Every number on the globe says where it came from
 
 | Path | What |
 |---|---|
-| `app/` | Next.js app router: layout, page, global styles |
-| `components/Globe.tsx` | MapLibre globe + deck.gl layers (airports, gateways, arcs) |
-| `components/Panel.tsx` | Side panel: origin search, gateways, destinations |
+| `app/` | Next.js app router: layout, page (reads Vercel's location hint), global styles |
+| `app/api/fares` | Cheapest cached one-way fares per destination for an origin (Travelpayouts) |
+| `app/api/reach` | Stations reachable by train and coach from a point (Dijkstra over the ground graph) |
+| `components/Globe.tsx` | MapLibre globe + deck.gl layers; three views: any way, by air, by train and coach |
+| `components/Panel.tsx` | Side panel (bottom sheet on phones): origin search, places, gateways, destinations |
+| `lib/places.ts` | The combined view: one place per city, best mode, door-to-door estimate, price |
+| `lib/ground.ts` | Ground graph in memory, reach search with frequency-based expected waits |
+| `lib/travelpayouts.ts` | Fares API client; maps city codes to airports; booking links with the marker |
 | `lib/geo.ts` | Haversine, gateway selection, drive and flight time estimates |
 | `scripts/ingest/` | DuckDB scripts that turn a source into `public/data/*.json` |
 | `public/data/` | Derived data, committed so a deploy needs no ingest |

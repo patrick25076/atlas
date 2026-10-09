@@ -16,6 +16,15 @@ export type Route = {
   airlines: number;
 };
 
+/** A city with at least one airport on the globe (public/data/cities.json). */
+export type City = {
+  name: string;
+  country: string;
+  lat: number;
+  lon: number;
+  airports: string[];
+};
+
 export type ManifestEntry = {
   source: string;
   url: string;
@@ -67,6 +76,10 @@ export type ReachStation = {
   changes: number;
   mode: string;
   prev: number;
+  /** Neighbouring stations on any line: 2 for a halt mid-line, 3+ for a junction. */
+  links: number;
+  /** Departures per day. */
+  depDay: number;
 };
 
 export type ReachResponse = {
