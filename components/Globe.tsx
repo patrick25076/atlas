@@ -161,6 +161,9 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
   const [directOnly, setDirectOnly] = useState(false);
   const [dealGateway, setDealGateway] = useState<string>("all");
   const [thumbs, setThumbs] = useState<Record<string, string>>({});
+  const [ask, setAsk] = useState<{ status: string; text: string; used: string[]; note?: string; question: string } | null>(null);
+  const [asking, setAsking] = useState(false);
+  const [askOnly, setAskOnly] = useState(true);
   const [manifest, setManifest] = useState<Manifest | null>(null);
   const [summary, setSummary] = useState<PlaceSummary | null>(null);
   const [warmOnly, setWarmOnly] = useState(false);
@@ -465,7 +468,32 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
     return out;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dealsAll, dealNights, directOnly, dealGateway, warmOnly, weather]);
+  // After a question, the cards narrow to the deals the agent used, until "Show all".
+  const dealsList = useMemo<Deal[]>(() => {
+    if (!askOnly || !ask?.used.length) return dealsShown;
+    const used = new Set(ask.used);
+    return dealsAll.filter((d) => used.has(dealKey(d))).sort((a, b) => a.price - b.price);
+  }, [dealsShown, dealsAll, ask, askOnly]);
   const deal = selectedDeal ? (dealsAll.find((d) => dealKey(d) === selectedDeal) ?? null) : null;
+
+  async function askAgent(question: string) {
+    setAsking(true);
+    setSelectedDeal(null);
+    setAskOnly(true);
+    try {
+      const r = await fetch("/api/ask", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ question, home: gateways[0]?.airport.country ?? "RO" }),
+      });
+      const j = (await r.json()) as { status: string; text: string; used: string[]; note?: string };
+      setAsk({ ...j, used: j.used ?? [], question });
+    } catch {
+      setAsk({ status: "error", text: "", used: [], note: "The agent did not answer.", question });
+    } finally {
+      setAsking(false);
+    }
+  }
   const dealOptions = useMemo(
     () => (deal ? dealsAll.filter((d) => d.dstCity === deal.dstCity).sort((a, b) => a.price - b.price).slice(0, 6) : []),
     [deal, dealsAll],
@@ -756,13 +784,13 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
     // Explore draws arcs only for the selected place; the lines were the thing nobody understood.
     const flownPlaces = placesShown.filter((p) => p.mode === "plane" && p.air && p.key === selectedPlace);
     const dealArcs = dealView
-      ? dealsShown
+      ? dealsList
           .slice(0, 16)
-          .concat(deal && !dealsShown.slice(0, 16).some((d) => dealKey(d) === selectedDeal) ? [deal] : [])
+          .concat(deal && !dealsList.slice(0, 16).some((d) => dealKey(d) === selectedDeal) ? [deal] : [])
           .map((d) => ({ d, s: byIata.get(d.gw), t: dealCoord(d) }))
           .filter((x): x is { d: Deal; s: Airport; t: [number, number] } => !!x.s && !!x.t)
       : [];
-    const dealDots = dealView ? dealsShown.map((d) => ({ d, t: dealCoord(d) })).filter((x): x is { d: Deal; t: [number, number] } => !!x.t) : [];
+    const dealDots = dealView ? dealsList.map((d) => ({ d, t: dealCoord(d) })).filter((x): x is { d: Deal; t: [number, number] } => !!x.t) : [];
     // A trip's legs resolve codes to coordinates: gateways by IATA, cities from the trip itself.
     const coordOf = (code: string): [number, number] | null => {
       const g = gateways.find((x) => x.airport.iata === code);
@@ -1005,7 +1033,7 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
     overlay.setProps({ layers: layers.filter(Boolean) as Layer[] });
     // focus* helpers only read refs and state setters; listing them would re-run this on every render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [airports, shown, gateways, gatewayIata, origin, selectedDest, live, view, reachBand, selectedStation, pathForSelected, placesShown, selectedPlace, trips, trip, warmOnly, weather, dealsShown, selectedDeal, deal]);
+  }, [airports, shown, gateways, gatewayIata, origin, selectedDest, live, view, reachBand, selectedStation, pathForSelected, placesShown, selectedPlace, trips, trip, warmOnly, weather, dealsList, selectedDeal, deal]);
 
   const groundFeeds = reach ? reach.feeds.map((f) => f.attribution.split(" via ")[0].split(" (")[0]).join(", ") : "";
 
@@ -1051,8 +1079,13 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
           setSelectedDeal(null);
         }}
         dealsFile={dealsFile}
-        deals={dealsShown}
+        deals={dealsList}
         deal={deal}
+        ask={ask}
+        asking={asking}
+        onAsk={askAgent}
+        askOnly={askOnly}
+        onAskOnly={setAskOnly}
         dealOptions={dealOptions}
         onDeal={focusDeal}
         dealNights={dealNights}

@@ -65,7 +65,8 @@ export async function POST(request: Request) {
 
   const used = new Map<string, Deal>();
   const bedrock = createAmazonBedrock({ region: process.env.AWS_REGION ?? "us-west-2" });
-  const model = bedrock(process.env.ASK_MODEL ?? "openai.gpt-6-astra");
+  // Bedrock on-demand needs the cross-region inference profile id, hence the "us." prefix.
+  const model = bedrock(process.env.ASK_MODEL ?? "us.openai.gpt-6-astra");
 
   const tools = {
     cheapest_deals: tool({

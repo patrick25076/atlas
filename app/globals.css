@@ -338,6 +338,25 @@ a {
   line-height: 1.3;
   color: var(--text);
 }
+.askbox {
+  display: flex;
+  gap: 6px;
+}
+.askbox .search {
+  flex: 1;
+}
+.answer {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(76, 201, 240, 0.08);
+  border: 1px solid rgba(76, 201, 240, 0.25);
+}
+.answer .hero {
+  font-size: 13.5px;
+}
 .hero b {
   color: var(--accent);
 }

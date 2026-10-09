@@ -114,7 +114,14 @@ type Props = {
   onDealGateway: (g: string) => void;
   thumbs: Record<string, string>;
   whyOf: (d: Deal) => string;
+  ask: { status: string; text: string; used: string[]; note?: string; question: string } | null;
+  asking: boolean;
+  onAsk: (q: string) => void;
+  askOnly: boolean;
+  onAskOnly: (v: boolean) => void;
 };
+
+const ASK_IDEAS = ["Warm weekend under €60, direct", "Somewhere with great food for 4 nights", "Cheapest city I need no visa for", "A beach in November"];
 
 const PLACE_LABELS: [keyof CityPlaces, string][] = [
   ["food", "restaurants"],
@@ -312,6 +319,7 @@ function PlaceIntel({ intel, summary }: { intel: Intel; summary: PlaceSummary | 
 export default function Panel(p: Props) {
   const [query, setQuery] = useState("");
   const [copied, setCopied] = useState(false);
+  const [question, setQuestion] = useState("");
   const hits = useMemo(() => searchAirports(p.airports, query), [p.airports, query]);
   const selected = p.selectedDest ? p.destinations.find((d) => d.airport.iata === p.selectedDest) : null;
   const place = p.selectedPlace ? p.places.find((x) => x.key === p.selectedPlace) : null;
@@ -430,6 +438,54 @@ export default function Panel(p: Props) {
             </>
           ) : (
             <>
+              <form
+                className="askbox"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  if (question.trim()) p.onAsk(question.trim());
+                }}
+              >
+                <input
+                  className="search"
+                  placeholder="Ask: warm weekend under €60, direct flights?"
+                  value={question}
+                  onChange={(e) => setQuestion(e.target.value)}
+                  disabled={p.asking}
+                />
+                <button className="chip on" type="submit" disabled={p.asking || !question.trim()}>
+                  {p.asking ? "Thinking…" : "Ask"}
+                </button>
+              </form>
+              {!p.ask && !p.asking && (
+                <div className="chips">
+                  {ASK_IDEAS.map((q) => (
+                    <button key={q} className="chip" onClick={() => p.onAsk(q)}>
+                      {q}
+                    </button>
+                  ))}
+                </div>
+              )}
+              {p.ask && (
+                <div className="answer">
+                  {p.ask.status === "ok" ? (
+                    <>
+                      <div className="hero">{p.ask.text}</div>
+                      {p.ask.used.length > 0 && (
+                        <div className="chips">
+                          <button className={`chip${p.askOnly ? " on" : ""}`} onClick={() => p.onAskOnly(true)}>
+                            Its picks
+                          </button>
+                          <button className={`chip${!p.askOnly ? " on" : ""}`} onClick={() => p.onAskOnly(false)}>
+                            All deals
+                          </button>
+                        </div>
+                      )}
+                    </>
+                  ) : (
+                    <div className="status">{p.ask.note ?? "No answer."}</div>
+                  )}
+                </div>
+              )}
               <div className="hero">
                 Cheapest getaways, <b>{p.deals.length}</b> cities
               </div>
