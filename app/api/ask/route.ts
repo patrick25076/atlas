@@ -64,9 +64,13 @@ export async function POST(request: Request) {
   if (!question) return NextResponse.json({ error: "question required" }, { status: 400 });
 
   const used = new Map<string, Deal>();
-  const bedrock = createAmazonBedrock({ region: process.env.AWS_REGION ?? "us-west-2" });
+  // Values pasted into env UIs often carry a newline; trim both.
+  const bedrock = createAmazonBedrock({
+    region: (process.env.AWS_REGION ?? "us-west-2").trim() || "us-west-2",
+    apiKey: process.env.AWS_BEARER_TOKEN_BEDROCK?.trim(),
+  });
   // Bedrock on-demand needs the cross-region inference profile id, hence the "us." prefix.
-  const model = bedrock(process.env.ASK_MODEL ?? "us.openai.gpt-6-astra");
+  const model = bedrock((process.env.ASK_MODEL ?? "us.openai.gpt-6-astra").trim());
 
   const tools = {
     cheapest_deals: tool({
