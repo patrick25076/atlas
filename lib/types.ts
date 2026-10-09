@@ -57,6 +57,27 @@ export type FaresResponse = {
   fares: Fare[];
 };
 
+/** A station reachable by train or coach, from /api/reach. */
+export type ReachStation = {
+  id: number;
+  name: string;
+  lat: number;
+  lon: number;
+  minutes: number;
+  changes: number;
+  mode: string;
+  prev: number;
+};
+
+export type ReachResponse = {
+  starts: { id: number; name: string; lat: number; lon: number; minutes: number }[];
+  reached: ReachStation[];
+  generatedAt: string;
+  feeds: { id: string; name: string; licence: string; attribution: string }[];
+  stations: number;
+  truncated?: boolean;
+};
+
 /** One arc on the globe: a gateway to somewhere it flies. */
 export type Destination = {
   airport: Airport;

@@ -26,6 +26,7 @@ Built source by source. Every number on the globe says where it came from
 | OpenFlights routes | ODbL, frozen 2014 | Indicative network (which pairs were ever connected) | placeholder; dims once fares are live |
 | Travelpayouts airports.json | free static data | City code → airports mapping for the fares API | `pnpm ingest:tp-airports`, monthly |
 | Travelpayouts / Aviasales Data API | free with token (SETUP §2) | Cheapest cached one-way fare per destination, booking links with the marker | live, cached 1 h per origin |
+| GTFS feeds (`scripts/ingest/feeds.ts`): gtfs.de long-distance (CC BY 4.0), Romanian railways (OGL-ROU 1.0), SNCF TGV/Intercités/TER (ODbL), Eurostar (Etalab 2.0), FlixBus + FlixTrain Europe (ODbL) | per feed | Ground graph: 7.4k stations, 220k direct connections, walking transfers; `/api/reach` Dijkstra with expected waits | `pnpm ingest:gtfs`, weekly |
 
 ## Stack decisions
 

@@ -2,9 +2,10 @@
 
 import { useMemo, useState } from "react";
 import { flightMinutes, formatDuration } from "@/lib/geo";
-import type { Airport, Destination, FaresResponse, Gateway } from "@/lib/types";
+import type { Airport, Destination, FaresResponse, Gateway, ReachResponse, ReachStation } from "@/lib/types";
 import { countryName, type Origin } from "./Globe";
 
+export type View = "fly" | "ground";
 export type Band = "all" | "short" | "medium" | "long";
 export const BANDS: { key: Band; label: string; test: (min: number) => boolean }[] = [
   { key: "all", label: "All", test: () => true },
@@ -31,7 +32,15 @@ type Props = {
   airlines: Record<string, string>;
   pricedOnly: boolean;
   onPricedOnly: (v: boolean) => void;
+  view: View;
+  onView: (v: View) => void;
+  reach: ReachResponse | null;
+  reachShown: ReachStation[];
+  selectedStation: number | null;
+  onStation: (id: number | null) => void;
 };
+
+const MODE_TAG: Record<string, string> = { rail: "TRN", coach: "BUS", ferry: "FRY", walk: "WLK", other: "···" };
 
 function shortDate(iso: string): string {
   const d = new Date(iso);
@@ -102,6 +111,69 @@ export default function Panel(p: Props) {
         </div>
       )}
 
+      <div className="chips">
+        <button className={`chip${p.view === "fly" ? " on" : ""}`} onClick={() => p.onView("fly")}>
+          By air
+        </button>
+        <button className={`chip${p.view === "ground" ? " on" : ""}`} onClick={() => p.onView("ground")}>
+          By train and coach
+        </button>
+      </div>
+
+      {p.view === "ground" ? (
+        <>
+          <h2>Nearest stations</h2>
+          <div>
+            {!p.reach && <div className="status">Searching the rail and coach network…</div>}
+            {p.reach?.starts.slice(0, 4).map((s) => (
+              <div key={s.id} className="row">
+                <span className="code">{formatDuration(s.minutes)}</span>
+                <span>
+                  <div className="name">{s.name}</div>
+                  <div className="sub">drive, estimated</div>
+                </span>
+                <span className="meta" />
+              </div>
+            ))}
+            {p.reach && p.reach.starts.length === 0 && (
+              <div className="status">No station within 40 km in the feeds loaded so far.</div>
+            )}
+          </div>
+
+          <h2>Places · {p.reachShown.length}</h2>
+          <div className="status">
+            {p.reach
+              ? `${p.reach.reached.length} stations within 10 h. In-vehicle time plus an expected wait per leg, not a timetable.`
+              : ""}
+          </div>
+          <div className="chips">
+            {BANDS.map((b) => (
+              <button key={b.key} className={`chip${p.band === b.key ? " on" : ""}`} onClick={() => p.onBand(b.key)}>
+                {b.label}
+              </button>
+            ))}
+          </div>
+          <div className="scroll">
+            {p.reachShown.map((s) => (
+              <div
+                key={s.id}
+                className={`row${s.id === p.selectedStation ? " active" : ""}`}
+                onClick={() => p.onStation(s.id === p.selectedStation ? null : s.id)}
+              >
+                <span className="code">{MODE_TAG[s.mode] ?? s.mode}</span>
+                <span>
+                  <div className="name">{s.name}</div>
+                  <div className="sub">{s.changes ? `${s.changes} change${s.changes === 1 ? "" : "s"}` : "direct"}</div>
+                </span>
+                <span className="meta">
+                  <strong>{formatDuration(s.minutes)}</strong>
+                </span>
+              </div>
+            ))}
+          </div>
+        </>
+      ) : (
+      <>
       <h2>Gateways</h2>
       <div>
         {p.gateways.length === 0 && <div className="status">No airport with scheduled flights within reach.</div>}
@@ -228,6 +300,8 @@ export default function Panel(p: Props) {
           </div>
         ))}
       </div>
+      </>
+      )}
     </aside>
   );
 }

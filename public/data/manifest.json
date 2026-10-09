@@ -34,5 +34,50 @@
     "fetchedAt": "2026-10-09T17:30:04.719Z",
     "rows": 1159,
     "file": "public/data/airlines.json"
+  },
+  "gtfs:de-fv": {
+    "source": "Germany long-distance rail (ICE/IC/EC)",
+    "url": "https://download.gtfs.de/germany/fv_free/latest.zip",
+    "licence": "CC BY 4.0",
+    "note": "gtfs.de. Direct connections with shortest in-vehicle time; not a timetable.",
+    "fetchedAt": "2026-10-09T17:42:00.354Z",
+    "rows": 16720,
+    "file": "public/data/ground-graph.json"
+  },
+  "gtfs:ro-rail": {
+    "source": "Romanian railway operators (CFR Călători and private operators, cross-border to HU/BG/MD)",
+    "url": "https://files.mobilitydatabase.org/mdb-3236/latest.zip",
+    "licence": "OGL-ROU 1.0 (Romanian Open Government Licence)",
+    "note": "S.C. Informatică Feroviară S.A. via Mobility Database (mdb-3236). Direct connections with shortest in-vehicle time; not a timetable.",
+    "fetchedAt": "2026-10-09T17:42:11.404Z",
+    "rows": 61919,
+    "file": "public/data/ground-graph.json"
+  },
+  "gtfs:fr-sncf": {
+    "source": "SNCF: TGV, Intercités and TER",
+    "url": "https://files.mobilitydatabase.org/tdg-83582/latest.zip",
+    "licence": "ODbL 1.0",
+    "note": "SNCF via transport.data.gouv.fr (tdg-83582). Direct connections with shortest in-vehicle time; not a timetable.",
+    "fetchedAt": "2026-10-09T17:42:23.723Z",
+    "rows": 70922,
+    "file": "public/data/ground-graph.json"
+  },
+  "gtfs:eurostar": {
+    "source": "Eurostar",
+    "url": "https://files.mobilitydatabase.org/tdg-82199/latest.zip",
+    "licence": "Licence Ouverte / Etalab 2.0",
+    "note": "Eurostar International Ltd. via transport.data.gouv.fr (tdg-82199). Direct connections with shortest in-vehicle time; not a timetable.",
+    "fetchedAt": "2026-10-09T17:42:25.339Z",
+    "rows": 177,
+    "file": "public/data/ground-graph.json"
+  },
+  "gtfs:flixbus-eu": {
+    "source": "FlixBus and FlixTrain, European network",
+    "url": "https://files.mobilitydatabase.org/tdg-11681/latest.zip",
+    "licence": "ODbL 1.0",
+    "note": "FlixBus via transport.data.gouv.fr (tdg-11681). Direct connections with shortest in-vehicle time; not a timetable.",
+    "fetchedAt": "2026-10-09T17:42:37.807Z",
+    "rows": 67800,
+    "file": "public/data/ground-graph.json"
   }
 }

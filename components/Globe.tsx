@@ -3,11 +3,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import * as maplibregl from "maplibre-gl";
 import { MapLibreOverlay } from "@deck.gl/maplibre";
-import { ArcLayer, ScatterplotLayer } from "@deck.gl/layers";
+import { ArcLayer, PathLayer, ScatterplotLayer } from "@deck.gl/layers";
 import type { Layer, PickingInfo } from "@deck.gl/core";
 import { flightMinutes, formatDuration, haversineKm, nearestGateways } from "@/lib/geo";
-import type { Airport, Destination, FaresResponse, Gateway, Manifest, Route } from "@/lib/types";
-import Panel, { BANDS, type Band } from "./Panel";
+import type { Airport, Destination, FaresResponse, Gateway, Manifest, ReachResponse, ReachStation, Route } from "@/lib/types";
+import Panel, { BANDS, type Band, type View } from "./Panel";
 
 // The bundler cannot resolve MapLibre's worker from import.meta.url; see scripts/copy-worker.mjs.
 maplibregl.setWorkerUrl("/maplibre-gl-worker.mjs");
@@ -51,10 +51,12 @@ export function countryName(code: string): string {
 }
 
 function tooltip(info: PickingInfo): null | { html: string; style: Record<string, string> } {
-  const o = info.object as Destination | Gateway | Origin | undefined;
+  const o = info.object as Destination | Gateway | Origin | ReachStation | undefined;
   if (!o) return null;
   let html: string;
-  if ("from" in o) {
+  if ("changes" in o) {
+    html = `<b>${o.name}</b><br/>${formatDuration(o.minutes)} · ${o.changes ? `${o.changes} change${o.changes === 1 ? "" : "s"}` : "direct"} · by ${o.mode}`;
+  } else if ("from" in o) {
     const where = [o.airport.city, countryName(o.airport.country)].filter(Boolean).join(", ");
     const fare = o.fare
       ? `<b>from €${o.fare.price}</b> · ${o.fare.departureAt} · ${o.fare.transfers ? `${o.fare.transfers} stop` : "direct"}<br/>`
@@ -97,6 +99,9 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
   const [selectedDest, setSelectedDest] = useState<string | null>(null);
   const [fares, setFares] = useState<FaresResponse | null>(null);
   const [pricedOnly, setPricedOnly] = useState(false);
+  const [view, setView] = useState<View>("fly");
+  const [reach, setReach] = useState<ReachResponse | null>(null);
+  const [selectedStation, setSelectedStation] = useState<number | null>(null);
 
   // Static data, produced by scripts/ingest and committed under public/data.
   useEffect(() => {
@@ -210,6 +215,47 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
     return destinations.filter((d) => (!b || b.test(flightMinutes(d.km))) && (!pricedOnly || d.fare));
   }, [destinations, band, pricedOnly]);
 
+  // Ground view: everything reachable by train and coach from where the user is.
+  useEffect(() => {
+    if (view !== "ground" || !origin) return;
+    const ctrl = new AbortController();
+    setReach(null);
+    setSelectedStation(null);
+    fetch(`/api/reach?lat=${origin.lat.toFixed(3)}&lon=${origin.lon.toFixed(3)}&max=600`, { signal: ctrl.signal })
+      .then((r) => r.json())
+      .then((j: ReachResponse) => setReach(j))
+      .catch(() => {});
+    return () => ctrl.abort();
+  }, [view, origin]);
+
+  const reachBand = useMemo(() => {
+    const b = BANDS.find((x) => x.key === band);
+    return reach ? reach.reached.filter((s) => !b || b.test(s.minutes)) : [];
+  }, [reach, band]);
+
+  // One row per place name in the list; the fastest station wins.
+  const reachShown = useMemo(() => {
+    const seen = new Set<string>();
+    return reachBand.filter((s) => !seen.has(s.name) && seen.add(s.name));
+  }, [reachBand]);
+
+  const pathForSelected = useMemo<[number, number][]>(() => {
+    if (!reach || selectedStation == null) return [];
+    const byId = new Map<number, { lat: number; lon: number; prev: number }>();
+    for (const s of reach.reached) byId.set(s.id, s);
+    for (const s of reach.starts) byId.set(s.id, { lat: s.lat, lon: s.lon, prev: -1 });
+    const pts: [number, number][] = [];
+    let cur = selectedStation;
+    for (let guard = 0; cur >= 0 && guard < 500; guard++) {
+      const s = byId.get(cur);
+      if (!s) break;
+      pts.push([s.lon, s.lat]);
+      cur = s.prev;
+    }
+    if (origin) pts.push([origin.lon, origin.lat]);
+    return pts.reverse();
+  }, [reach, selectedStation, origin]);
+
   // The map itself: created once, spins slowly until the user touches it.
   useEffect(() => {
     if (!mapEl.current || mapRef.current) return;
@@ -276,6 +322,15 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
     map.fitBounds(bounds, { padding: PANEL_PADDING, maxZoom: 5, duration: 1400 });
   }
 
+  function focusStation(id: number | null) {
+    setSelectedStation(id);
+    const map = mapRef.current;
+    const s = id != null ? reach?.reached.find((r) => r.id === id) : null;
+    if (!map || !s || !origin) return;
+    const bounds = new maplibregl.LngLatBounds([origin.lon, origin.lat], [origin.lon, origin.lat]).extend([s.lon, s.lat]);
+    map.fitBounds(bounds, { padding: PANEL_PADDING, maxZoom: 7, duration: 1200 });
+  }
+
   function focusGateway(iata: string) {
     setGatewayIata(iata);
     setSelectedDest(null);
@@ -290,6 +345,7 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
     if (!overlay) return;
     // With live fares on screen, colour means price; routes only the 2014 network knows go dim.
     const colorOf = (d: Destination): RGBA => (live ? (d.fare ? priceColor(d.fare.price) : DIM) : arcColor(flightMinutes(d.km)));
+    const ground = view === "ground";
     const layers: (Layer | null)[] = [
       new ScatterplotLayer<Airport>({
         id: "airports",
@@ -297,9 +353,34 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
         getPosition: (a) => [a.lon, a.lat],
         radiusUnits: "pixels",
         getRadius: (a) => (a.size === "large" ? 2.6 : a.size === "medium" ? 1.8 : 1.1),
-        getFillColor: [150, 165, 190, 110],
+        getFillColor: ground ? [150, 165, 190, 50] : [150, 165, 190, 110],
+        updateTriggers: { getFillColor: [ground] },
       }),
-      new ArcLayer<Destination>({
+      ground
+        ? new ScatterplotLayer<ReachStation>({
+            id: "reach",
+            data: reachBand,
+            getPosition: (s) => [s.lon, s.lat],
+            radiusUnits: "pixels",
+            getRadius: (s) => (s.id === selectedStation ? 6 : 2.8),
+            getFillColor: (s) => arcColor(s.minutes),
+            pickable: true,
+            updateTriggers: { getRadius: [selectedStation] },
+            onClick: (info) => focusStation((info.object as ReachStation | undefined)?.id ?? null),
+          })
+        : null,
+      ground && pathForSelected.length > 1
+        ? new PathLayer<{ path: [number, number][] }>({
+            id: "reach-path",
+            data: [{ path: pathForSelected }],
+            getPath: (d) => d.path,
+            getColor: [255, 255, 255, 230],
+            getWidth: 3,
+            widthUnits: "pixels",
+            parameters: { cullMode: "none" },
+          })
+        : null,
+      ground ? null : new ArcLayer<Destination>({
         id: "arcs",
         data: shown,
         getSourcePosition: (d) => [d.from.lon, d.from.lat],
@@ -315,7 +396,7 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
         updateTriggers: { getWidth: [selectedDest], getSourceColor: [live], getTargetColor: [live] },
         onClick: (info) => focusDestination((info.object as Destination | undefined)?.airport.iata ?? null),
       }),
-      new ScatterplotLayer<Destination>({
+      ground ? null : new ScatterplotLayer<Destination>({
         id: "destinations",
         data: shown,
         getPosition: (d) => [d.airport.lon, d.airport.lat],
@@ -326,7 +407,7 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
         updateTriggers: { getRadius: [selectedDest], getFillColor: [live] },
         onClick: (info) => focusDestination((info.object as Destination | undefined)?.airport.iata ?? null),
       }),
-      new ScatterplotLayer<Gateway>({
+      ground ? null : new ScatterplotLayer<Gateway>({
         id: "gateways",
         data: gateways,
         getPosition: (g) => [g.airport.lon, g.airport.lat],
@@ -363,7 +444,7 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
     overlay.setProps({ layers: layers.filter(Boolean) as Layer[] });
     // focusDestination/focusGateway are stable enough: they only read refs and state setters.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [airports, shown, gateways, gatewayIata, origin, selectedDest, live]);
+  }, [airports, shown, gateways, gatewayIata, origin, selectedDest, live, view, reachBand, selectedStation, pathForSelected]);
 
   return (
     <div className="app">
@@ -389,6 +470,16 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
         airlines={airlines}
         pricedOnly={pricedOnly}
         onPricedOnly={setPricedOnly}
+        view={view}
+        onView={(v) => {
+          setView(v);
+          setSelectedDest(null);
+          setSelectedStation(null);
+        }}
+        reach={reach}
+        reachShown={reachShown}
+        selectedStation={selectedStation}
+        onStation={focusStation}
         onOrigin={(a) => {
           setSelectedDest(null);
           setOrigin({ lat: a.lat, lon: a.lon, label: a.city ?? a.name, source: "search" });
@@ -399,6 +490,7 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
           Airports: {manifest.airports?.source} · {manifest.airports?.licence} · {manifest.airports?.fetchedAt.slice(0, 10)}
           {" · "}Network: {manifest.routes?.source} · {manifest.routes?.note?.split(".")[0]}
           {live && fares?.fetchedAt ? ` · Fares: Aviasales cache via Travelpayouts · EUR · ${fares.fetchedAt.slice(11, 16)} UTC` : ""}
+          {view === "ground" && reach ? ` · Ground: ${reach.feeds.length} GTFS feeds (${reach.feeds.map((f) => f.attribution.split(" via ")[0].split(" (")[0]).join(", ")}) · expected times, not a timetable` : ""}
         </div>
       )}
     </div>
