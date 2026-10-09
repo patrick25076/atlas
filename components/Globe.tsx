@@ -194,34 +194,39 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
       .then((r) => (r.ok ? r.json() : null))
       .catch(() => null);
   useEffect(() => {
-    Promise.all([load("airports.json"), load("cities.json"), load("countries.json"), load("weather.json"), load("deals.json"), load("manifest.json")]).then(
-      ([a, c, co, w, de, m]) => {
-        setAirports(a ?? []);
-        setCities(c ?? {});
-        setCountries(co ?? {});
-        setWeather(w && (w as WeatherCompact).syms ? expandWeather(w as WeatherCompact) : null);
-        setDealsFile(de);
-        setManifest(m);
-        // No deals file yet (first run): open on Explore rather than an empty Deals tab.
-        if (!de?.deals?.length) setView((v) => (v === "deals" ? "all" : v));
-      },
-    );
+    Promise.all([
+      load("airports.json"),
+      load("cities.json"),
+      load("countries.json"),
+      load("weather.json"),
+      load("deals.json"),
+      load("city-places.json"),
+      load("heritage.json"),
+      load("manifest.json"),
+    ]).then(([a, c, co, w, de, cp, he, m]) => {
+      setAirports(a ?? []);
+      setCities(c ?? {});
+      setCountries(co ?? {});
+      setWeather(w && (w as WeatherCompact).syms ? expandWeather(w as WeatherCompact) : null);
+      setDealsFile(de);
+      setCityPlaces(cp ?? {});
+      setHeritage(he ?? []);
+      setManifest(m);
+      // No deals file yet (first run): open on Explore rather than an empty Deals tab.
+      if (!de?.deals?.length) setView((v) => (v === "deals" ? "all" : v));
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   useEffect(() => {
     if (extrasLoaded.current) return;
     if (view === "deals" && !selectedDeal) return;
     extrasLoaded.current = true;
-    Promise.all([load("routes-openflights.json"), load("airlines.json"), load("holidays.json"), load("city-places.json"), load("heritage.json"), load("visa.json")]).then(
-      ([r, al, h, cp, he, vi]) => {
-        setRoutes(r ?? []);
-        setAirlines(al ?? {});
-        setHolidays(h ?? {});
-        setCityPlaces(cp ?? {});
-        setHeritage(he ?? []);
-        setVisa(vi);
-      },
-    );
+    Promise.all([load("routes-openflights.json"), load("airlines.json"), load("holidays.json"), load("visa.json")]).then(([r, al, h, vi]) => {
+      setRoutes(r ?? []);
+      setAirlines(al ?? {});
+      setHolidays(h ?? {});
+      setVisa(vi);
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [view, selectedDeal]);
 
@@ -234,9 +239,10 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
     if (view === "trips" && days !== 5) q.set("days", String(days));
     if (selectedPlace && view !== "deals") q.set("place", selectedPlace);
     if (selectedDeal && view === "deals") q.set("deal", selectedDeal);
+    if (selectedTrip && view === "trips") q.set("trip", selectedTrip);
     const url = `${window.location.pathname}?${q.toString()}`;
     if (url !== `${window.location.pathname}${window.location.search}`) window.history.replaceState(null, "", url);
-  }, [origin, view, days, selectedPlace, selectedDeal]);
+  }, [origin, view, days, selectedPlace, selectedDeal, selectedTrip]);
 
   // Airport → city code, so one city with several airports is one place.
   const cityOf = useMemo(() => {
@@ -295,6 +301,8 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
       if (place) setSelectedPlace(place);
       const deal = q.get("deal");
       if (deal) setSelectedDeal(deal);
+      const trip = q.get("trip");
+      if (trip) setSelectedTrip(trip);
       return;
     }
     const v = new URLSearchParams(window.location.search).get("view");
@@ -662,14 +670,14 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
     if (view !== "trips" || !gateways.length) return;
     const ctrl = new AbortController();
     setTrips(null);
-    setSelectedTrip(null);
     const g = gateways.map((x) => `${x.airport.iata}:${x.airport.lat}:${x.airport.lon}:${x.driveMin}`).join(",");
     const extra = around ? `&around=${around}` : "";
     fetch(`/api/trips?g=${g}&home=${gateways[0].airport.country}&days=${days}${extra}`, { signal: ctrl.signal })
       .then((r) => r.json())
       .then((j: TripsResult) => {
         setTrips(j);
-        if (j.trips?.[0]) setSelectedTrip(j.trips[0].id);
+        // Keep a trip restored from a shared link when it is still in the results.
+        setSelectedTrip((cur) => (cur && j.trips?.some((t) => t.id === cur) ? cur : (j.trips?.[0]?.id ?? null)));
       })
       .catch(() => {});
     return () => ctrl.abort();

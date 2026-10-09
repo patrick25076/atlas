@@ -8,8 +8,10 @@ _Written for: Patrick, five minutes, coffee in hand._
 ## What it does now
 
 1. **Deals** (the home tab). The cheapest return getaways for the next six weeks, 2 to 7
-   nights, from Bucharest, Cluj, Iași, Timișoara, and now Brașov, Sibiu and Craiova. Real
-   prices and booking links from Kiwi.com, searched every night. Tonight's board: Venice
+   nights, from Bucharest, Cluj, Iași and Timișoara (Brașov, Sibiu and Craiova are in the
+   nightly search too; Kiwi blocked my IP for a while last night before they finished, so
+   they appear with the first scheduled run). Real prices and booking links from Kiwi.com,
+   searched every night. Tonight's board: Venice
    €32, Milan €37, Gdańsk €38, Tirana €38, Bologna €39, all direct. Cards show a photo, price,
    dates, airline, flight time and a reason to go. Filters: nights, direct only, warm this
    weekend, home airport (nearest to you first).
