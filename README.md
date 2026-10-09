@@ -46,6 +46,13 @@ Built source by source. Every number on the globe says where it came from
 | Wikidata: country facts | CC0 | Plugs, voltage, official languages, calling code, driving side | with `ingest:countries` |
 | Passport Index dataset (imorte, continuing ilyankou) | MIT | Visa requirement for the visitor's passport at each destination, labelled indicative with the dataset date | `pnpm ingest:visa`, monthly |
 
+## Refresh
+
+`.github/workflows/refresh-data.yml` re-runs the ingests on a schedule (daily, weekly on
+Monday, monthly on the 1st) and commits `public/data`, which redeploys production. Run it by
+hand from the Actions tab with the set you want. Locally: `pnpm ingest` for the daily set,
+`pnpm ingest:gtfs` for the ground graph, `pnpm ingest:overture` for the place counts.
+
 ## Stack decisions
 
 New repo, web first (phone-sized layout included), MapLibre GL + deck.gl on OpenFreeMap tiles,
