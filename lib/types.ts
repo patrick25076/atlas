@@ -22,8 +22,74 @@ export type City = {
   country: string;
   lat: number;
   lon: number;
+  /** IANA time zone, e.g. Europe/Bucharest. */
+  tz?: string;
   airports: string[];
 };
+
+/** One record per country (public/data/countries.json). */
+export type CountryInfo = {
+  name: string;
+  currency?: string;
+  /** Units of the currency per euro, today. */
+  rate?: number;
+  plugs?: string[];
+  voltage?: number;
+  advisory?: { warning: boolean; partial: boolean; situation: boolean; situationPart: boolean; updated: string };
+};
+
+export type Holiday = { date: string; name: string; localName: string; national: boolean };
+
+/** One forecast day, per city code, after expanding the compact file. */
+export type WeatherDay = { d: string; tmax: number; tmin: number; rain: number; sym: string };
+export type WeatherFile = { updated: string; cities: Record<string, WeatherDay[]> };
+
+/** On disk (public/data/weather.json): days run from `start` + `o`; `s` indexes `syms`. */
+export type WeatherCompact = {
+  updated: string;
+  start: string;
+  syms: string[];
+  cities: Record<string, { o: number; t: number[]; n: number[]; r: number[]; s: number[] }>;
+};
+
+export function expandWeather(c: WeatherCompact): WeatherFile {
+  const base = Date.parse(c.start);
+  const cities: Record<string, WeatherDay[]> = {};
+  for (const [code, w] of Object.entries(c.cities)) {
+    cities[code] = w.t.map((tmax, i) => ({
+      d: new Date(base + (w.o + i) * 86_400_000).toISOString().slice(0, 10),
+      tmax,
+      tmin: w.n[i],
+      rain: w.r[i],
+      sym: c.syms[w.s[i]] ?? "",
+    }));
+  }
+  return { updated: c.updated, cities };
+}
+
+export function compactWeather(updated: string, cities: Record<string, WeatherDay[]>): WeatherCompact {
+  const dates = Object.values(cities).flatMap((d) => d.map((x) => x.d));
+  const start = dates.length ? dates.reduce((a, b) => (a < b ? a : b)) : new Date().toISOString().slice(0, 10);
+  const base = Date.parse(start);
+  const syms: string[] = [];
+  const symIndex = (s: string) => {
+    let i = syms.indexOf(s);
+    if (i < 0) i = syms.push(s) - 1;
+    return i;
+  };
+  const out: WeatherCompact["cities"] = {};
+  for (const [code, days] of Object.entries(cities)) {
+    if (!days.length) continue;
+    out[code] = {
+      o: Math.round((Date.parse(days[0].d) - base) / 86_400_000),
+      t: days.map((d) => d.tmax),
+      n: days.map((d) => d.tmin),
+      r: days.map((d) => d.rain),
+      s: days.map((d) => symIndex(d.sym)),
+    };
+  }
+  return { updated, start, syms, cities: out };
+}
 
 export type ManifestEntry = {
   source: string;

@@ -76,8 +76,62 @@
     "url": "https://api.travelpayouts.com/data/en/cities.json",
     "licence": "Travelpayouts static data (free for partner use)",
     "note": "City IATA code → name, coordinates, airports on the globe (biggest first).",
-    "fetchedAt": "2026-10-09T18:06:28.364Z",
+    "fetchedAt": "2026-10-09T19:45:12.838Z",
     "rows": 3159,
     "file": "public/data/cities.json"
+  },
+  "countries": {
+    "source": "Travelpayouts countries.json",
+    "url": "https://api.travelpayouts.com/data/en/countries.json",
+    "licence": "Travelpayouts static data (free for partner use)",
+    "note": "Country name and currency code.",
+    "fetchedAt": "2026-10-09T19:45:13.685Z",
+    "rows": 253,
+    "file": "public/data/countries.json"
+  },
+  "fx": {
+    "source": "Frankfurter (ECB reference rates)",
+    "url": "https://api.frankfurter.dev/v1/latest?base=EUR",
+    "licence": "Free, commercial use allowed",
+    "note": "Rates per EUR as of 2026-10-09.",
+    "fetchedAt": "2026-10-09T19:45:13.685Z",
+    "rows": 104,
+    "file": "public/data/countries.json"
+  },
+  "plugs": {
+    "source": "Wikidata (P2853 plug type, P2884 mains voltage)",
+    "url": "https://query.wikidata.org/",
+    "licence": "CC0",
+    "note": "Plug types and voltage per country.",
+    "fetchedAt": "2026-10-09T19:45:13.685Z",
+    "rows": 223,
+    "file": "public/data/countries.json"
+  },
+  "advisories": {
+    "source": "German Federal Foreign Office travel warnings",
+    "url": "https://www.auswaertiges-amt.de/opendata/travelwarning",
+    "licence": "Open data of the Auswärtiges Amt",
+    "note": "Full and partial travel warnings per country.",
+    "fetchedAt": "2026-10-09T19:45:13.685Z",
+    "rows": 200,
+    "file": "public/data/countries.json"
+  },
+  "holidays": {
+    "source": "Nager.Date public holidays",
+    "url": "https://nagerholidays.com/api/v4",
+    "licence": "Open source (Nager.Date), free API",
+    "note": "Holidays from 2026-10-09 to 2027-11-13, 204 countries.",
+    "fetchedAt": "2026-10-09T19:45:25.132Z",
+    "rows": 2878,
+    "file": "public/data/holidays.json"
+  },
+  "weather": {
+    "source": "MET Norway locationforecast",
+    "url": "https://api.met.no/weatherapi/locationforecast/2.0/documentation",
+    "licence": "CC BY 4.0 (Norwegian Meteorological Institute)",
+    "note": "7-day forecast for cities with a large or medium airport.",
+    "fetchedAt": "2026-10-09T19:46:13.079Z",
+    "rows": 2805,
+    "file": "public/data/weather.json"
   }
 }

@@ -17,10 +17,12 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: "g (IATA:lat:lon:driveMin, comma separated) and home (country code) required" }, { status: 400 });
   }
   const days = Math.min(14, Math.max(2, Number(p.get("days")) || 5));
+  const aroundRaw = p.get("around") ?? "";
+  const around = /^\d{4}-\d{2}-\d{2}$/.test(aroundRaw) ? aroundRaw : undefined;
   const maxGroundMin = Math.min(600, Math.max(60, Number(p.get("ground")) || 300));
   const limit = Math.min(50, Math.max(1, Number(p.get("limit")) || 20));
   try {
-    const result = await findTrips({ gateways: gateways.slice(0, 6), home, days, maxGroundMin, limit });
+    const result = await findTrips({ gateways: gateways.slice(0, 6), home, days, around, maxGroundMin, limit });
     return NextResponse.json(result, {
       headers: { "Cache-Control": result.status === "ok" ? "public, max-age=600, stale-while-revalidate=3000" : "no-store" },
     });

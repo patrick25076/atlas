@@ -11,7 +11,7 @@ const AIRPORTS = "https://api.travelpayouts.com/data/en/airports.json";
 const CITIES = "https://api.travelpayouts.com/data/en/cities.json";
 const OUT = "public/data/cities.json";
 
-type City = { name: string; country: string; lat: number; lon: number; airports: string[] };
+type City = { name: string; country: string; lat: number; lon: number; tz?: string; airports: string[] };
 
 const db = await (await DuckDBInstance.create()).connect();
 const airportRows = (
@@ -23,11 +23,18 @@ const airportRows = (
 ).getRowObjects() as { city_code: string; code: string }[];
 const cityRows = (
   await db.runAndReadAll(`
-    SELECT code, name, country_code, coordinates.lat AS lat, coordinates.lon AS lon
+    SELECT code, name, country_code, time_zone, coordinates.lat AS lat, coordinates.lon AS lon
     FROM read_json_auto('${CITIES}')
     WHERE code IS NOT NULL AND name IS NOT NULL
   `)
-).getRowObjects() as { code: string; name: string; country_code: string; lat: number | null; lon: number | null }[];
+).getRowObjects() as {
+  code: string;
+  name: string;
+  country_code: string;
+  time_zone: string | null;
+  lat: number | null;
+  lon: number | null;
+}[];
 
 // Only airports on our globe matter, ordered large → medium → small.
 const ours = JSON.parse(await readFile("public/data/airports.json", "utf8")) as {
@@ -59,6 +66,7 @@ for (const [code, city] of Object.entries(cities)) {
   city.country = m?.country_code ?? first.country;
   city.lat = +(m?.lat ?? first.lat).toFixed(4);
   city.lon = +(m?.lon ?? first.lon).toFixed(4);
+  if (m?.time_zone) city.tz = m.time_zone;
 }
 
 await writeFile(OUT, JSON.stringify(cities) + "\n");

@@ -4,8 +4,29 @@ import { useMemo, useState } from "react";
 import { flightMinutes, formatDuration } from "@/lib/geo";
 import type { Place, PlaceMode } from "@/lib/places";
 import type { TripsResult } from "@/lib/trips";
-import type { Airport, Destination, FaresResponse, Gateway, ReachResponse, ReachStation } from "@/lib/types";
+import type { PlaceSummary } from "@/app/api/place/route";
+import type {
+  Airport,
+  CountryInfo,
+  Destination,
+  FaresResponse,
+  Gateway,
+  Holiday,
+  ReachResponse,
+  ReachStation,
+  WeatherDay,
+} from "@/lib/types";
 import { countryName, type Origin } from "./Globe";
+
+/** Everything we know about the selected place's city and country. */
+export type Intel = {
+  code?: string;
+  tz?: string;
+  countryCode?: string;
+  country?: CountryInfo;
+  weather?: WeatherDay[];
+  holidays?: Holiday[];
+};
 
 export type View = "all" | "fly" | "ground" | "trips";
 export type Band = "all" | "short" | "medium" | "long";
@@ -55,9 +76,94 @@ type Props = {
   onTrip: (id: string | null) => void;
   days: number;
   onDays: (d: number) => void;
+  intel: Intel | null;
+  summary: PlaceSummary | null;
+  weatherReady: boolean;
+  warmOnly: boolean;
+  onWarmOnly: (v: boolean) => void;
+  homeHolidays: Holiday[];
+  around: string | null;
+  onAround: (d: string | null) => void;
 };
 
 const GROUND_TAG: Record<string, string> = { rail: "TRN", coach: "BUS", ferry: "FRY", walk: "WLK" };
+
+function glyph(sym: string): string {
+  if (sym.includes("thunder")) return "⛈";
+  if (sym.includes("snow") || sym.includes("sleet")) return "❄";
+  if (sym.includes("rain")) return "🌧";
+  if (sym.includes("fog")) return "🌫";
+  if (sym === "clearsky") return "☀";
+  if (sym === "fair") return "🌤";
+  if (sym === "partlycloudy") return "⛅";
+  if (sym === "cloudy") return "☁";
+  return "·";
+}
+
+function weekday(iso: string): string {
+  return new Date(iso).toLocaleDateString("en-GB", { weekday: "short" });
+}
+
+function rate(r: number): string {
+  return r >= 100 ? r.toFixed(0) : r >= 10 ? r.toFixed(1) : r.toFixed(2);
+}
+
+function PlaceIntel({ intel, summary }: { intel: Intel; summary: PlaceSummary | null }) {
+  const c = intel.country;
+  let time: string | null = null;
+  try {
+    time = intel.tz ? new Intl.DateTimeFormat("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: intel.tz }).format(new Date()) : null;
+  } catch {
+    time = null;
+  }
+  const a = c?.advisory;
+  return (
+    <div className="intel">
+      {intel.weather && intel.weather.length > 0 && (
+        <div className="wx" title="MET Norway forecast, CC BY 4.0">
+          {intel.weather.slice(0, 6).map((d) => (
+            <div key={d.d} className="wxday">
+              <span className="wxd">{weekday(d.d)}</span>
+              <span className="wxg">{glyph(d.sym)}</span>
+              <span className="wxt">{d.tmax}°</span>
+            </div>
+          ))}
+        </div>
+      )}
+      <div className="facts">
+        {time && <span>Local time {time}</span>}
+        {c?.currency && (
+          <span>
+            {c.currency}
+            {c.rate && c.currency !== "EUR" ? ` · 1 € = ${rate(c.rate)} ${c.currency}` : ""}
+          </span>
+        )}
+        {c?.plugs && c.plugs.length > 0 && (
+          <span>
+            Plugs {c.plugs.slice(0, 3).join(", ")}
+            {c.voltage ? ` · ${c.voltage} V` : ""}
+          </span>
+        )}
+        {a?.warning && <span className="warn">Travel warning (German Foreign Office, {a.updated})</span>}
+        {a && !a.warning && a.partial && <span className="warn">Partial travel warning for some regions (German Foreign Office)</span>}
+        {intel.holidays?.[0] && (
+          <span>
+            Holiday there {shortDate(intel.holidays[0].date)}: {intel.holidays[0].localName}
+          </span>
+        )}
+      </div>
+      {summary && (
+        <div className="status">
+          {summary.extract.length > 320 ? `${summary.extract.slice(0, 320).replace(/\s+\S*$/, "")}…` : summary.extract}{" "}
+          <a href={summary.url} target="_blank" rel="noreferrer">
+            Wikivoyage ↗
+          </a>{" "}
+          <span className="sub">CC BY-SA</span>
+        </div>
+      )}
+    </div>
+  );
+}
 
 function shortDate(iso: string): string {
   const d = new Date(iso);
@@ -174,6 +280,23 @@ export default function Panel(p: Props) {
               </button>
             ))}
           </div>
+          {p.homeHolidays.length > 0 && (
+            <>
+              <div className="status">Leave around a holiday at home:</div>
+              <div className="chips">
+                {p.homeHolidays.map((h) => (
+                  <button
+                    key={h.date}
+                    className={`chip${p.around === h.date ? " on" : ""}`}
+                    onClick={() => p.onAround(p.around === h.date ? null : h.date)}
+                    title={h.name}
+                  >
+                    {shortDate(h.date)} · {h.localName}
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
           {(() => {
             const trip = p.selectedTrip ? p.trips?.trips.find((t) => t.id === p.selectedTrip) : null;
             if (!trip) return null;
@@ -314,6 +437,7 @@ export default function Panel(p: Props) {
                   </>
                 )}
               </div>
+              {p.intel && <PlaceIntel intel={p.intel} summary={p.summary} />}
             </>
           )}
 
@@ -335,6 +459,11 @@ export default function Panel(p: Props) {
             {p.anyFares && (
               <button className={`chip${p.pricedOnly ? " on" : ""}`} onClick={() => p.onPricedOnly(!p.pricedOnly)}>
                 Priced only
+              </button>
+            )}
+            {p.weatherReady && (
+              <button className={`chip${p.warmOnly ? " on" : ""}`} onClick={() => p.onWarmOnly(!p.warmOnly)} title="At least 20 °C on Saturday or Sunday">
+                Warm this weekend
               </button>
             )}
           </Chips>

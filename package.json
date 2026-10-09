@@ -10,12 +10,15 @@
     "start": "next start",
     "typecheck": "tsc --noEmit",
     "postinstall": "node scripts/copy-worker.mjs",
-    "ingest": "pnpm ingest:airports && pnpm ingest:routes && pnpm ingest:tp-airports && pnpm ingest:tp-airlines",
+    "ingest": "pnpm ingest:airports && pnpm ingest:routes && pnpm ingest:tp-airports && pnpm ingest:tp-airlines && pnpm ingest:countries && pnpm ingest:holidays && pnpm ingest:weather",
     "ingest:airports": "tsx scripts/ingest/airports.ts",
     "ingest:routes": "tsx scripts/ingest/routes.ts",
     "ingest:tp-airports": "tsx scripts/ingest/tp-airports.ts",
     "ingest:tp-airlines": "tsx scripts/ingest/tp-airlines.ts",
     "ingest:gtfs": "tsx scripts/ingest/gtfs.ts",
+    "ingest:countries": "tsx scripts/ingest/countries.ts",
+    "ingest:holidays": "tsx scripts/ingest/holidays.ts",
+    "ingest:weather": "tsx scripts/ingest/weather.ts",
     "check:tp": "tsx scripts/check-travelpayouts.ts"
   },
   "dependencies": {

@@ -48,6 +48,8 @@ export type TripParams = {
   home: string;
   /** Nights away; fares are aligned to this ±1. */
   days: number;
+  /** Optional YYYY-MM-DD: leave within three days before it (a holiday, a long weekend). */
+  around?: string;
   maxGroundMin: number;
   limit: number;
 };
@@ -149,7 +151,12 @@ export async function findTrips(params: TripParams): Promise<TripsResult> {
   if (!hasToken()) {
     return { status: "no-token", note: "Trips need cached fares: set TRAVELPAYOUTS_TOKEN (SETUP.md §2).", trips: [], generatedAt };
   }
-  const { gateways, home, days, maxGroundMin, limit } = params;
+  const { gateways, home, days, around, maxGroundMin, limit } = params;
+  const leavesAround = (date: string) => {
+    if (!around) return true;
+    const gap = daysBetween(around, date);
+    return gap >= -3 && gap <= 1;
+  };
   const gatewayByIata = new Map(gateways.map((g) => [g.iata, g]));
 
   // Fares out of and back into every gateway, grouped by the far city.
@@ -196,7 +203,8 @@ export async function findTrips(params: TripParams): Promise<TripsResult> {
 
     // Cheapest aligned pair of dates: back = out + days, give or take a day.
     let best: { out: (typeof outs)[number]; back: (typeof ins)[number]; nights: number } | null = null;
-    for (const o of outs.slice(0, FARE_TRIES)) {
+    const outCandidates = around ? outs.filter((o) => leavesAround(o.departureAt)).slice(0, FARE_TRIES) : outs.slice(0, FARE_TRIES);
+    for (const o of outCandidates) {
       for (const i of ins.slice(0, FARE_TRIES)) {
         const nights = daysBetween(o.departureAt, i.departureAt);
         if (Math.abs(nights - days) > 1) continue;

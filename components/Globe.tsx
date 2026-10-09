@@ -8,8 +8,24 @@ import type { Layer, PickingInfo } from "@deck.gl/core";
 import { flightMinutes, formatDuration, haversineKm, nearestGateways } from "@/lib/geo";
 import { combinePlaces, type Place } from "@/lib/places";
 import type { Trip, TripCity, TripLeg, TripsResult } from "@/lib/trips";
-import type { Airport, City, Destination, FaresResponse, Gateway, Manifest, ReachResponse, ReachStation, Route } from "@/lib/types";
-import Panel, { BANDS, MODE_LABEL, type Band, type View } from "./Panel";
+import type { PlaceSummary } from "@/app/api/place/route";
+import type {
+  Airport,
+  City,
+  CountryInfo,
+  Destination,
+  FaresResponse,
+  Gateway,
+  Holiday,
+  Manifest,
+  ReachResponse,
+  ReachStation,
+  Route,
+  WeatherCompact,
+  WeatherFile,
+} from "@/lib/types";
+import { expandWeather } from "@/lib/types";
+import Panel, { BANDS, MODE_LABEL, type Band, type Intel, type View } from "./Panel";
 
 // The bundler cannot resolve MapLibre's worker from import.meta.url; see scripts/copy-worker.mjs.
 maplibregl.setWorkerUrl("/maplibre-gl-worker.mjs");
@@ -121,7 +137,13 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
   const [routes, setRoutes] = useState<Route[]>([]);
   const [airlines, setAirlines] = useState<Record<string, string>>({});
   const [cities, setCities] = useState<Record<string, City>>({});
+  const [countries, setCountries] = useState<Record<string, CountryInfo>>({});
+  const [holidays, setHolidays] = useState<Record<string, Holiday[]>>({});
+  const [weather, setWeather] = useState<WeatherFile | null>(null);
   const [manifest, setManifest] = useState<Manifest | null>(null);
+  const [summary, setSummary] = useState<PlaceSummary | null>(null);
+  const [warmOnly, setWarmOnly] = useState(false);
+  const [around, setAround] = useState<string | null>(null);
   const [origin, setOrigin] = useState<Origin | null>(null);
   const [gatewayIata, setGatewayIata] = useState<string | null>(null);
   const [band, setBand] = useState<Band>("all");
@@ -137,21 +159,31 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
   const [selectedTrip, setSelectedTrip] = useState<string | null>(null);
   const [days, setDays] = useState(5);
 
-  // Static data, produced by scripts/ingest and committed under public/data.
+  // Static data, produced by scripts/ingest and committed under public/data. A file that an
+  // ingest has not produced yet is simply absent, never a broken globe.
   useEffect(() => {
-    const load = (f: string) => fetch(`/data/${f}`).then((r) => r.json());
+    const load = (f: string) =>
+      fetch(`/data/${f}`)
+        .then((r) => (r.ok ? r.json() : null))
+        .catch(() => null);
     Promise.all([
       load("airports.json"),
       load("routes-openflights.json"),
       load("airlines.json"),
       load("cities.json"),
       load("manifest.json"),
-    ]).then(([a, r, al, c, m]) => {
-      setAirports(a);
-      setRoutes(r);
-      setAirlines(al);
-      setCities(c);
+      load("countries.json"),
+      load("holidays.json"),
+      load("weather.json"),
+    ]).then(([a, r, al, c, m, co, h, w]) => {
+      setAirports(a ?? []);
+      setRoutes(r ?? []);
+      setAirlines(al ?? {});
+      setCities(c ?? {});
       setManifest(m);
+      setCountries(co ?? {});
+      setHolidays(h ?? {});
+      setWeather(w && (w as WeatherCompact).syms ? expandWeather(w as WeatherCompact) : null);
     });
   }, []);
 
@@ -161,6 +193,41 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
     for (const [code, c] of Object.entries(cities)) for (const iata of c.airports) m.set(iata, code);
     return m;
   }, [cities]);
+
+  // Which city a place belongs to: its own for air places, the nearest city centre within 50 km
+  // for a station. Memoised per place key.
+  const cityCodeCache = useRef(new Map<string, string | null>());
+  const cityCodeFor = (p: Place): string | null => {
+    if (p.air) return p.key.slice(4);
+    const hit = cityCodeCache.current.get(p.key);
+    if (hit !== undefined) return hit;
+    let best: string | null = null;
+    let bestKm = 50;
+    for (const [code, c] of Object.entries(cities)) {
+      const km = haversineKm(p.lat, p.lon, c.lat, c.lon);
+      if (km < bestKm) {
+        bestKm = km;
+        best = code;
+      }
+    }
+    cityCodeCache.current.set(p.key, best);
+    return best;
+  };
+
+  // Next Saturday and Sunday, as the forecast files date them.
+  const weekend = useMemo(() => {
+    const d = new Date();
+    const toSat = (6 - d.getDay() + 7) % 7;
+    const sat = new Date(d.getTime() + toSat * 86_400_000);
+    const sun = new Date(sat.getTime() + 86_400_000);
+    return [sat.toISOString().slice(0, 10), sun.toISOString().slice(0, 10)];
+  }, []);
+  const weekendMax = (code: string | null): number | null => {
+    const days = code ? weather?.cities[code] : undefined;
+    if (!days) return null;
+    const t = days.filter((x) => weekend.includes(x.d)).map((x) => x.tmax);
+    return t.length ? Math.max(...t) : null;
+  };
 
   // Where the user is: the network hint at once, the browser's position when allowed, a fixed
   // city when neither exists, so the globe always has a story to tell.
@@ -305,12 +372,62 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
     [view, origin, gateways, routesFrom, byIata, cities, cityOf, faresByGateway, reach],
   );
   // "Big places": any city with an airport, or a station that is a junction or busy (lib/places.ts).
+  // "Warm this weekend": at least 20 °C on Saturday or Sunday in the nearest forecast city.
   const placesShown = useMemo(() => {
     const b = BANDS.find((x) => x.key === band);
     return places.filter(
-      (p) => (!b || b.test(p.minutes)) && (!pricedOnly || p.price != null) && (!bigOnly || p.air || p.importance >= 0.33),
+      (p) =>
+        (!b || b.test(p.minutes)) &&
+        (!pricedOnly || p.price != null) &&
+        (!bigOnly || p.air || p.importance >= 0.33) &&
+        (!warmOnly || (weekendMax(cityCodeFor(p)) ?? -99) >= 20),
     );
-  }, [places, band, pricedOnly, bigOnly]);
+    // cityCodeFor/weekendMax read cities and weather, both listed.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [places, band, pricedOnly, bigOnly, warmOnly, cities, weather]);
+
+  // Everything we know about the selected place's city and country.
+  const selected = selectedPlace ? places.find((x) => x.key === selectedPlace) : null;
+  const intel = useMemo<Intel | null>(() => {
+    if (!selected) return null;
+    const code = cityCodeFor(selected);
+    const city = code ? cities[code] : undefined;
+    const countryCode = selected.country ?? city?.country;
+    const horizon = new Date(Date.now() + 60 * 86_400_000).toISOString().slice(0, 10);
+    const today = new Date().toISOString().slice(0, 10);
+    return {
+      code: code ?? undefined,
+      tz: city?.tz,
+      countryCode,
+      country: countryCode ? countries[countryCode] : undefined,
+      weather: code ? weather?.cities[code] : undefined,
+      holidays: countryCode ? (holidays[countryCode] ?? []).filter((h) => h.date >= today && h.date <= horizon).slice(0, 2) : undefined,
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selected, cities, countries, weather, holidays]);
+
+  // One paragraph from Wikivoyage for the selected place, by city name.
+  useEffect(() => {
+    setSummary(null);
+    const name = selected ? (intel?.code ? cities[intel.code]?.name : selected.name) : null;
+    if (!name) return;
+    const ctrl = new AbortController();
+    fetch(`/api/place?name=${encodeURIComponent(name)}`, { signal: ctrl.signal })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j: PlaceSummary | null) => setSummary(j))
+      .catch(() => {});
+    return () => ctrl.abort();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedPlace, intel?.code]);
+
+  // Your own long weekends: holidays at home in the next 120 days, as trip-date suggestions.
+  const homeHolidays = useMemo(() => {
+    const home = gateways[0]?.airport.country;
+    if (!home) return [];
+    const today = new Date().toISOString().slice(0, 10);
+    const horizon = new Date(Date.now() + 120 * 86_400_000).toISOString().slice(0, 10);
+    return (holidays[home] ?? []).filter((h) => h.national && h.date >= today && h.date <= horizon).slice(0, 5);
+  }, [gateways, holidays]);
   const anyFares = Object.values(faresByGateway).some((f) => f.status === "ok" && f.fares.length > 0);
 
   // Trips: open-jaw loops from the gateways, searched on the server.
@@ -320,7 +437,8 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
     setTrips(null);
     setSelectedTrip(null);
     const g = gateways.map((x) => `${x.airport.iata}:${x.airport.lat}:${x.airport.lon}:${x.driveMin}`).join(",");
-    fetch(`/api/trips?g=${g}&home=${gateways[0].airport.country}&days=${days}`, { signal: ctrl.signal })
+    const extra = around ? `&around=${around}` : "";
+    fetch(`/api/trips?g=${g}&home=${gateways[0].airport.country}&days=${days}${extra}`, { signal: ctrl.signal })
       .then((r) => r.json())
       .then((j: TripsResult) => {
         setTrips(j);
@@ -328,7 +446,7 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
       })
       .catch(() => {});
     return () => ctrl.abort();
-  }, [view, gateways, days]);
+  }, [view, gateways, days, around]);
 
   const trip: Trip | null = view === "trips" && trips ? (trips.trips.find((t) => t.id === selectedTrip) ?? null) : null;
 
@@ -726,13 +844,28 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
         onTrip={focusTrip}
         days={days}
         onDays={setDays}
+        intel={intel}
+        summary={summary}
+        weatherReady={!!weather}
+        warmOnly={warmOnly}
+        onWarmOnly={setWarmOnly}
+        homeHolidays={homeHolidays}
+        around={around}
+        onAround={setAround}
       />
       {manifest && (
-        <div className="provenance" title="Every number on this globe says where it came from.">
+        <div
+          className="provenance"
+          title={Object.values(manifest)
+            .map((e) => `${e.source} (${e.licence}, ${e.fetchedAt.slice(0, 10)})`)
+            .join("\n")}
+        >
           Airports: {manifest.airports?.source} · {manifest.airports?.licence} · {manifest.airports?.fetchedAt.slice(0, 10)}
           {" · "}Network: {manifest.routes?.source} · {manifest.routes?.note?.split(".")[0]}
           {anyFares ? " · Fares: Aviasales cache via Travelpayouts · EUR" : ""}
           {wantReach && reach ? ` · Ground: ${reach.feeds.length} GTFS feeds (${groundFeeds}) · expected times, not a timetable` : ""}
+          {weather ? ` · Weather: MET Norway (CC BY 4.0) ${weather.updated.slice(0, 10)}` : ""}
+          {` · ${Object.keys(manifest).length} sources, hover for all`}
         </div>
       )}
     </div>
