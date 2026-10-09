@@ -9,8 +9,8 @@ out/
 .DS_Store
 tsconfig.tsbuildinfo
 next-env.d.ts
-# copied from node_modules on postinstall (scripts/copy-worker.mjs)
-public/maplibre-gl-worker.mjs
+# public/maplibre-gl-worker.mjs is committed on purpose: Vercel's install does not run the
+# postinstall copy, and without it the base map never renders in production.
 # raw downloads and DuckDB scratch files; only the derived public/data/*.json is committed
 data/raw/
 *.duckdb
