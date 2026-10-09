@@ -3,10 +3,11 @@
 import { useMemo, useState } from "react";
 import { flightMinutes, formatDuration } from "@/lib/geo";
 import type { Place, PlaceMode } from "@/lib/places";
+import type { TripsResult } from "@/lib/trips";
 import type { Airport, Destination, FaresResponse, Gateway, ReachResponse, ReachStation } from "@/lib/types";
 import { countryName, type Origin } from "./Globe";
 
-export type View = "all" | "fly" | "ground";
+export type View = "all" | "fly" | "ground" | "trips";
 export type Band = "all" | "short" | "medium" | "long";
 export const BANDS: { key: Band; label: string; test: (min: number) => boolean }[] = [
   { key: "all", label: "All", test: () => true },
@@ -49,7 +50,14 @@ type Props = {
   totalPlaces: number;
   selectedPlace: string | null;
   onPlace: (key: string | null) => void;
+  trips: TripsResult | null;
+  selectedTrip: string | null;
+  onTrip: (id: string | null) => void;
+  days: number;
+  onDays: (d: number) => void;
 };
+
+const GROUND_TAG: Record<string, string> = { rail: "TRN", coach: "BUS", ferry: "FRY", walk: "WLK" };
 
 function shortDate(iso: string): string {
   const d = new Date(iso);
@@ -148,7 +156,112 @@ export default function Panel(p: Props) {
         <button className={`chip${p.view === "ground" ? " on" : ""}`} onClick={() => p.onView("ground")}>
           By train and coach
         </button>
+        <button className={`chip${p.view === "trips" ? " on" : ""}`} onClick={() => p.onView("trips")}>
+          Trips
+        </button>
       </div>
+
+      {p.view === "trips" && (
+        <>
+          <div className="status">
+            Fly out, move between cities by train or coach, fly home from the last one. Ranked by value: countries and
+            cities per euro and hour.
+          </div>
+          <div className="chips">
+            {[3, 5, 7, 10].map((d) => (
+              <button key={d} className={`chip${p.days === d ? " on" : ""}`} onClick={() => p.onDays(d)}>
+                {d} nights
+              </button>
+            ))}
+          </div>
+          {(() => {
+            const trip = p.selectedTrip ? p.trips?.trips.find((t) => t.id === p.selectedTrip) : null;
+            if (!trip) return null;
+            return (
+              <>
+                <h2>
+                  {trip.cities.map((c) => c.name).join(" → ")} · €{trip.price}
+                </h2>
+                <div className="status">
+                  {trip.nights} nights, {trip.outDate} to {trip.backDate}. {trip.countries} countr{trip.countries === 1 ? "y" : "ies"},{" "}
+                  {trip.travelHours} h of travel door to door. Flights are cached one-way fares; train and coach tickets come on top.
+                </div>
+                <div>
+                  {trip.legs.map((l, i) =>
+                    l.kind === "fly" ? (
+                      <div key={i} className="row">
+                        <span className="code">FLY</span>
+                        <span>
+                          <div className="name">
+                            {l.fromName} → {l.toName}
+                          </div>
+                          <div className="sub">
+                            {shortDate(l.date)}
+                            {l.airline ? ` · ${p.airlines[l.airline] ?? l.airline}` : ""} · {stops(l.transfers)} ·{" "}
+                            <a href={l.url} target="_blank" rel="noreferrer">
+                              Book ↗
+                            </a>
+                          </div>
+                        </span>
+                        <span className="meta">
+                          <strong>€{l.price}</strong>~{formatDuration(l.minutes)}
+                        </span>
+                      </div>
+                    ) : (
+                      <div key={i} className="row">
+                        <span className="code">{GROUND_TAG[l.mode] ?? "RID"}</span>
+                        <span>
+                          <div className="name">
+                            {l.fromName} → {l.toName}
+                          </div>
+                          <div className="sub">
+                            {changes(l.changes)} · {l.mode}
+                          </div>
+                        </span>
+                        <span className="meta">
+                          <strong>{formatDuration(l.minutes)}</strong>
+                        </span>
+                      </div>
+                    ),
+                  )}
+                </div>
+              </>
+            );
+          })()}
+          <h2>Trips · {p.trips?.trips.length ?? 0}</h2>
+          <div className="status">
+            {!p.trips
+              ? "Searching flights out, trains between, flights home…"
+              : p.trips.status === "no-token"
+                ? "Trips need cached fares: add the Travelpayouts token (SETUP §2)."
+                : p.trips.status === "error"
+                  ? `Trip search failed: ${p.trips.note}`
+                  : p.trips.trips.length === 0
+                    ? "No trip found for these nights. Try another length."
+                    : ""}
+          </div>
+          <div className="scroll">
+            {p.trips?.trips.map((t) => (
+              <div
+                key={t.id}
+                className={`row${t.id === p.selectedTrip ? " active" : ""}`}
+                onClick={() => p.onTrip(t.id === p.selectedTrip ? null : t.id)}
+              >
+                <span className="code">€{t.price}</span>
+                <span>
+                  <div className="name">{t.cities.map((c) => c.name).join(" → ")}</div>
+                  <div className="sub">
+                    {t.nights} nights · {t.countries} countr{t.countries === 1 ? "y" : "ies"} · {t.travelHours} h travel
+                  </div>
+                </span>
+                <span className="meta">
+                  <strong>{shortDate(t.outDate)}</strong>
+                </span>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
 
       {p.view === "all" && (
         <>

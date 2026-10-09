@@ -7,6 +7,7 @@ import { ArcLayer, PathLayer, ScatterplotLayer } from "@deck.gl/layers";
 import type { Layer, PickingInfo } from "@deck.gl/core";
 import { flightMinutes, formatDuration, haversineKm, nearestGateways } from "@/lib/geo";
 import { combinePlaces, type Place } from "@/lib/places";
+import type { Trip, TripCity, TripLeg, TripsResult } from "@/lib/trips";
 import type { Airport, City, Destination, FaresResponse, Gateway, Manifest, ReachResponse, ReachStation, Route } from "@/lib/types";
 import Panel, { BANDS, MODE_LABEL, type Band, type View } from "./Panel";
 
@@ -73,11 +74,18 @@ function changesText(n: number | undefined): string {
   return n ? `${n} change${n === 1 ? "" : "s"}` : "direct";
 }
 
+type Picked = Place | Destination | Gateway | Origin | ReachStation | TripCity;
+function isTripCity(o: Picked): o is TripCity {
+  return "code" in o && "country" in o && !("key" in o) && !("airport" in o);
+}
+
 function tooltip(info: PickingInfo): null | { html: string; style: Record<string, string> } {
-  const o = info.object as Place | Destination | Gateway | Origin | ReachStation | undefined;
+  const o = info.object as Picked | undefined;
   if (!o) return null;
   let html: string;
-  if ("key" in o) {
+  if (isTripCity(o)) {
+    html = `<b>${o.name}</b>, ${countryName(o.country)}`;
+  } else if ("key" in o) {
     const where = [o.name, o.country ? countryName(o.country) : ""].filter(Boolean).join(", ");
     const alt =
       o.mode === "plane" && o.ground
@@ -125,6 +133,9 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
   const [reach, setReach] = useState<ReachResponse | null>(null);
   const [selectedStation, setSelectedStation] = useState<number | null>(null);
   const [selectedPlace, setSelectedPlace] = useState<string | null>(null);
+  const [trips, setTrips] = useState<TripsResult | null>(null);
+  const [selectedTrip, setSelectedTrip] = useState<string | null>(null);
+  const [days, setDays] = useState(5);
 
   // Static data, produced by scripts/ingest and committed under public/data.
   useEffect(() => {
@@ -302,6 +313,25 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
   }, [places, band, pricedOnly, bigOnly]);
   const anyFares = Object.values(faresByGateway).some((f) => f.status === "ok" && f.fares.length > 0);
 
+  // Trips: open-jaw loops from the gateways, searched on the server.
+  useEffect(() => {
+    if (view !== "trips" || !gateways.length) return;
+    const ctrl = new AbortController();
+    setTrips(null);
+    setSelectedTrip(null);
+    const g = gateways.map((x) => `${x.airport.iata}:${x.airport.lat}:${x.airport.lon}:${x.driveMin}`).join(",");
+    fetch(`/api/trips?g=${g}&home=${gateways[0].airport.country}&days=${days}`, { signal: ctrl.signal })
+      .then((r) => r.json())
+      .then((j: TripsResult) => {
+        setTrips(j);
+        if (j.trips?.[0]) setSelectedTrip(j.trips[0].id);
+      })
+      .catch(() => {});
+    return () => ctrl.abort();
+  }, [view, gateways, days]);
+
+  const trip: Trip | null = view === "trips" && trips ? (trips.trips.find((t) => t.id === selectedTrip) ?? null) : null;
+
   const pathForSelected = useMemo<[number, number][]>(() => {
     if (!reach || selectedStation == null) return [];
     const byId = new Map<number, { lat: number; lon: number; prev: number }>();
@@ -407,6 +437,16 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
     if (p) fitTo(p.lat, p.lon, p.mode === "plane" ? 5 : 7);
   }
 
+  function focusTrip(id: string | null) {
+    setSelectedTrip(id);
+    const t = id ? trips?.trips.find((x) => x.id === id) : null;
+    const map = mapRef.current;
+    if (!map || !t || !origin) return;
+    const bounds = new maplibregl.LngLatBounds([origin.lon, origin.lat], [origin.lon, origin.lat]);
+    for (const c of t.cities) bounds.extend([c.lon, c.lat]);
+    map.fitBounds(bounds, { padding: panelPadding(), maxZoom: 6, duration: 1400 });
+  }
+
   function focusGateway(iata: string) {
     setGatewayIata(iata);
     setSelectedDest(null);
@@ -424,8 +464,73 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
     const ground = view === "ground";
     const all = view === "all";
     const fly = view === "fly";
+    const tripView = view === "trips";
     const flownPlaces = placesShown.filter((p) => p.mode === "plane" && p.air);
+    // A trip's legs resolve codes to coordinates: gateways by IATA, cities from the trip itself.
+    const coordOf = (code: string): [number, number] | null => {
+      const g = gateways.find((x) => x.airport.iata === code);
+      if (g) return [g.airport.lon, g.airport.lat];
+      const c = trip?.cities.find((x) => x.code === code);
+      return c ? [c.lon, c.lat] : null;
+    };
+    const flyLegs = (trip?.legs ?? [])
+      .filter((l): l is Extract<TripLeg, { kind: "fly" }> => l.kind === "fly")
+      .map((l) => ({ s: coordOf(l.from), t: coordOf(l.to), leg: l }))
+      .filter((x): x is { s: [number, number]; t: [number, number]; leg: Extract<TripLeg, { kind: "fly" }> } => !!x.s && !!x.t);
+    const groundLegs = (trip?.legs ?? []).filter((l): l is Extract<TripLeg, { kind: "ground" }> => l.kind === "ground");
+    const tripCities = new Map<string, TripCity>();
+    for (const t of trips?.trips ?? []) for (const c of t.cities) tripCities.set(c.code, c);
     const layers: (Layer | null)[] = [
+      tripView
+        ? new ScatterplotLayer<TripCity>({
+            id: "trip-all-cities",
+            data: [...tripCities.values()],
+            getPosition: (c) => [c.lon, c.lat],
+            radiusUnits: "pixels",
+            getRadius: 3,
+            getFillColor: [150, 165, 190, 140],
+            pickable: true,
+          })
+        : null,
+      tripView && trip
+        ? new ArcLayer<(typeof flyLegs)[number]>({
+            id: "trip-arcs",
+            data: flyLegs,
+            getSourcePosition: (x) => x.s,
+            getTargetPosition: (x) => x.t,
+            getSourceColor: [255, 180, 84, 230],
+            getTargetColor: [255, 180, 84, 230],
+            getWidth: 3,
+            greatCircle: true,
+            parameters: { cullMode: "none" },
+          })
+        : null,
+      tripView && trip
+        ? new PathLayer<Extract<TripLeg, { kind: "ground" }>>({
+            id: "trip-paths",
+            data: groundLegs,
+            getPath: (l) => l.path,
+            getColor: [76, 201, 240, 240],
+            getWidth: 4,
+            widthUnits: "pixels",
+            parameters: { cullMode: "none" },
+          })
+        : null,
+      tripView && trip
+        ? new ScatterplotLayer<TripCity>({
+            id: "trip-cities",
+            data: trip.cities,
+            getPosition: (c) => [c.lon, c.lat],
+            radiusUnits: "pixels",
+            getRadius: 7,
+            getFillColor: [255, 255, 255, 240],
+            stroked: true,
+            lineWidthUnits: "pixels",
+            getLineWidth: 2,
+            getLineColor: [255, 180, 84, 255],
+            pickable: true,
+          })
+        : null,
       new ScatterplotLayer<Airport>({
         id: "airports",
         data: airports,
@@ -525,7 +630,7 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
             onClick: (info) => focusDestination((info.object as Destination | undefined)?.airport.iata ?? null),
           })
         : null,
-      ground
+      ground || tripView
         ? null
         : new ScatterplotLayer<Gateway>({
             id: "gateways",
@@ -564,7 +669,7 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
     overlay.setProps({ layers: layers.filter(Boolean) as Layer[] });
     // focus* helpers only read refs and state setters; listing them would re-run this on every render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [airports, shown, gateways, gatewayIata, origin, selectedDest, live, view, reachBand, selectedStation, pathForSelected, placesShown, selectedPlace]);
+  }, [airports, shown, gateways, gatewayIata, origin, selectedDest, live, view, reachBand, selectedStation, pathForSelected, placesShown, selectedPlace, trips, trip]);
 
   const groundFeeds = reach ? reach.feeds.map((f) => f.attribution.split(" via ")[0].split(" (")[0]).join(", ") : "";
 
@@ -606,6 +711,7 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
           setSelectedDest(null);
           setSelectedStation(null);
           setSelectedPlace(null);
+          setSelectedTrip(null);
         }}
         reach={reach}
         reachShown={reachShown}
@@ -615,6 +721,11 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
         totalPlaces={places.length}
         selectedPlace={selectedPlace}
         onPlace={focusPlace}
+        trips={trips}
+        selectedTrip={selectedTrip}
+        onTrip={focusTrip}
+        days={days}
+        onDays={setDays}
       />
       {manifest && (
         <div className="provenance" title="Every number on this globe says where it came from.">

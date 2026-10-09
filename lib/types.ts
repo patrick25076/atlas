@@ -46,6 +46,9 @@ export type Gateway = {
 
 /** A cached fare from the Travelpayouts (Aviasales) data API: what people recently paid. */
 export type Fare = {
+  /** Departure airport on the globe (a city code in the API answer becomes the city's main airport). */
+  src: string;
+  /** Arrival airport on the globe. */
   dst: string;
   price: number;
   currency: string;
