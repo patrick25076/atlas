@@ -4,7 +4,7 @@
     "url": "https://davidmegginson.github.io/ourairports-data/airports.csv",
     "licence": "Public domain",
     "note": "Airports with scheduled passenger service and an IATA code.",
-    "fetchedAt": "2026-10-09T17:02:26.516Z",
+    "fetchedAt": "2026-10-09T23:43:55.816Z",
     "rows": 4008,
     "file": "public/data/airports.json"
   },
@@ -22,7 +22,7 @@
     "url": "https://api.travelpayouts.com/data/en/airlines.json",
     "licence": "Travelpayouts static data (free for partner use)",
     "note": "IATA airline code → name.",
-    "fetchedAt": "2026-10-09T17:30:04.719Z",
+    "fetchedAt": "2026-10-09T23:44:00.026Z",
     "rows": 1159,
     "file": "public/data/airlines.json"
   },
@@ -76,7 +76,7 @@
     "url": "https://api.travelpayouts.com/data/en/cities.json",
     "licence": "Travelpayouts static data (free for partner use)",
     "note": "City IATA code → name, coordinates, airports on the globe (biggest first).",
-    "fetchedAt": "2026-10-09T19:45:12.838Z",
+    "fetchedAt": "2026-10-09T23:43:58.043Z",
     "rows": 3159,
     "file": "public/data/cities.json"
   },
@@ -85,7 +85,7 @@
     "url": "https://api.travelpayouts.com/data/en/countries.json",
     "licence": "Travelpayouts static data (free for partner use)",
     "note": "Country name and currency code.",
-    "fetchedAt": "2026-10-09T19:54:05.909Z",
+    "fetchedAt": "2026-10-09T23:44:01.240Z",
     "rows": 253,
     "file": "public/data/countries.json"
   },
@@ -94,7 +94,7 @@
     "url": "https://api.frankfurter.dev/v1/latest?base=EUR",
     "licence": "Free, commercial use allowed",
     "note": "Rates per EUR as of 2026-10-09.",
-    "fetchedAt": "2026-10-09T19:54:05.909Z",
+    "fetchedAt": "2026-10-09T23:44:01.240Z",
     "rows": 104,
     "file": "public/data/countries.json"
   },
@@ -103,7 +103,7 @@
     "url": "https://query.wikidata.org/",
     "licence": "CC0",
     "note": "Practical country facts.",
-    "fetchedAt": "2026-10-09T19:54:05.909Z",
+    "fetchedAt": "2026-10-09T23:44:01.240Z",
     "rows": 223,
     "file": "public/data/countries.json"
   },
@@ -112,7 +112,7 @@
     "url": "https://www.auswaertiges-amt.de/opendata/travelwarning",
     "licence": "Open data of the Auswärtiges Amt",
     "note": "Full and partial travel warnings per country.",
-    "fetchedAt": "2026-10-09T19:54:05.909Z",
+    "fetchedAt": "2026-10-09T23:44:01.240Z",
     "rows": 200,
     "file": "public/data/countries.json"
   },
@@ -121,7 +121,7 @@
     "url": "https://nagerholidays.com/api/v4",
     "licence": "Open source (Nager.Date), free API",
     "note": "Holidays from 2026-10-09 to 2027-11-13, 204 countries.",
-    "fetchedAt": "2026-10-09T19:45:25.132Z",
+    "fetchedAt": "2026-10-09T23:44:25.185Z",
     "rows": 2878,
     "file": "public/data/holidays.json"
   },
@@ -130,7 +130,7 @@
     "url": "https://api.met.no/weatherapi/locationforecast/2.0/documentation",
     "licence": "CC BY 4.0 (Norwegian Meteorological Institute)",
     "note": "7-day forecast for cities with a large or medium airport; sea temperature where a ferry port is within 15 km.",
-    "fetchedAt": "2026-10-09T20:16:00.284Z",
+    "fetchedAt": "2026-10-09T23:45:27.881Z",
     "rows": 2805,
     "file": "public/data/weather.json"
   },
@@ -210,9 +210,9 @@
     "source": "Kiwi.com flight search (public MCP)",
     "url": "https://mcp.kiwi.com/",
     "licence": "Kiwi.com public MCP, no key; prices and booking links as returned",
-    "note": "Cheapest return getaways 2026-10-11 to 2026-11-25, 2-7 nights, from OTP, CLJ, IAS, TSR. 0 routes failed.",
-    "fetchedAt": "2026-10-09T22:56:56.756Z",
-    "rows": 1287,
+    "note": "Cheapest return getaways 2026-10-11 to 2026-11-25, 2-7 nights, from OTP, CLJ, IAS, TSR, SBZ, GHV, CRA. 0 routes failed.",
+    "fetchedAt": "2026-10-09T23:57:36.878Z",
+    "rows": 2201,
     "file": "public/data/deals.json"
   },
   "oneway": {
