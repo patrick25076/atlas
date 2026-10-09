@@ -1,4 +1,6 @@
-# pnpm 11 reads allowBuilds (booleans). esbuild is pulled in by tsx.
+# pnpm 10 reads onlyBuiltDependencies; pnpm 11 reads allowBuilds. Keep both (tsx pulls in esbuild).
+onlyBuiltDependencies:
+  - esbuild
 allowBuilds:
   esbuild: true
 
