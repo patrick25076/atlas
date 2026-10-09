@@ -40,6 +40,18 @@ export function dealKey(d: Deal): string {
   return `${d.gw}|${d.dst}|${d.out}`;
 }
 
+/** A live re-price of one route for chosen dates (/api/deals). */
+export type LiveSearch = {
+  status: "loading" | "ok" | "error";
+  from: string;
+  to: string;
+  depart: string;
+  nights: number;
+  itineraries: { price: number; out: string; back: string | null; nights: number | null; stops: number; carriers: string[]; outMin: number; backMin: number; url: string }[];
+  fetchedAt?: string;
+  note?: string;
+};
+
 /** Everything we know about the selected place's city and country. */
 export type Intel = {
   code?: string;
@@ -117,6 +129,8 @@ type Props = {
   dealGateway: string;
   onDealGateway: (g: string) => void;
   thumbs: Record<string, string>;
+  live: LiveSearch | null;
+  onLive: (from: string, to: string, depart: string, nights: number) => void;
   whyOf: (d: Deal) => string;
   ask: { status: string; text: string; used: string[]; note?: string; question: string } | null;
   asking: boolean;
@@ -346,6 +360,8 @@ export default function Panel(p: Props) {
   const [query, setQuery] = useState("");
   const [copied, setCopied] = useState(false);
   const [question, setQuestion] = useState("");
+  const [liveDate, setLiveDate] = useState("");
+  const [liveNights, setLiveNights] = useState(4);
   const hits = useMemo(() => searchAirports(p.airports, query), [p.airports, query]);
   const selected = p.selectedDest ? p.destinations.find((d) => d.airport.iata === p.selectedDest) : null;
   const place = p.selectedPlace ? p.places.find((x) => x.key === p.selectedPlace) : null;
@@ -452,6 +468,61 @@ export default function Panel(p: Props) {
                     >
                       €{d.price} · {dateRange(d.out, d.back)} · {d.gw}
                     </button>
+                  ))}
+                </div>
+              )}
+              <h2>Other dates</h2>
+              <form
+                className="askbox"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  if (p.deal && liveDate) p.onLive(p.deal.gw, p.deal.dst, liveDate, liveNights);
+                }}
+              >
+                <input
+                  className="search"
+                  type="date"
+                  value={liveDate || p.deal.out}
+                  min={new Date().toISOString().slice(0, 10)}
+                  onChange={(e) => setLiveDate(e.target.value)}
+                  aria-label="Departure date"
+                />
+                <select className="search" style={{ flex: "0 0 92px" }} value={liveNights} onChange={(e) => setLiveNights(Number(e.target.value))} aria-label="Nights">
+                  {[2, 3, 4, 5, 6, 7, 10, 14].map((n) => (
+                    <option key={n} value={n}>
+                      {n} nights
+                    </option>
+                  ))}
+                </select>
+                <button className="chip on" type="submit" disabled={p.live?.status === "loading"} onClick={() => !liveDate && setLiveDate(p.deal!.out)}>
+                  {p.live?.status === "loading" ? "Searching…" : "Check"}
+                </button>
+              </form>
+              <div className="status">Searches Kiwi.com live for {p.deal.gw} → {p.deal.city}, ±2 days around your dates.</div>
+              {p.live && p.live.status === "error" && <div className="status">Live search failed: {p.live.note}. Try again in a minute.</div>}
+              {p.live && p.live.status === "ok" && (
+                <div>
+                  {p.live.itineraries.length === 0 && <div className="status">No flights found for those dates.</div>}
+                  {p.live.itineraries.slice(0, 6).map((it, i) => (
+                    <div key={i} className="row">
+                      <span className="code">€{it.price}</span>
+                      <span>
+                        <div className="name">
+                          {shortDate(it.out)}
+                          {it.back ? ` to ${shortDate(it.back)}` : ""}
+                          {it.nights != null ? ` · ${it.nights} nights` : ""}
+                        </div>
+                        <div className="sub">
+                          {stops(it.stops)} · {it.carriers.join(" + ")} · {formatDuration(it.outMin)} out
+                          {it.backMin ? `, ${formatDuration(it.backMin)} back` : ""}
+                        </div>
+                      </span>
+                      <span className="meta">
+                        <a href={it.url} target="_blank" rel="noreferrer">
+                          Book ↗
+                        </a>
+                      </span>
+                    </div>
                   ))}
                 </div>
               )}

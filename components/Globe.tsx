@@ -30,7 +30,7 @@ import type {
   WeatherFile,
 } from "@/lib/types";
 import { expandWeather, visaFor } from "@/lib/types";
-import Panel, { BANDS, MODE_LABEL, dealKey, type Band, type DealNights, type Intel, type View } from "./Panel";
+import Panel, { BANDS, MODE_LABEL, dealKey, type Band, type DealNights, type Intel, type LiveSearch, type View } from "./Panel";
 
 // The bundler cannot resolve MapLibre's worker from import.meta.url; see scripts/copy-worker.mjs.
 maplibregl.setWorkerUrl("/maplibre-gl-worker.mjs");
@@ -165,7 +165,21 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
   const [asking, setAsking] = useState(false);
   const [askOnly, setAskOnly] = useState(true);
   const [events, setEvents] = useState<{ name: string; date: string; venue?: string; kind?: string; url: string }[]>([]);
+  const [liveSearch, setLiveSearch] = useState<LiveSearch | null>(null);
   const [manifest, setManifest] = useState<Manifest | null>(null);
+
+  // Re-price one route on Kiwi for the dates the visitor picks.
+  async function searchLive(from: string, to: string, depart: string, nights: number) {
+    setLiveSearch({ status: "loading", from, to, depart, nights, itineraries: [] });
+    try {
+      const r = await fetch(`/api/deals?from=${from}&to=${to}&depart=${depart}&nights=${nights}&flex=2`);
+      const j = (await r.json()) as { itineraries?: LiveSearch["itineraries"]; error?: string; fetchedAt?: string };
+      if (!r.ok || j.error) setLiveSearch({ status: "error", from, to, depart, nights, itineraries: [], note: j.error ?? `search failed (${r.status})` });
+      else setLiveSearch({ status: "ok", from, to, depart, nights, itineraries: j.itineraries ?? [], fetchedAt: j.fetchedAt });
+    } catch {
+      setLiveSearch({ status: "error", from, to, depart, nights, itineraries: [], note: "search failed" });
+    }
+  }
   const [summary, setSummary] = useState<PlaceSummary | null>(null);
   const [warmOnly, setWarmOnly] = useState(false);
   const [around, setAround] = useState<string | null>(null);
@@ -809,6 +823,7 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
 
   function focusDeal(key: string | null) {
     setSelectedDeal(key);
+    setLiveSearch(null);
     const d = key ? dealsAll.find((x) => dealKey(x) === key) : null;
     const map = mapRef.current;
     const g = d ? byIata.get(d.gw) : null;
@@ -1154,6 +1169,8 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
         dealGateway={dealGateway}
         onDealGateway={setDealGateway}
         thumbs={thumbs}
+        live={liveSearch}
+        onLive={searchLive}
         whyOf={(d) => {
           const c = dealCoord(d);
           return c ? whyOf(d.dstCity, c[1], c[0]) : "";
