@@ -6,13 +6,21 @@ import { MapLibreOverlay } from "@deck.gl/maplibre";
 import { ArcLayer, ScatterplotLayer } from "@deck.gl/layers";
 import type { Layer, PickingInfo } from "@deck.gl/core";
 import { flightMinutes, formatDuration, haversineKm, nearestGateways } from "@/lib/geo";
-import type { Airport, Destination, Gateway, Manifest, Route } from "@/lib/types";
+import type { Airport, Destination, FaresResponse, Gateway, Manifest, Route } from "@/lib/types";
 import Panel, { BANDS, type Band } from "./Panel";
 
 // The bundler cannot resolve MapLibre's worker from import.meta.url; see scripts/copy-worker.mjs.
 maplibregl.setWorkerUrl("/maplibre-gl-worker.mjs");
 
 const STYLE = "https://tiles.openfreemap.org/styles/dark";
+// Layers of the OpenFreeMap dark style that compete with the arcs: regions, small places, minor roads, rail.
+const CLUTTER = [
+  "place_state", "place_suburb", "place_other", "place_village",
+  "highway_minor", "highway_path", "highway_name_other", "highway_name_motorway",
+  "road_oneway", "road_oneway_opposite",
+  "railway", "railway_dashline", "railway_transit", "railway_transit_dashline", "railway_minor", "railway_minor_dashline",
+  "building", "landuse_residential",
+];
 const PANEL_PADDING = { left: 380, top: 60, right: 60, bottom: 60 };
 
 export type Origin = { lat: number; lon: number; label: string; source: "gps" | "default" | "search" };
@@ -24,6 +32,13 @@ export function arcColor(min: number): RGBA {
   if (min < 300) return [255, 180, 84, 200];
   return [255, 107, 107, 180];
 }
+export function priceColor(eur: number): RGBA {
+  if (eur < 60) return [76, 201, 240, 230];
+  if (eur < 150) return [255, 180, 84, 230];
+  return [255, 107, 107, 210];
+}
+/** Routes known only from the 2014 network, once live fares are on screen. */
+const DIM: RGBA = [140, 150, 170, 70];
 
 const regionNames = typeof Intl !== "undefined" ? new Intl.DisplayNames(["en"], { type: "region" }) : null;
 export function countryName(code: string): string {
@@ -40,7 +55,11 @@ function tooltip(info: PickingInfo): null | { html: string; style: Record<string
   let html: string;
   if ("from" in o) {
     const where = [o.airport.city, countryName(o.airport.country)].filter(Boolean).join(", ");
-    html = `<span class="code">${o.airport.iata}</span> ${where}<br/>~${formatDuration(flightMinutes(o.km))} flight · ${Math.round(o.km)} km · ${o.airlines} airline${o.airlines === 1 ? "" : "s"} (2014 network)`;
+    const fare = o.fare
+      ? `<b>from €${o.fare.price}</b> · ${o.fare.departureAt} · ${o.fare.transfers ? `${o.fare.transfers} stop` : "direct"}<br/>`
+      : "";
+    const network = o.airlines ? ` · ${o.airlines} airline${o.airlines === 1 ? "" : "s"} (2014 network)` : "";
+    html = `<span class="code">${o.airport.iata}</span> ${where}<br/>${fare}~${formatDuration(flightMinutes(o.km))} flight · ${Math.round(o.km)} km${network}`;
   } else if ("driveMin" in o) {
     html = `<span class="code">${o.airport.iata}</span> ${o.airport.name}<br/>${formatDuration(o.driveMin)} drive · ${Math.round(o.km)} km`;
   } else {
@@ -74,6 +93,8 @@ export default function Globe() {
   const [gatewayIata, setGatewayIata] = useState<string | null>(null);
   const [band, setBand] = useState<Band>("all");
   const [selectedDest, setSelectedDest] = useState<string | null>(null);
+  const [fares, setFares] = useState<FaresResponse | null>(null);
+  const [pricedOnly, setPricedOnly] = useState(false);
 
   // Static data, produced by scripts/ingest and committed under public/data.
   useEffect(() => {
@@ -140,22 +161,46 @@ export default function Globe() {
 
   const gateway = gatewayIata ? (byIata.get(gatewayIata) ?? null) : null;
 
+  // Live cached fares for the selected gateway (server route; empty until the token is set).
+  useEffect(() => {
+    if (!gateway) return;
+    const ctrl = new AbortController();
+    setFares(null);
+    fetch(`/api/fares?origin=${gateway.iata}`, { signal: ctrl.signal })
+      .then((r) => r.json())
+      .then((j: FaresResponse) => setFares(j))
+      .catch(() => {});
+    return () => ctrl.abort();
+  }, [gateway]);
+
+  const live = fares?.status === "ok" && fares.origin === gateway?.iata;
+
+  // Destinations = the 2014 network ∪ every airport with a live fare. Priced ones sort first, by price.
   const destinations = useMemo<Destination[]>(() => {
     if (!gateway) return [];
-    const out: Destination[] = [];
-    for (const r of routesFrom.get(gateway.iata) ?? []) {
-      const airport = byIata.get(r.dst);
-      if (!airport) continue;
-      out.push({ airport, from: gateway, km: haversineKm(gateway.lat, gateway.lon, airport.lat, airport.lon), airlines: r.airlines });
-    }
-    out.sort((a, b) => a.km - b.km);
+    const fareByDst = new Map(live ? fares!.fares.map((f) => [f.dst, f] as const) : []);
+    const seen = new Map<string, Destination>();
+    const add = (iata: string, airlines: number) => {
+      const airport = byIata.get(iata);
+      if (!airport || seen.has(iata)) return;
+      const km = haversineKm(gateway.lat, gateway.lon, airport.lat, airport.lon);
+      seen.set(iata, { airport, from: gateway, km, airlines, fare: fareByDst.get(iata) });
+    };
+    for (const r of routesFrom.get(gateway.iata) ?? []) add(r.dst, r.airlines);
+    for (const dst of fareByDst.keys()) add(dst, 0);
+    const out = [...seen.values()];
+    out.sort((a, b) => {
+      if (a.fare && b.fare) return a.fare.price - b.fare.price;
+      if (a.fare || b.fare) return a.fare ? -1 : 1;
+      return a.km - b.km;
+    });
     return out;
-  }, [gateway, routesFrom, byIata]);
+  }, [gateway, routesFrom, byIata, fares, live]);
 
   const shown = useMemo(() => {
     const b = BANDS.find((x) => x.key === band);
-    return b ? destinations.filter((d) => b.test(flightMinutes(d.km))) : destinations;
-  }, [destinations, band]);
+    return destinations.filter((d) => (!b || b.test(flightMinutes(d.km))) && (!pricedOnly || d.fare));
+  }, [destinations, band, pricedOnly]);
 
   // The map itself: created once, spins slowly until the user touches it.
   useEffect(() => {
@@ -171,6 +216,7 @@ export default function Globe() {
     map.on("style.load", () => {
       map.setProjection({ type: "globe" });
       map.setSky({ "atmosphere-blend": ["interpolate", ["linear"], ["zoom"], 0, 1, 5, 1, 7, 0] });
+      for (const id of CLUTTER) if (map.getLayer(id)) map.setLayoutProperty(id, "visibility", "none");
     });
     map.addControl(new maplibregl.NavigationControl({ showCompass: false }), "bottom-right");
     map.addControl(new maplibregl.GlobeControl(), "bottom-right");
@@ -234,6 +280,8 @@ export default function Globe() {
   useEffect(() => {
     const overlay = overlayRef.current;
     if (!overlay) return;
+    // With live fares on screen, colour means price; routes only the 2014 network knows go dim.
+    const colorOf = (d: Destination): RGBA => (live ? (d.fare ? priceColor(d.fare.price) : DIM) : arcColor(flightMinutes(d.km)));
     const layers: (Layer | null)[] = [
       new ScatterplotLayer<Airport>({
         id: "airports",
@@ -248,15 +296,15 @@ export default function Globe() {
         data: shown,
         getSourcePosition: (d) => [d.from.lon, d.from.lat],
         getTargetPosition: (d) => [d.airport.lon, d.airport.lat],
-        getSourceColor: (d) => arcColor(flightMinutes(d.km)),
-        getTargetColor: (d) => arcColor(flightMinutes(d.km)),
-        getWidth: (d) => (d.airport.iata === selectedDest ? 4 : 1.5),
+        getSourceColor: colorOf,
+        getTargetColor: colorOf,
+        getWidth: (d) => (d.airport.iata === selectedDest ? 4 : d.fare ? 2 : 1.3),
         greatCircle: true,
         pickable: true,
         autoHighlight: true,
         highlightColor: [255, 255, 255, 230],
         parameters: { cullMode: "none" },
-        updateTriggers: { getWidth: [selectedDest] },
+        updateTriggers: { getWidth: [selectedDest], getSourceColor: [live], getTargetColor: [live] },
         onClick: (info) => focusDestination((info.object as Destination | undefined)?.airport.iata ?? null),
       }),
       new ScatterplotLayer<Destination>({
@@ -264,10 +312,10 @@ export default function Globe() {
         data: shown,
         getPosition: (d) => [d.airport.lon, d.airport.lat],
         radiusUnits: "pixels",
-        getRadius: (d) => (d.airport.iata === selectedDest ? 6 : 3.2),
-        getFillColor: (d) => arcColor(flightMinutes(d.km)),
+        getRadius: (d) => (d.airport.iata === selectedDest ? 6 : d.fare ? 3.6 : 2.6),
+        getFillColor: colorOf,
         pickable: true,
-        updateTriggers: { getRadius: [selectedDest] },
+        updateTriggers: { getRadius: [selectedDest], getFillColor: [live] },
         onClick: (info) => focusDestination((info.object as Destination | undefined)?.airport.iata ?? null),
       }),
       new ScatterplotLayer<Gateway>({
@@ -307,7 +355,7 @@ export default function Globe() {
     overlay.setProps({ layers: layers.filter(Boolean) as Layer[] });
     // focusDestination/focusGateway are stable enough: they only read refs and state setters.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [airports, shown, gateways, gatewayIata, origin, selectedDest]);
+  }, [airports, shown, gateways, gatewayIata, origin, selectedDest, live]);
 
   return (
     <div className="app">
@@ -329,6 +377,9 @@ export default function Globe() {
         totalDestinations={destinations.length}
         selectedDest={selectedDest}
         onDest={focusDestination}
+        fares={fares}
+        pricedOnly={pricedOnly}
+        onPricedOnly={setPricedOnly}
         onOrigin={(a) => {
           setSelectedDest(null);
           setOrigin({ lat: a.lat, lon: a.lon, label: a.city ?? a.name, source: "search" });
@@ -338,6 +389,7 @@ export default function Globe() {
         <div className="provenance" title="Every number on this globe says where it came from.">
           Airports: {manifest.airports?.source} · {manifest.airports?.licence} · {manifest.airports?.fetchedAt.slice(0, 10)}
           {" · "}Network: {manifest.routes?.source} · {manifest.routes?.note?.split(".")[0]}
+          {live && fares?.fetchedAt ? ` · Fares: Aviasales cache via Travelpayouts · EUR · ${fares.fetchedAt.slice(11, 16)} UTC` : ""}
         </div>
       )}
     </div>

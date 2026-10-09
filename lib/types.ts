@@ -35,10 +35,34 @@ export type Gateway = {
   driveMin: number;
 };
 
+/** A cached fare from the Travelpayouts (Aviasales) data API: what people recently paid. */
+export type Fare = {
+  dst: string;
+  price: number;
+  currency: string;
+  departureAt: string;
+  airline: string;
+  flightNumber?: string;
+  transfers: number;
+  durationMin?: number;
+  url: string;
+};
+
+export type FaresResponse = {
+  status: "ok" | "no-token" | "error";
+  origin: string;
+  currency: string;
+  fetchedAt?: string;
+  note?: string;
+  fares: Fare[];
+};
+
 /** One arc on the globe: a gateway to somewhere it flies. */
 export type Destination = {
   airport: Airport;
   from: Airport;
   km: number;
+  /** Distinct airlines on the pair in the 2014 network; 0 when only a live fare knows the route. */
   airlines: number;
+  fare?: Fare;
 };

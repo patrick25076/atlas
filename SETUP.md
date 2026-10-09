@@ -28,18 +28,22 @@ Welcome Pickups and Compensair later.
    TRAVELPAYOUTS_TOKEN=...
    TRAVELPAYOUTS_MARKER=...
    ```
-6. Run `pnpm ingest:fares` once it exists (next slice) and restart `pnpm dev`.
+6. Restart `pnpm dev`. The destinations panel switches from "No fares yet" to priced rows.
+   (`pnpm check:tp OTP` prints what the API returns, if you want to see it raw.)
+7. For the deployed site, add the same two variables in Vercel: Project → Settings →
+   Environment Variables (Production), then redeploy.
 
-Note: affiliate programmes beyond Aviasales usually ask for a live website URL. Do step 3
-first if they refuse the application.
+Note: affiliate programmes beyond Aviasales usually ask for a live website URL. Use
+https://atlas-kappa-wheat.vercel.app.
 
-## 3. GitHub repository and Vercel project
+## 3. GitHub repository and Vercel project (done 2026-10-09)
 
-1. `gh repo create atlas --private --source . --push` from `C:\dev\atlas` (or create it in
-   the GitHub UI and `git remote add origin ...`).
-2. https://vercel.com/new → import the repo. Framework: Next.js, root `.`, build command
-   default. Add the env vars from `.env.example` under Settings → Environment Variables.
-3. Every push to `main` deploys. Preview deployments come from branches.
+- Repo: https://github.com/patrick25076/atlas (private).
+- Vercel project `atlas` in scope `patrick25076s-projects`, connected to the repo: every
+  push to `main` deploys production, branches get previews.
+- Production: https://atlas-kappa-wheat.vercel.app
+- `vercel link` wrote a `VERCEL_OIDC_TOKEN` into `.env.local`; leave it, add your own keys
+  below it.
 
 ## 4. Neon Postgres (free tier): trips, users, fare watches
 

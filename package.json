@@ -10,9 +10,11 @@
     "start": "next start",
     "typecheck": "tsc --noEmit",
     "postinstall": "node scripts/copy-worker.mjs",
-    "ingest": "pnpm ingest:airports && pnpm ingest:routes",
+    "ingest": "pnpm ingest:airports && pnpm ingest:routes && pnpm ingest:tp-airports",
     "ingest:airports": "tsx scripts/ingest/airports.ts",
-    "ingest:routes": "tsx scripts/ingest/routes.ts"
+    "ingest:routes": "tsx scripts/ingest/routes.ts",
+    "ingest:tp-airports": "tsx scripts/ingest/tp-airports.ts",
+    "check:tp": "tsx scripts/check-travelpayouts.ts"
   },
   "dependencies": {
     "@deck.gl/core": "9.4.0",

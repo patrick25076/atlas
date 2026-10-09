@@ -15,3 +15,6 @@ public/maplibre-gl-worker.mjs
 data/raw/
 *.duckdb
 *.duckdb.wal
+
+.vercel
+.env*

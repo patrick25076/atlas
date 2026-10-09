@@ -16,5 +16,14 @@
     "fetchedAt": "2026-10-09T17:02:29.451Z",
     "rows": 37594,
     "file": "public/data/routes-openflights.json"
+  },
+  "cityAirports": {
+    "source": "Travelpayouts airports.json",
+    "url": "https://api.travelpayouts.com/data/en/airports.json",
+    "licence": "Travelpayouts static data (free for partner use)",
+    "note": "City IATA code → airports on the globe, biggest first.",
+    "fetchedAt": "2026-10-09T17:27:30.985Z",
+    "rows": 3159,
+    "file": "public/data/city-airports.json"
   }
 }

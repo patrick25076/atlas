@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { flightMinutes, formatDuration } from "@/lib/geo";
-import type { Airport, Destination, Gateway } from "@/lib/types";
+import type { Airport, Destination, FaresResponse, Gateway } from "@/lib/types";
 import { countryName, type Origin } from "./Globe";
 
 export type Band = "all" | "short" | "medium" | "long";
@@ -27,7 +27,19 @@ type Props = {
   selectedDest: string | null;
   onDest: (iata: string | null) => void;
   onOrigin: (a: Airport) => void;
+  fares: FaresResponse | null;
+  pricedOnly: boolean;
+  onPricedOnly: (v: boolean) => void;
 };
+
+function shortDate(iso: string): string {
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? iso : d.toLocaleDateString("en-GB", { day: "numeric", month: "short" });
+}
+
+function stops(n: number): string {
+  return n ? `${n} stop${n === 1 ? "" : "s"}` : "direct";
+}
 
 function searchAirports(airports: Airport[], q: string): Airport[] {
   const s = q.trim().toLowerCase();
@@ -120,21 +132,44 @@ export default function Panel(p: Props) {
               <div className="sub">{[selected.airport.city, countryName(selected.airport.country)].filter(Boolean).join(", ")}</div>
             </span>
             <span className="meta">
-              <strong>~{formatDuration(flightMinutes(selected.km))}</strong>
-              {Math.round(selected.km)} km
+              {selected.fare ? (
+                <>
+                  <strong>from €{selected.fare.price}</strong>
+                  {shortDate(selected.fare.departureAt)} · {stops(selected.fare.transfers)}
+                </>
+              ) : (
+                <>
+                  <strong>~{formatDuration(flightMinutes(selected.km))}</strong>
+                  {Math.round(selected.km)} km
+                </>
+              )}
             </span>
           </div>
-          <div className="status">
-            {selected.airlines} airline{selected.airlines === 1 ? "" : "s"} flew {selected.from.iata} → {selected.airport.iata} in the 2014 network. Live
-            prices arrive with the next data source.{" "}
-            <a
-              href={`https://www.google.com/travel/flights?q=flights+from+${selected.from.iata}+to+${selected.airport.iata}`}
-              target="_blank"
-              rel="noreferrer"
-            >
-              Check fares ↗
-            </a>
-          </div>
+          {selected.fare ? (
+            <div className="status">
+              €{selected.fare.price} one way on {shortDate(selected.fare.departureAt)}
+              {selected.fare.airline ? ` with ${selected.fare.airline}` : ""}, {stops(selected.fare.transfers)}, ~
+              {formatDuration(selected.fare.durationMin ?? flightMinutes(selected.km))}. Cached from recent Aviasales searches; the live price is on the
+              booking page.{" "}
+              <a href={selected.fare.url} target="_blank" rel="noreferrer">
+                Book on Aviasales ↗
+              </a>
+            </div>
+          ) : (
+            <div className="status">
+              {selected.airlines
+                ? `${selected.airlines} airline${selected.airlines === 1 ? "" : "s"} flew ${selected.from.iata} → ${selected.airport.iata} in the 2014 network. `
+                : ""}
+              No cached fare for this route right now.{" "}
+              <a
+                href={`https://www.google.com/travel/flights?q=flights+from+${selected.from.iata}+to+${selected.airport.iata}`}
+                target="_blank"
+                rel="noreferrer"
+              >
+                Check fares ↗
+              </a>
+            </div>
+          )}
         </>
       ) : null}
 
@@ -142,12 +177,26 @@ export default function Panel(p: Props) {
         Destinations · {p.destinations.length}
         {p.destinations.length !== p.totalDestinations ? ` of ${p.totalDestinations}` : ""}
       </h2>
+      <div className="status">
+        {p.fares === null
+          ? "Checking fares…"
+          : p.fares.status === "ok"
+            ? `Cheapest cached one-way fares, next 3 months: ${p.fares.fares.length} priced.`
+            : p.fares.status === "no-token"
+              ? "No fares yet: add the Travelpayouts token (SETUP §2)."
+              : `Fares unavailable: ${p.fares.note ?? "error"}`}
+      </div>
       <div className="chips">
         {BANDS.map((b) => (
           <button key={b.key} className={`chip${p.band === b.key ? " on" : ""}`} onClick={() => p.onBand(b.key)}>
             {b.label}
           </button>
         ))}
+        {p.fares?.status === "ok" && (
+          <button className={`chip${p.pricedOnly ? " on" : ""}`} onClick={() => p.onPricedOnly(!p.pricedOnly)}>
+            Priced only
+          </button>
+        )}
       </div>
       <div className="scroll">
         {p.destinations.map((d) => (
@@ -162,8 +211,17 @@ export default function Panel(p: Props) {
               <div className="sub">{countryName(d.airport.country)}</div>
             </span>
             <span className="meta">
-              <strong>~{formatDuration(flightMinutes(d.km))}</strong>
-              {Math.round(d.km)} km
+              {d.fare ? (
+                <>
+                  <strong>from €{d.fare.price}</strong>
+                  {shortDate(d.fare.departureAt)} · {stops(d.fare.transfers)}
+                </>
+              ) : (
+                <>
+                  <strong>~{formatDuration(flightMinutes(d.km))}</strong>
+                  {Math.round(d.km)} km
+                </>
+              )}
             </span>
           </div>
         ))}

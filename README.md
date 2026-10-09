@@ -23,7 +23,9 @@ Built source by source. Every number on the globe says where it came from
 | Source | Licence | Used for | Refresh |
 |---|---|---|---|
 | OurAirports | Public domain | Airports with scheduled service (nodes) | nightly upstream; `pnpm ingest:airports` |
-| OpenFlights routes | ODbL, frozen 2014 | Indicative network (which pairs were ever connected) | placeholder until Travelpayouts |
+| OpenFlights routes | ODbL, frozen 2014 | Indicative network (which pairs were ever connected) | placeholder; dims once fares are live |
+| Travelpayouts airports.json | free static data | City code → airports mapping for the fares API | `pnpm ingest:tp-airports`, monthly |
+| Travelpayouts / Aviasales Data API | free with token (SETUP §2) | Cheapest cached one-way fare per destination, booking links with the marker | live, cached 1 h per origin |
 
 ## Stack decisions
 
