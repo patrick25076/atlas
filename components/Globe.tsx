@@ -14,6 +14,8 @@ import type {
   City,
   CityPlaces,
   CountryInfo,
+  Deal,
+  DealsFile,
   Destination,
   FaresResponse,
   Gateway,
@@ -28,7 +30,7 @@ import type {
   WeatherFile,
 } from "@/lib/types";
 import { expandWeather, visaFor } from "@/lib/types";
-import Panel, { BANDS, MODE_LABEL, type Band, type Intel, type View } from "./Panel";
+import Panel, { BANDS, MODE_LABEL, dealKey, type Band, type DealNights, type Intel, type View } from "./Panel";
 
 // The bundler cannot resolve MapLibre's worker from import.meta.url; see scripts/copy-worker.mjs.
 maplibregl.setWorkerUrl("/maplibre-gl-worker.mjs");
@@ -43,12 +45,12 @@ const CLUTTER = [
   "building", "landuse_residential",
 ];
 // Keep the interesting part of the globe clear of the panel: left of it on desktop, above the
-// bottom sheet on phones (the sheet takes 46vh, see globals.css).
+// bottom sheet on phones (the sheet takes 52vh, see globals.css).
 function panelPadding() {
   if (typeof window !== "undefined" && window.innerWidth <= 720) {
-    return { left: 16, right: 16, top: 60, bottom: Math.round(window.innerHeight * 0.46) + 24 };
+    return { left: 16, right: 16, top: 60, bottom: Math.round(window.innerHeight * 0.52) + 24 };
   }
-  return { left: 380, top: 60, right: 60, bottom: 60 };
+  return { left: 430, top: 60, right: 60, bottom: 60 };
 }
 
 export type Origin = { lat: number; lon: number; label: string; source: "gps" | "ip" | "default" | "search" };
@@ -153,6 +155,12 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
   const [cityPlaces, setCityPlaces] = useState<Record<string, CityPlaces>>({});
   const [heritage, setHeritage] = useState<HeritageRow[]>([]);
   const [visa, setVisa] = useState<VisaFile | null>(null);
+  const [dealsFile, setDealsFile] = useState<DealsFile | null>(null);
+  const [selectedDeal, setSelectedDeal] = useState<string | null>(null);
+  const [dealNights, setDealNights] = useState<DealNights>("any");
+  const [directOnly, setDirectOnly] = useState(false);
+  const [dealGateway, setDealGateway] = useState<string>("all");
+  const [thumbs, setThumbs] = useState<Record<string, string>>({});
   const [manifest, setManifest] = useState<Manifest | null>(null);
   const [summary, setSummary] = useState<PlaceSummary | null>(null);
   const [warmOnly, setWarmOnly] = useState(false);
@@ -164,7 +172,7 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
   const [faresByGateway, setFaresByGateway] = useState<Record<string, FaresResponse>>({});
   const [pricedOnly, setPricedOnly] = useState(false);
   const [bigOnly, setBigOnly] = useState(true);
-  const [view, setView] = useState<View>("all");
+  const [view, setView] = useState<View>("deals");
   const [reach, setReach] = useState<ReachResponse | null>(null);
   const [selectedStation, setSelectedStation] = useState<number | null>(null);
   const [selectedPlace, setSelectedPlace] = useState<string | null>(null);
@@ -191,7 +199,8 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
       load("city-places.json"),
       load("heritage.json"),
       load("visa.json"),
-    ]).then(([a, r, al, c, m, co, h, w, cp, he, vi]) => {
+      load("deals.json"),
+    ]).then(([a, r, al, c, m, co, h, w, cp, he, vi, de]) => {
       setAirports(a ?? []);
       setRoutes(r ?? []);
       setAirlines(al ?? {});
@@ -203,6 +212,9 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
       setCityPlaces(cp ?? {});
       setHeritage(he ?? []);
       setVisa(vi);
+      setDealsFile(de);
+      // No deals file yet (first run): open on Explore rather than an empty Deals tab.
+      if (!de?.deals?.length) setView((v) => (v === "deals" ? "all" : v));
     });
   }, []);
 
@@ -211,12 +223,13 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
     if (!origin) return;
     const q = new URLSearchParams();
     q.set("from", `${origin.lat.toFixed(3)},${origin.lon.toFixed(3)},${origin.label}`);
-    if (view !== "all") q.set("view", view);
+    if (view !== "deals") q.set("view", view);
     if (view === "trips" && days !== 5) q.set("days", String(days));
-    if (selectedPlace) q.set("place", selectedPlace);
+    if (selectedPlace && view !== "deals") q.set("place", selectedPlace);
+    if (selectedDeal && view === "deals") q.set("deal", selectedDeal);
     const url = `${window.location.pathname}?${q.toString()}`;
     if (url !== `${window.location.pathname}${window.location.search}`) window.history.replaceState(null, "", url);
-  }, [origin, view, days, selectedPlace]);
+  }, [origin, view, days, selectedPlace, selectedDeal]);
 
   // Airport → city code, so one city with several airports is one place.
   const cityOf = useMemo(() => {
@@ -268,13 +281,17 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
     if (from && from.length >= 2 && Number.isFinite(Number(from[0])) && Number.isFinite(Number(from[1]))) {
       setOrigin({ lat: Number(from[0]), lon: Number(from[1]), label: from.slice(2).join(",") || "shared location", source: "search" });
       const v = q.get("view");
-      if (v === "all" || v === "fly" || v === "ground" || v === "trips") setView(v);
+      if (v === "deals" || v === "all" || v === "fly" || v === "ground" || v === "trips") setView(v);
       const d = Number(q.get("days"));
       if ([3, 5, 7, 10].includes(d)) setDays(d);
       const place = q.get("place");
       if (place) setSelectedPlace(place);
+      const deal = q.get("deal");
+      if (deal) setSelectedDeal(deal);
       return;
     }
+    const v = new URLSearchParams(window.location.search).get("view");
+    if (v === "deals" || v === "all" || v === "fly" || v === "ground" || v === "trips") setView(v);
     const fallback: Origin = hint ? { ...hint, source: "ip" } : DEFAULT_ORIGIN;
     if (typeof navigator === "undefined" || !navigator.geolocation) {
       setOrigin(fallback);
@@ -429,44 +446,129 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [places, band, pricedOnly, bigOnly, warmOnly, cities, weather]);
 
-  // Everything we know about the selected place's city and country.
+  // Deals: cheapest return getaways from the home gateways (nightly file), one card per city.
+  const dealsAll = dealsFile?.deals ?? [];
+  const dealsShown = useMemo<Deal[]>(() => {
+    const range: Record<DealNights, [number, number]> = { any: [0, 99], "2-3": [2, 3], "4-5": [4, 5], "6-7": [6, 7] };
+    const [lo, hi] = range[dealNights];
+    const seen = new Set<string>();
+    const out: Deal[] = [];
+    for (const d of dealsAll) {
+      if (d.nights < lo || d.nights > hi) continue;
+      if (directOnly && d.stops > 0) continue;
+      if (dealGateway !== "all" && d.gw !== dealGateway) continue;
+      if (warmOnly && (weekendMax(d.dstCity) ?? -99) < 20) continue;
+      if (seen.has(d.dstCity)) continue;
+      seen.add(d.dstCity);
+      out.push(d);
+    }
+    return out;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dealsAll, dealNights, directOnly, dealGateway, warmOnly, weather]);
+  const deal = selectedDeal ? (dealsAll.find((d) => dealKey(d) === selectedDeal) ?? null) : null;
+  const dealOptions = useMemo(
+    () => (deal ? dealsAll.filter((d) => d.dstCity === deal.dstCity).sort((a, b) => a.price - b.price).slice(0, 6) : []),
+    [deal, dealsAll],
+  );
+  const dealCoord = (d: Deal): [number, number] | null => {
+    const c = cities[d.dstCity] ?? cities[d.dst];
+    if (c) return [c.lon, c.lat];
+    const a = byIata.get(d.dst);
+    return a ? [a.lon, a.lat] : null;
+  };
+
+  // A short reason to go, from what we already know about the city.
+  const whyOf = (code: string, lat: number, lon: number): string => {
+    const p = cityPlaces[code];
+    const bits: string[] = [];
+    const near = heritage.filter((h) => haversineKm(lat, lon, h[1], h[2]) <= 40).length;
+    if (near) bits.push(near === 1 ? "World Heritage site" : `${near} World Heritage sites`);
+    if (p?.food && p.food >= 1000) bits.push(`${(p.food / 1000).toFixed(1)}k restaurants`);
+    if (p?.night && p.night >= 100) bits.push(`${p.night} nightlife spots`);
+    if (p?.nature && p.nature >= 150) bits.push("parks and nature");
+    if (p?.culture && p.culture >= 300 && !near) bits.push(`${(p.culture / 1000).toFixed(1).replace(".0", "")}k cultural sights`);
+    return bits.slice(0, 2).join(" · ");
+  };
+
+  // Photos for the deal cards: Wikivoyage thumbnails, fetched lazily and kept.
+  useEffect(() => {
+    if (view !== "deals") return;
+    const missing = dealsShown.slice(0, 40).map((d) => d.city).filter((name, i, arr) => !(name in thumbs) && arr.indexOf(name) === i);
+    if (!missing.length) return;
+    const ctrl = new AbortController();
+    (async () => {
+      const found: Record<string, string> = {};
+      for (let i = 0; i < missing.length; i += 6) {
+        await Promise.all(
+          missing.slice(i, i + 6).map(async (name) => {
+            try {
+              const r = await fetch(`/api/place?name=${encodeURIComponent(name)}`, { signal: ctrl.signal });
+              const j = r.ok ? ((await r.json()) as PlaceSummary | null) : null;
+              found[name] = j?.thumbnail ?? "";
+            } catch {
+              found[name] = "";
+            }
+          }),
+        );
+        if (ctrl.signal.aborted) return;
+        setThumbs((t) => ({ ...t, ...found }));
+      }
+    })();
+    return () => ctrl.abort();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [view, dealsShown]);
+
+  // Everything we know about the selected city and country: a place in Explore, a deal in Deals.
   const selected = selectedPlace ? places.find((x) => x.key === selectedPlace) : null;
+  const target = useMemo(() => {
+    if (view === "deals" && deal) {
+      const c = cities[deal.dstCity];
+      const coord = dealCoord(deal);
+      return coord ? { code: deal.dstCity, name: deal.city, lat: coord[1], lon: coord[0], country: deal.country || c?.country, pop: c?.pop } : null;
+    }
+    if (selected) {
+      const code = cityCodeFor(selected);
+      return { code: code ?? undefined, name: code ? (cities[code]?.name ?? selected.name) : selected.name, lat: selected.lat, lon: selected.lon, country: selected.country ?? (code ? cities[code]?.country : undefined), pop: (code ? cities[code]?.pop : undefined) ?? selected.ground?.pop };
+    }
+    return null;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [view, deal, selected, cities]);
+
   const intel = useMemo<Intel | null>(() => {
-    if (!selected) return null;
-    const code = cityCodeFor(selected);
+    if (!target) return null;
+    const code = target.code;
     const city = code ? cities[code] : undefined;
-    const countryCode = selected.country ?? city?.country;
+    const countryCode = target.country;
     const horizon = new Date(Date.now() + 60 * 86_400_000).toISOString().slice(0, 10);
     const today = new Date().toISOString().slice(0, 10);
     return {
-      code: code ?? undefined,
+      code,
       tz: city?.tz,
-      lat: selected.lat,
-      lon: selected.lon,
+      lat: target.lat,
+      lon: target.lon,
       countryCode,
       country: countryCode ? countries[countryCode] : undefined,
       weather: code ? weather?.cities[code] : undefined,
       sea: code ? weather?.sea[code] : undefined,
       holidays: countryCode ? (holidays[countryCode] ?? []).filter((h) => h.date >= today && h.date <= horizon).slice(0, 2) : undefined,
       places: code ? cityPlaces[code] : undefined,
-      pop: city?.pop ?? selected.ground?.pop ?? undefined,
+      pop: target.pop ?? undefined,
       visa:
         visa && countryCode && gateways[0] && gateways[0].airport.country !== countryCode
           ? { passport: gateways[0].airport.country, text: visaFor(visa, gateways[0].airport.country, countryCode), updated: visa.updated }
           : undefined,
       heritage: heritage
-        .map((h) => ({ name: h[0], km: Math.round(haversineKm(selected.lat, selected.lon, h[1], h[2])) }))
+        .map((h) => ({ name: h[0], km: Math.round(haversineKm(target.lat, target.lon, h[1], h[2])) }))
         .filter((h) => h.km <= 60)
         .sort((a, b) => a.km - b.km)
         .slice(0, 3),
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selected, cities, countries, weather, holidays, cityPlaces, heritage, visa, gateways]);
+  }, [target, cities, countries, weather, holidays, cityPlaces, heritage, visa, gateways]);
 
-  // One paragraph from Wikivoyage for the selected place, by city name.
+  // One paragraph from Wikivoyage for the selected city, by name.
   useEffect(() => {
     setSummary(null);
-    const name = selected ? (intel?.code ? cities[intel.code]?.name : selected.name) : null;
+    const name = target?.name;
     if (!name) return;
     const ctrl = new AbortController();
     fetch(`/api/place?name=${encodeURIComponent(name)}`, { signal: ctrl.signal })
@@ -474,8 +576,7 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
       .then((j: PlaceSummary | null) => setSummary(j))
       .catch(() => {});
     return () => ctrl.abort();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedPlace, intel?.code]);
+  }, [target?.name]);
 
   // Your own long weekends: holidays at home in the next 120 days, as trip-date suggestions.
   const homeHolidays = useMemo(() => {
@@ -622,6 +723,17 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
     map.fitBounds(bounds, { padding: panelPadding(), maxZoom: 6, duration: 1400 });
   }
 
+  function focusDeal(key: string | null) {
+    setSelectedDeal(key);
+    const d = key ? dealsAll.find((x) => dealKey(x) === key) : null;
+    const map = mapRef.current;
+    const g = d ? byIata.get(d.gw) : null;
+    const c = d ? dealCoord(d) : null;
+    if (!map || !d || !g || !c) return;
+    const bounds = new maplibregl.LngLatBounds([g.lon, g.lat], [g.lon, g.lat]).extend(c);
+    map.fitBounds(bounds, { padding: panelPadding(), maxZoom: 5, duration: 1300 });
+  }
+
   function focusGateway(iata: string) {
     setGatewayIata(iata);
     setSelectedDest(null);
@@ -640,7 +752,17 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
     const all = view === "all";
     const fly = view === "fly";
     const tripView = view === "trips";
-    const flownPlaces = placesShown.filter((p) => p.mode === "plane" && p.air);
+    const dealView = view === "deals";
+    // Explore draws arcs only for the selected place; the lines were the thing nobody understood.
+    const flownPlaces = placesShown.filter((p) => p.mode === "plane" && p.air && p.key === selectedPlace);
+    const dealArcs = dealView
+      ? dealsShown
+          .slice(0, 16)
+          .concat(deal && !dealsShown.slice(0, 16).some((d) => dealKey(d) === selectedDeal) ? [deal] : [])
+          .map((d) => ({ d, s: byIata.get(d.gw), t: dealCoord(d) }))
+          .filter((x): x is { d: Deal; s: Airport; t: [number, number] } => !!x.s && !!x.t)
+      : [];
+    const dealDots = dealView ? dealsShown.map((d) => ({ d, t: dealCoord(d) })).filter((x): x is { d: Deal; t: [number, number] } => !!x.t) : [];
     // A trip's legs resolve codes to coordinates: gateways by IATA, cities from the trip itself.
     const coordOf = (code: string): [number, number] | null => {
       const g = gateways.find((x) => x.airport.iata === code);
@@ -656,6 +778,41 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
     const tripCities = new Map<string, TripCity>();
     for (const t of trips?.trips ?? []) for (const c of t.cities) tripCities.set(c.code, c);
     const layers: (Layer | null)[] = [
+      dealView
+        ? new ArcLayer<(typeof dealArcs)[number]>({
+            id: "deal-arcs",
+            data: dealArcs,
+            getSourcePosition: (x) => [x.s.lon, x.s.lat],
+            getTargetPosition: (x) => x.t,
+            getSourceColor: (x) => (dealKey(x.d) === selectedDeal ? [255, 255, 255, 240] : priceColor(x.d.price)),
+            getTargetColor: (x) => (dealKey(x.d) === selectedDeal ? [255, 255, 255, 240] : priceColor(x.d.price)),
+            getWidth: (x) => (dealKey(x.d) === selectedDeal ? 4 : 1.4),
+            greatCircle: true,
+            pickable: true,
+            autoHighlight: true,
+            highlightColor: [255, 255, 255, 230],
+            parameters: { cullMode: "none" },
+            updateTriggers: { getWidth: [selectedDeal], getSourceColor: [selectedDeal], getTargetColor: [selectedDeal] },
+            onClick: (info) => focusDeal(info.object ? dealKey((info.object as (typeof dealArcs)[number]).d) : null),
+          })
+        : null,
+      dealView
+        ? new ScatterplotLayer<(typeof dealDots)[number]>({
+            id: "deal-dots",
+            data: dealDots,
+            getPosition: (x) => x.t,
+            radiusUnits: "pixels",
+            getRadius: (x) => (dealKey(x.d) === selectedDeal ? 8 : x.d.price < 60 ? 6 : x.d.price < 150 ? 4.5 : 3.5),
+            getFillColor: (x) => priceColor(x.d.price),
+            stroked: true,
+            lineWidthUnits: "pixels",
+            getLineWidth: 1,
+            getLineColor: [255, 255, 255, 160],
+            pickable: true,
+            updateTriggers: { getRadius: [selectedDeal] },
+            onClick: (info) => focusDeal(info.object ? dealKey((info.object as (typeof dealDots)[number]).d) : null),
+          })
+        : null,
       tripView
         ? new ScatterplotLayer<TripCity>({
             id: "trip-all-cities",
@@ -809,7 +966,7 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
             onClick: (info) => focusDestination((info.object as Destination | undefined)?.airport.iata ?? null),
           })
         : null,
-      ground || tripView
+      ground || tripView || dealView
         ? null
         : new ScatterplotLayer<Gateway>({
             id: "gateways",
@@ -848,7 +1005,7 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
     overlay.setProps({ layers: layers.filter(Boolean) as Layer[] });
     // focus* helpers only read refs and state setters; listing them would re-run this on every render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [airports, shown, gateways, gatewayIata, origin, selectedDest, live, view, reachBand, selectedStation, pathForSelected, placesShown, selectedPlace, trips, trip, warmOnly, weather]);
+  }, [airports, shown, gateways, gatewayIata, origin, selectedDest, live, view, reachBand, selectedStation, pathForSelected, placesShown, selectedPlace, trips, trip, warmOnly, weather, dealsShown, selectedDeal, deal]);
 
   const groundFeeds = reach ? reach.feeds.map((f) => f.attribution.split(" via ")[0].split(" (")[0]).join(", ") : "";
 
@@ -891,6 +1048,23 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
           setSelectedStation(null);
           setSelectedPlace(null);
           setSelectedTrip(null);
+          setSelectedDeal(null);
+        }}
+        dealsFile={dealsFile}
+        deals={dealsShown}
+        deal={deal}
+        dealOptions={dealOptions}
+        onDeal={focusDeal}
+        dealNights={dealNights}
+        onDealNights={setDealNights}
+        directOnly={directOnly}
+        onDirectOnly={setDirectOnly}
+        dealGateway={dealGateway}
+        onDealGateway={setDealGateway}
+        thumbs={thumbs}
+        whyOf={(d) => {
+          const c = dealCoord(d);
+          return c ? whyOf(d.dstCity, c[1], c[0]) : "";
         }}
         reach={reach}
         reachShown={reachShown}

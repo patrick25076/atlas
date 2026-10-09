@@ -32,6 +32,29 @@ export type City = {
 /** [name, lat, lon, country] per World Heritage site (public/data/heritage.json). */
 export type HeritageRow = [string, number, number, string];
 
+/** A cheapest return getaway found on Kiwi.com (public/data/deals.json). */
+export type Deal = {
+  /** Home airport. */
+  gw: string;
+  /** Destination airport or city code as searched. */
+  dst: string;
+  /** Destination city code on the globe. */
+  dstCity: string;
+  city: string;
+  country: string;
+  price: number;
+  out: string;
+  back: string;
+  nights: number;
+  stops: number;
+  carriers: string[];
+  outMin: number;
+  backMin: number;
+  url: string;
+  bags?: string;
+};
+export type DealsFile = { updated: string; window: { from: string; to: string }; gateways: string[]; nights: [number, number]; deals: Deal[] };
+
 /** Visa requirements (public/data/visa.json): one character per destination per passport. */
 export type VisaFile = {
   updated: string;

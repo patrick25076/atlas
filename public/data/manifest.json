@@ -205,5 +205,14 @@
     "fetchedAt": "2026-10-09T20:19:51.993Z",
     "rows": 3329,
     "file": "public/data/ground-graph.json"
+  },
+  "deals": {
+    "source": "Kiwi.com flight search (public MCP)",
+    "url": "https://mcp.kiwi.com/",
+    "licence": "Kiwi.com public MCP, no key; prices and booking links as returned",
+    "note": "Cheapest return getaways 2026-10-11 to 2026-11-25, 2-7 nights, from OTP, CLJ, IAS, TSR. 0 routes failed.",
+    "fetchedAt": "2026-10-09T22:56:56.756Z",
+    "rows": 1287,
+    "file": "public/data/deals.json"
   }
 }

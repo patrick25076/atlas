@@ -24,12 +24,16 @@
     "ingest:heritage": "tsx scripts/ingest/heritage.ts",
     "ingest:ferries": "tsx scripts/ingest/ferries.ts",
     "ingest:visa": "tsx scripts/ingest/visa.ts",
+    "ingest:deals": "tsx scripts/ingest/deals.ts",
+    "ingest:oneway": "tsx scripts/ingest/oneway.ts",
     "check:tp": "tsx scripts/check-travelpayouts.ts"
   },
   "dependencies": {
+    "@ai-sdk/amazon-bedrock": "^5.0.113",
     "@deck.gl/core": "9.4.0",
     "@deck.gl/layers": "9.4.0",
     "@deck.gl/maplibre": "9.4.0",
+    "ai": "^7.0.135",
     "fflate": "^0.8.3",
     "maplibre-gl": "6.13.0",
     "next": "16.4.0",

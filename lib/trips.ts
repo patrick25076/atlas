@@ -8,6 +8,15 @@ import { reachFrom, type ReachResult } from "./ground";
 import { allFares, hasToken } from "./travelpayouts";
 import type { City, Fare } from "./types";
 
+// Without a Travelpayouts token, the nightly Kiwi one-way file (scripts/ingest/oneway.ts) prices
+// the trips. The placeholder file has no fares until the ingest has run.
+import onewayJson from "@/public/data/oneway.json";
+type OnewayFile = { updated: string; window: { from: string; to: string }; gateways: string[]; fares: Fare[] };
+const ONEWAY = onewayJson as unknown as OnewayFile;
+async function loadOneway(): Promise<OnewayFile | null> {
+  return ONEWAY.fares.length ? ONEWAY : null;
+}
+
 const CITIES: Record<string, City> = citiesJson;
 const cityOf = new Map<string, string>();
 for (const [code, c] of Object.entries(CITIES)) for (const a of c.airports) cityOf.set(a, code);
@@ -148,10 +157,15 @@ function tripCity(code: string): TripCity {
 
 export async function findTrips(params: TripParams): Promise<TripsResult> {
   const generatedAt = new Date().toISOString();
-  if (!hasToken()) {
-    return { status: "no-token", note: "Trips need cached fares: set TRAVELPAYOUTS_TOKEN (SETUP.md §2).", trips: [], generatedAt };
+  const oneway = hasToken() ? null : await loadOneway();
+  if (!hasToken() && !oneway) {
+    return { status: "no-token", note: "Trips need fares: run pnpm ingest:oneway (Kiwi) or set TRAVELPAYOUTS_TOKEN (SETUP.md §2).", trips: [], generatedAt };
   }
   const { gateways, home, days, around, maxGroundMin, limit } = params;
+  const faresFor = async (q: { origin?: string; destination?: string }): Promise<Fare[]> => {
+    if (!oneway) return allFares(q);
+    return oneway.fares.filter((f) => (q.origin ? f.src === q.origin : f.dst === q.destination));
+  };
   const leavesAround = (date: string) => {
     if (!around) return true;
     const gap = daysBetween(around, date);
@@ -164,7 +178,7 @@ export async function findTrips(params: TripParams): Promise<TripsResult> {
   const inByCity = new Map<string, (Fare & { gateway: GatewayInput })[]>();
   await Promise.all(
     gateways.flatMap((g) => [
-      allFares({ origin: g.iata }).then((fares) => {
+      faresFor({ origin: g.iata }).then((fares) => {
         for (const f of fares) {
           const city = cityOf.get(f.dst) ?? f.dst;
           if (!CITIES[city] || CITIES[city].country === home) continue;
@@ -173,7 +187,7 @@ export async function findTrips(params: TripParams): Promise<TripsResult> {
           else outByCity.set(city, [{ ...f, gateway: g }]);
         }
       }),
-      allFares({ destination: g.iata }).then((fares) => {
+      faresFor({ destination: g.iata }).then((fares) => {
         for (const f of fares) {
           const city = cityOf.get(f.src) ?? f.src;
           if (!CITIES[city] || CITIES[city].country === home) continue;

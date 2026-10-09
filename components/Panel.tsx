@@ -10,6 +10,8 @@ import type {
   Airport,
   CityPlaces,
   CountryInfo,
+  Deal,
+  DealsFile,
   Destination,
   FaresResponse,
   Gateway,
@@ -19,6 +21,24 @@ import type {
   WeatherDay,
 } from "@/lib/types";
 import { countryName, type Origin } from "./Globe";
+
+export type View = "deals" | "all" | "fly" | "ground" | "trips";
+export type Band = "all" | "short" | "medium" | "long";
+export type DealNights = "any" | "2-3" | "4-5" | "6-7";
+export const BANDS: { key: Band; label: string; test: (min: number) => boolean }[] = [
+  { key: "all", label: "All", test: () => true },
+  { key: "short", label: "Under 2h", test: (m) => m < 120 },
+  { key: "medium", label: "2 to 5h", test: (m) => m >= 120 && m < 300 },
+  { key: "long", label: "5h and more", test: (m) => m >= 300 },
+];
+
+export const MODE_LABEL: Record<PlaceMode, string> = { plane: "Fly", rail: "Train", coach: "Coach", ferry: "Ferry", other: "Ride" };
+const MODE_TAG: Record<string, string> = { plane: "FLY", rail: "TRN", coach: "BUS", ferry: "FRY", walk: "WLK", other: "···" };
+const GROUND_TAG: Record<string, string> = { rail: "TRN", coach: "BUS", ferry: "FRY", walk: "WLK" };
+
+export function dealKey(d: Deal): string {
+  return `${d.gw}|${d.dst}|${d.out}`;
+}
 
 /** Everything we know about the selected place's city and country. */
 export type Intel = {
@@ -36,37 +56,6 @@ export type Intel = {
   heritage?: { name: string; km: number }[];
   visa?: { passport: string; text: string | null; updated: string };
 };
-
-function people(n: number): string {
-  return n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M` : n >= 1000 ? `${Math.round(n / 1000)}k` : String(n);
-}
-
-const PLACE_LABELS: [keyof CityPlaces, string][] = [
-  ["food", "restaurants"],
-  ["cafe", "cafés"],
-  ["bar", "bars"],
-  ["night", "nightlife"],
-  ["culture", "culture"],
-  ["nature", "parks & nature"],
-  ["shop", "shopping"],
-  ["stay", "places to stay"],
-];
-
-function count(n: number): string {
-  return n >= 1000 ? `${(n / 1000).toFixed(n >= 10000 ? 0 : 1)}k` : String(n);
-}
-
-export type View = "all" | "fly" | "ground" | "trips";
-export type Band = "all" | "short" | "medium" | "long";
-export const BANDS: { key: Band; label: string; test: (min: number) => boolean }[] = [
-  { key: "all", label: "All", test: () => true },
-  { key: "short", label: "Under 2h", test: (m) => m < 120 },
-  { key: "medium", label: "2 to 5h", test: (m) => m >= 120 && m < 300 },
-  { key: "long", label: "5h and more", test: (m) => m >= 300 },
-];
-
-export const MODE_LABEL: Record<PlaceMode, string> = { plane: "Fly", rail: "Train", coach: "Coach", ferry: "Ferry", other: "Ride" };
-const MODE_TAG: Record<string, string> = { plane: "FLY", rail: "TRN", coach: "BUS", ferry: "FRY", walk: "WLK", other: "···" };
 
 type Props = {
   origin: Origin | null;
@@ -112,9 +101,39 @@ type Props = {
   homeHolidays: Holiday[];
   around: string | null;
   onAround: (d: string | null) => void;
+  dealsFile: DealsFile | null;
+  deals: Deal[];
+  deal: Deal | null;
+  dealOptions: Deal[];
+  onDeal: (key: string | null) => void;
+  dealNights: DealNights;
+  onDealNights: (n: DealNights) => void;
+  directOnly: boolean;
+  onDirectOnly: (v: boolean) => void;
+  dealGateway: string;
+  onDealGateway: (g: string) => void;
+  thumbs: Record<string, string>;
+  whyOf: (d: Deal) => string;
 };
 
-const GROUND_TAG: Record<string, string> = { rail: "TRN", coach: "BUS", ferry: "FRY", walk: "WLK" };
+const PLACE_LABELS: [keyof CityPlaces, string][] = [
+  ["food", "restaurants"],
+  ["cafe", "cafés"],
+  ["bar", "bars"],
+  ["night", "nightlife"],
+  ["culture", "culture"],
+  ["nature", "parks & nature"],
+  ["shop", "shopping"],
+  ["stay", "places to stay"],
+];
+
+function count(n: number): string {
+  return n >= 1000 ? `${(n / 1000).toFixed(n >= 10000 ? 0 : 1)}k` : String(n);
+}
+
+function people(n: number): string {
+  return n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M` : n >= 1000 ? `${Math.round(n / 1000)}k` : String(n);
+}
 
 function glyph(sym: string): string {
   if (sym.includes("thunder")) return "⛈";
@@ -134,6 +153,52 @@ function weekday(iso: string): string {
 
 function rate(r: number): string {
   return r >= 100 ? r.toFixed(0) : r >= 10 ? r.toFixed(1) : r.toFixed(2);
+}
+
+function shortDate(iso: string): string {
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? iso : d.toLocaleDateString("en-GB", { day: "numeric", month: "short" });
+}
+
+function dateRange(a: string, b: string): string {
+  const da = new Date(a);
+  const db = new Date(b);
+  if (Number.isNaN(da.getTime()) || Number.isNaN(db.getTime())) return `${a} to ${b}`;
+  const sameMonth = da.getMonth() === db.getMonth();
+  return sameMonth ? `${da.getDate()} to ${shortDate(b)}` : `${shortDate(a)} to ${shortDate(b)}`;
+}
+
+function stops(n: number): string {
+  return n ? `${n} stop${n === 1 ? "" : "s"}` : "direct";
+}
+
+function changes(n: number | undefined): string {
+  return n ? `${n} change${n === 1 ? "" : "s"}` : "direct";
+}
+
+function searchAirports(airports: Airport[], q: string): Airport[] {
+  const s = q.trim().toLowerCase();
+  if (s.length < 2) return [];
+  const exact = airports.filter((a) => a.iata.toLowerCase() === s);
+  const rest = airports.filter(
+    (a) => a.iata.toLowerCase() !== s && (a.name.toLowerCase().includes(s) || (a.city ?? "").toLowerCase().includes(s)),
+  );
+  const rank = (a: Airport) => (a.size === "large" ? 0 : a.size === "medium" ? 1 : 2);
+  rest.sort((a, b) => rank(a) - rank(b));
+  return [...exact, ...rest].slice(0, 6);
+}
+
+function Chips(p: { band: Band; onBand: (b: Band) => void; children?: React.ReactNode }) {
+  return (
+    <div className="chips">
+      {BANDS.map((b) => (
+        <button key={b.key} className={`chip${p.band === b.key ? " on" : ""}`} onClick={() => p.onBand(b.key)}>
+          {b.label}
+        </button>
+      ))}
+      {p.children}
+    </div>
+  );
 }
 
 function PlaceIntel({ intel, summary }: { intel: Intel; summary: PlaceSummary | null }) {
@@ -219,9 +284,7 @@ function PlaceIntel({ intel, summary }: { intel: Intel; summary: PlaceSummary | 
       </div>
       {intel.heritage && intel.heritage.length > 0 && (
         <div className="facts" title="UNESCO World Heritage Sites via Wikidata (CC0), within 60 km">
-          <span>
-            World Heritage nearby: {intel.heritage.map((h) => `${h.name} (${h.km} km)`).join(" · ")}
-          </span>
+          <span>World Heritage nearby: {intel.heritage.map((h) => `${h.name} (${h.km} km)`).join(" · ")}</span>
         </div>
       )}
       {intel.places && (
@@ -246,50 +309,13 @@ function PlaceIntel({ intel, summary }: { intel: Intel; summary: PlaceSummary | 
   );
 }
 
-function shortDate(iso: string): string {
-  const d = new Date(iso);
-  return Number.isNaN(d.getTime()) ? iso : d.toLocaleDateString("en-GB", { day: "numeric", month: "short" });
-}
-
-function stops(n: number): string {
-  return n ? `${n} stop${n === 1 ? "" : "s"}` : "direct";
-}
-
-function changes(n: number | undefined): string {
-  return n ? `${n} change${n === 1 ? "" : "s"}` : "direct";
-}
-
-function searchAirports(airports: Airport[], q: string): Airport[] {
-  const s = q.trim().toLowerCase();
-  if (s.length < 2) return [];
-  const exact = airports.filter((a) => a.iata.toLowerCase() === s);
-  const rest = airports.filter(
-    (a) => a.iata.toLowerCase() !== s && (a.name.toLowerCase().includes(s) || (a.city ?? "").toLowerCase().includes(s)),
-  );
-  const rank = (a: Airport) => (a.size === "large" ? 0 : a.size === "medium" ? 1 : 2);
-  rest.sort((a, b) => rank(a) - rank(b));
-  return [...exact, ...rest].slice(0, 6);
-}
-
-function Chips(p: { band: Band; onBand: (b: Band) => void; children?: React.ReactNode }) {
-  return (
-    <div className="chips">
-      {BANDS.map((b) => (
-        <button key={b.key} className={`chip${p.band === b.key ? " on" : ""}`} onClick={() => p.onBand(b.key)}>
-          {b.label}
-        </button>
-      ))}
-      {p.children}
-    </div>
-  );
-}
-
 export default function Panel(p: Props) {
   const [query, setQuery] = useState("");
   const [copied, setCopied] = useState(false);
   const hits = useMemo(() => searchAirports(p.airports, query), [p.airports, query]);
   const selected = p.selectedDest ? p.destinations.find((d) => d.airport.iata === p.selectedDest) : null;
   const place = p.selectedPlace ? p.places.find((x) => x.key === p.selectedPlace) : null;
+  const tab: "deals" | "explore" | "trips" = p.view === "deals" ? "deals" : p.view === "trips" ? "trips" : "explore";
 
   return (
     <aside className="panel">
@@ -351,22 +377,127 @@ export default function Panel(p: Props) {
         </div>
       )}
 
-      <div className="chips">
-        <button className={`chip${p.view === "all" ? " on" : ""}`} onClick={() => p.onView("all")}>
-          Any way
+      <div className="tabs">
+        <button className={`tab${tab === "deals" ? " on" : ""}`} onClick={() => p.onView("deals")}>
+          Deals
         </button>
-        <button className={`chip${p.view === "fly" ? " on" : ""}`} onClick={() => p.onView("fly")}>
-          By air
+        <button className={`tab${tab === "explore" ? " on" : ""}`} onClick={() => p.onView("all")}>
+          Explore
         </button>
-        <button className={`chip${p.view === "ground" ? " on" : ""}`} onClick={() => p.onView("ground")}>
-          By land and sea
-        </button>
-        <button className={`chip${p.view === "trips" ? " on" : ""}`} onClick={() => p.onView("trips")}>
+        <button className={`tab${tab === "trips" ? " on" : ""}`} onClick={() => p.onView("trips")}>
           Trips
         </button>
       </div>
 
-      {p.view === "trips" && (
+      {tab === "deals" && (
+        <>
+          {p.deal ? (
+            <>
+              <div className="hero">
+                {p.deal.city} for <b>€{p.deal.price}</b> return
+              </div>
+              <div className="status">
+                {p.deal.nights} nights, {dateRange(p.deal.out, p.deal.back)}, from {p.deal.gw}. {stops(p.deal.stops)}, {p.deal.carriers.join(" + ")},{" "}
+                {formatDuration(p.deal.outMin)} out and {formatDuration(p.deal.backMin)} back.
+                {p.deal.bags ? ` ${p.deal.bags} included.` : ""} Price as found on Kiwi.com {p.dealsFile ? shortDate(p.dealsFile.updated) : ""}; the live
+                one is on the booking page.
+              </div>
+              <div>
+                <a className="book" href={p.deal.url} target="_blank" rel="noreferrer">
+                  Book on Kiwi.com ↗
+                </a>
+              </div>
+              {p.dealOptions.length > 1 && (
+                <div className="chips">
+                  {p.dealOptions.map((d) => (
+                    <button
+                      key={dealKey(d)}
+                      className={`chip${dealKey(d) === dealKey(p.deal!) ? " on" : ""}`}
+                      onClick={() => p.onDeal(dealKey(d))}
+                      title={`${d.nights} nights from ${d.gw}, ${stops(d.stops)}`}
+                    >
+                      €{d.price} · {dateRange(d.out, d.back)} · {d.gw}
+                    </button>
+                  ))}
+                </div>
+              )}
+              {p.intel && <PlaceIntel intel={p.intel} summary={p.summary} />}
+              <div className="chips">
+                <button className="chip" onClick={() => p.onDeal(null)}>
+                  ← All deals
+                </button>
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="hero">
+                Cheapest getaways, <b>{p.deals.length}</b> cities
+              </div>
+              <div className="status">
+                {p.dealsFile
+                  ? `Return flights, ${p.dealsFile.nights[0]} to ${p.dealsFile.nights[1]} nights, ${dateRange(p.dealsFile.window.from, p.dealsFile.window.to)}, from ${p.dealsFile.gateways.join(", ")}. Searched on Kiwi.com ${shortDate(p.dealsFile.updated)}, refreshed nightly.`
+                  : "No deals file yet. Run pnpm ingest:deals."}
+              </div>
+              <div className="chips">
+                {(["any", "2-3", "4-5", "6-7"] as DealNights[]).map((n) => (
+                  <button key={n} className={`chip${p.dealNights === n ? " on" : ""}`} onClick={() => p.onDealNights(n)}>
+                    {n === "any" ? "Any length" : `${n} nights`}
+                  </button>
+                ))}
+                <button className={`chip${p.directOnly ? " on" : ""}`} onClick={() => p.onDirectOnly(!p.directOnly)}>
+                  Direct only
+                </button>
+                {p.weatherReady && (
+                  <button className={`chip${p.warmOnly ? " on" : ""}`} onClick={() => p.onWarmOnly(!p.warmOnly)} title="At least 20 °C this weekend">
+                    Warm
+                  </button>
+                )}
+              </div>
+              {p.dealsFile && p.dealsFile.gateways.length > 1 && (
+                <div className="chips">
+                  <button className={`chip${p.dealGateway === "all" ? " on" : ""}`} onClick={() => p.onDealGateway("all")}>
+                    Any airport
+                  </button>
+                  {p.dealsFile.gateways.map((g) => (
+                    <button key={g} className={`chip${p.dealGateway === g ? " on" : ""}`} onClick={() => p.onDealGateway(g)}>
+                      {g}
+                    </button>
+                  ))}
+                </div>
+              )}
+              <div className="scroll cards">
+                {p.deals.map((d) => (
+                  <div key={dealKey(d)} className="card" onClick={() => p.onDeal(dealKey(d))}>
+                    <div className="thumb" style={p.thumbs[d.city] ? { backgroundImage: `url(${p.thumbs[d.city]})` } : undefined} />
+                    <div className="cardbody">
+                      <div className="cardtop">
+                        <span className="cardtitle">
+                          {d.city}
+                          <span className="sub">{countryName(d.country)}</span>
+                        </span>
+                        <span className="price">
+                          €{d.price}
+                          <span className="sub">return</span>
+                        </span>
+                      </div>
+                      <div className="sub">
+                        {d.nights} nights · {dateRange(d.out, d.back)} · from {d.gw}
+                      </div>
+                      <div className="sub">
+                        {stops(d.stops)} · {d.carriers[0]} · {formatDuration(d.outMin)}
+                      </div>
+                      {p.whyOf(d) && <div className="why">{p.whyOf(d)}</div>}
+                    </div>
+                  </div>
+                ))}
+                {p.dealsFile && p.deals.length === 0 && <div className="status">Nothing matches these filters.</div>}
+              </div>
+            </>
+          )}
+        </>
+      )}
+
+      {tab === "trips" && (
         <>
           <div className="status">
             Fly out, move between cities by train or coach, fly home from the last one. Ranked by value: countries and
@@ -455,7 +586,7 @@ export default function Panel(p: Props) {
             {!p.trips
               ? "Searching flights out, trains between, flights home…"
               : p.trips.status === "no-token"
-                ? "Trips need cached fares: add the Travelpayouts token (SETUP §2)."
+                ? "Multi-city trips need cached fares: add the Travelpayouts token (SETUP §2)."
                 : p.trips.status === "error"
                   ? `Trip search failed: ${p.trips.note}`
                   : p.trips.trips.length === 0
@@ -483,6 +614,20 @@ export default function Panel(p: Props) {
             ))}
           </div>
         </>
+      )}
+
+      {tab === "explore" && (
+        <div className="chips">
+          <button className={`chip${p.view === "all" ? " on" : ""}`} onClick={() => p.onView("all")}>
+            Any way
+          </button>
+          <button className={`chip${p.view === "fly" ? " on" : ""}`} onClick={() => p.onView("fly")}>
+            By air
+          </button>
+          <button className={`chip${p.view === "ground" ? " on" : ""}`} onClick={() => p.onView("ground")}>
+            By land and sea
+          </button>
+        </div>
       )}
 
       {p.view === "all" && (
@@ -549,7 +694,7 @@ export default function Panel(p: Props) {
               ? ""
               : !p.reach && p.totalPlaces === 0
                 ? "Searching flights, trains and coaches…"
-                : `Door-to-door estimates by air, train and coach within 10 h.${p.anyFares ? " Prices are cached one-way fares." : ""}`}
+                : `Door-to-door estimates by air, train, coach and ferry within 10 h.${p.anyFares ? " Prices are cached one-way fares." : ""}`}
           </div>
           <Chips band={p.band} onBand={p.onBand}>
             <button className={`chip${p.bigOnly ? " on" : ""}`} onClick={() => p.onBigOnly(!p.bigOnly)}>
@@ -596,7 +741,7 @@ export default function Panel(p: Props) {
         <>
           <h2>Nearest stations</h2>
           <div>
-            {!p.reach && <div className="status">Searching the rail and coach network…</div>}
+            {!p.reach && <div className="status">Searching the rail, coach and ferry network…</div>}
             {p.reach?.starts.slice(0, 4).map((s) => (
               <div key={s.id} className="row">
                 <span className="code">{formatDuration(s.minutes)}</span>
@@ -626,8 +771,11 @@ export default function Panel(p: Props) {
               >
                 <span className="code">{MODE_TAG[s.mode] ?? s.mode}</span>
                 <span>
-                  <div className="name">{s.name}</div>
-                  <div className="sub">{changes(s.changes)}</div>
+                  <div className="name">{s.town || s.name}</div>
+                  <div className="sub">
+                    {s.town && s.town !== s.name ? `${s.name} · ` : ""}
+                    {changes(s.changes)}
+                  </div>
                 </span>
                 <span className="meta">
                   <strong>{formatDuration(s.minutes)}</strong>
@@ -723,7 +871,7 @@ export default function Panel(p: Props) {
               : p.fares.status === "ok"
                 ? `Cheapest cached one-way fares, next 3 months: ${p.fares.fares.length} priced.`
                 : p.fares.status === "no-token"
-                  ? "No fares yet: add the Travelpayouts token (SETUP §2)."
+                  ? "Route map from the 2014 network; live one-way fares need the Travelpayouts token (SETUP §2). For priced getaways use the Deals tab."
                   : `Fares unavailable: ${p.fares.note ?? "error"}`}
           </div>
           <Chips band={p.band} onBand={p.onBand}>
