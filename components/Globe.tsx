@@ -185,42 +185,45 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
   const [days, setDays] = useState(5);
 
   // Static data, produced by scripts/ingest and committed under public/data. A file that an
-  // ingest has not produced yet is simply absent, never a broken globe.
+  // ingest has not produced yet is simply absent, never a broken globe. The Deals tab needs
+  // about 1.5 MB; the rest (the 2014 route network, holidays, visa, heritage, place counts)
+  // loads the first time a card is opened or another tab is chosen.
+  const extrasLoaded = useRef(false);
+  const load = (f: string) =>
+    fetch(`/data/${f}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .catch(() => null);
   useEffect(() => {
-    const load = (f: string) =>
-      fetch(`/data/${f}`)
-        .then((r) => (r.ok ? r.json() : null))
-        .catch(() => null);
-    Promise.all([
-      load("airports.json"),
-      load("routes-openflights.json"),
-      load("airlines.json"),
-      load("cities.json"),
-      load("manifest.json"),
-      load("countries.json"),
-      load("holidays.json"),
-      load("weather.json"),
-      load("city-places.json"),
-      load("heritage.json"),
-      load("visa.json"),
-      load("deals.json"),
-    ]).then(([a, r, al, c, m, co, h, w, cp, he, vi, de]) => {
-      setAirports(a ?? []);
-      setRoutes(r ?? []);
-      setAirlines(al ?? {});
-      setCities(c ?? {});
-      setManifest(m);
-      setCountries(co ?? {});
-      setHolidays(h ?? {});
-      setWeather(w && (w as WeatherCompact).syms ? expandWeather(w as WeatherCompact) : null);
-      setCityPlaces(cp ?? {});
-      setHeritage(he ?? []);
-      setVisa(vi);
-      setDealsFile(de);
-      // No deals file yet (first run): open on Explore rather than an empty Deals tab.
-      if (!de?.deals?.length) setView((v) => (v === "deals" ? "all" : v));
-    });
+    Promise.all([load("airports.json"), load("cities.json"), load("countries.json"), load("weather.json"), load("deals.json"), load("manifest.json")]).then(
+      ([a, c, co, w, de, m]) => {
+        setAirports(a ?? []);
+        setCities(c ?? {});
+        setCountries(co ?? {});
+        setWeather(w && (w as WeatherCompact).syms ? expandWeather(w as WeatherCompact) : null);
+        setDealsFile(de);
+        setManifest(m);
+        // No deals file yet (first run): open on Explore rather than an empty Deals tab.
+        if (!de?.deals?.length) setView((v) => (v === "deals" ? "all" : v));
+      },
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+  useEffect(() => {
+    if (extrasLoaded.current) return;
+    if (view === "deals" && !selectedDeal) return;
+    extrasLoaded.current = true;
+    Promise.all([load("routes-openflights.json"), load("airlines.json"), load("holidays.json"), load("city-places.json"), load("heritage.json"), load("visa.json")]).then(
+      ([r, al, h, cp, he, vi]) => {
+        setRoutes(r ?? []);
+        setAirlines(al ?? {});
+        setHolidays(h ?? {});
+        setCityPlaces(cp ?? {});
+        setHeritage(he ?? []);
+        setVisa(vi);
+      },
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [view, selectedDeal]);
 
   // The address bar follows the globe, so any view is a link: ?from=lat,lon,label&view=all&place=air:BUH
   useEffect(() => {
