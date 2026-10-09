@@ -23,8 +23,9 @@ const CLUTTER = [
 ];
 const PANEL_PADDING = { left: 380, top: 60, right: 60, bottom: 60 };
 
-export type Origin = { lat: number; lon: number; label: string; source: "gps" | "default" | "search" };
+export type Origin = { lat: number; lon: number; label: string; source: "gps" | "ip" | "default" | "search" };
 const DEFAULT_ORIGIN: Origin = { lat: 45.6579, lon: 25.6012, label: "Brașov", source: "default" };
+export type LocationHint = { lat: number; lon: number; label: string };
 
 type RGBA = [number, number, number, number];
 export function arcColor(min: number): RGBA {
@@ -80,7 +81,7 @@ function tooltip(info: PickingInfo): null | { html: string; style: Record<string
   };
 }
 
-export default function Globe() {
+export default function Globe({ hint }: { hint?: LocationHint | null }) {
   const mapEl = useRef<HTMLDivElement>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
   const overlayRef = useRef<MapLibreOverlay | null>(null);
@@ -88,6 +89,7 @@ export default function Globe() {
 
   const [airports, setAirports] = useState<Airport[]>([]);
   const [routes, setRoutes] = useState<Route[]>([]);
+  const [airlines, setAirlines] = useState<Record<string, string>>({});
   const [manifest, setManifest] = useState<Manifest | null>(null);
   const [origin, setOrigin] = useState<Origin | null>(null);
   const [gatewayIata, setGatewayIata] = useState<string | null>(null);
@@ -99,26 +101,32 @@ export default function Globe() {
   // Static data, produced by scripts/ingest and committed under public/data.
   useEffect(() => {
     const load = (f: string) => fetch(`/data/${f}`).then((r) => r.json());
-    Promise.all([load("airports.json"), load("routes-openflights.json"), load("manifest.json")]).then(
-      ([a, r, m]) => {
+    Promise.all([load("airports.json"), load("routes-openflights.json"), load("airlines.json"), load("manifest.json")]).then(
+      ([a, r, al, m]) => {
         setAirports(a);
         setRoutes(r);
+        setAirlines(al);
         setManifest(m);
       },
     );
   }, []);
 
-  // Where the user is. Falls back to a fixed city so the globe always has a story to tell.
+  // Where the user is: the network hint at once, the browser's position when allowed, a fixed
+  // city when neither exists, so the globe always has a story to tell.
   useEffect(() => {
+    const fallback: Origin = hint ? { ...hint, source: "ip" } : DEFAULT_ORIGIN;
     if (typeof navigator === "undefined" || !navigator.geolocation) {
-      setOrigin(DEFAULT_ORIGIN);
+      setOrigin(fallback);
       return;
     }
+    if (hint) setOrigin(fallback);
     navigator.geolocation.getCurrentPosition(
       (p) => setOrigin({ lat: p.coords.latitude, lon: p.coords.longitude, label: "your location", source: "gps" }),
-      () => setOrigin(DEFAULT_ORIGIN),
+      () => setOrigin((o) => o ?? fallback),
       { timeout: 8000, maximumAge: 600_000 },
     );
+    // The hint comes from the server render and never changes afterwards.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const byIata = useMemo(() => new Map(airports.map((a) => [a.iata, a])), [airports]);
@@ -378,6 +386,7 @@ export default function Globe() {
         selectedDest={selectedDest}
         onDest={focusDestination}
         fares={fares}
+        airlines={airlines}
         pricedOnly={pricedOnly}
         onPricedOnly={setPricedOnly}
         onOrigin={(a) => {

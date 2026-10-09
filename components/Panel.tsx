@@ -28,6 +28,7 @@ type Props = {
   onDest: (iata: string | null) => void;
   onOrigin: (a: Airport) => void;
   fares: FaresResponse | null;
+  airlines: Record<string, string>;
   pricedOnly: boolean;
   onPricedOnly: (v: boolean) => void;
 };
@@ -65,6 +66,7 @@ export default function Panel(p: Props) {
           <>
             From <b>{p.origin.label}</b>
             {p.origin.source === "default" && " (location off, showing a default)"}
+            {p.origin.source === "ip" && " (roughly, from your network)"}
             {p.origin.source === "gps" && " (GPS)"}
           </>
         ) : (
@@ -148,7 +150,7 @@ export default function Panel(p: Props) {
           {selected.fare ? (
             <div className="status">
               €{selected.fare.price} one way on {shortDate(selected.fare.departureAt)}
-              {selected.fare.airline ? ` with ${selected.fare.airline}` : ""}, {stops(selected.fare.transfers)}, ~
+              {selected.fare.airline ? ` with ${p.airlines[selected.fare.airline] ?? selected.fare.airline}` : ""}, {stops(selected.fare.transfers)}, ~
               {formatDuration(selected.fare.durationMin ?? flightMinutes(selected.km))}. Cached from recent Aviasales searches; the live price is on the
               booking page.{" "}
               <a href={selected.fare.url} target="_blank" rel="noreferrer">

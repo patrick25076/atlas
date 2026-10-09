@@ -25,5 +25,14 @@
     "fetchedAt": "2026-10-09T17:27:30.985Z",
     "rows": 3159,
     "file": "public/data/city-airports.json"
+  },
+  "airlines": {
+    "source": "Travelpayouts airlines.json",
+    "url": "https://api.travelpayouts.com/data/en/airlines.json",
+    "licence": "Travelpayouts static data (free for partner use)",
+    "note": "IATA airline code → name.",
+    "fetchedAt": "2026-10-09T17:30:04.719Z",
+    "rows": 1159,
+    "file": "public/data/airlines.json"
   }
 }
