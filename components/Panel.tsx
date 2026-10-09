@@ -523,7 +523,9 @@ export default function Panel(p: Props) {
               </div>
               <div className="status">
                 {p.dealsFile
-                  ? `Return flights, ${p.dealsFile.nights[0]} to ${p.dealsFile.nights[1]} nights, ${dateRange(p.dealsFile.window.from, p.dealsFile.window.to)}, from ${p.dealGateways.join(", ")}. Searched on Kiwi.com ${shortDate(p.dealsFile.updated)}, refreshed nightly.`
+                  ? `Return flights, ${p.dealsFile.nights[0]} to ${p.dealsFile.nights[1]} nights, ${dateRange(p.dealsFile.window.from, p.dealsFile.window.to)}, from ${p.dealGateways.join(", ")}. Searched on Kiwi.com ${shortDate(p.dealsFile.updated)}${
+                      Date.now() - Date.parse(p.dealsFile.updated) > 2.5 * 86_400_000 ? " (older than usual; the nightly search may be failing)" : ", refreshed nightly"
+                    }.`
                   : "No deals file yet. Run pnpm ingest:deals."}
               </div>
               <div className="chips">

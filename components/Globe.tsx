@@ -1098,7 +1098,7 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
       <div ref={mapEl} className="map" />
       <div className="brand">
         <h1>Atlas</h1>
-        <span>where can you go from here</span>
+        <span>cheapest getaways from where you are</span>
       </div>
       <Panel
         origin={origin}
