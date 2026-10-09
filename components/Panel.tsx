@@ -55,6 +55,7 @@ export type Intel = {
   pop?: number;
   heritage?: { name: string; km: number }[];
   visa?: { passport: string; text: string | null; updated: string };
+  events?: { name: string; date: string; venue?: string; kind?: string; url: string }[];
 };
 
 type Props = {
@@ -289,6 +290,22 @@ function PlaceIntel({ intel, summary }: { intel: Intel; summary: PlaceSummary | 
           </span>
         )}
       </div>
+      {intel.events && intel.events.length > 0 && (
+        <div className="facts" title="Ticketmaster Discovery, next 30 days, within 40 km">
+          <span>
+            On:{" "}
+            {intel.events.slice(0, 4).map((e, i) => (
+              <span key={e.url}>
+                {i ? " · " : ""}
+                <a href={e.url} target="_blank" rel="noreferrer">
+                  {e.name}
+                </a>{" "}
+                {shortDate(e.date)}
+              </span>
+            ))}
+          </span>
+        </div>
+      )}
       {intel.heritage && intel.heritage.length > 0 && (
         <div className="facts" title="UNESCO World Heritage Sites via Wikidata (CC0), within 60 km">
           <span>World Heritage nearby: {intel.heritage.map((h) => `${h.name} (${h.km} km)`).join(" · ")}</span>

@@ -164,6 +164,7 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
   const [ask, setAsk] = useState<{ status: string; text: string; used: string[]; note?: string; question: string } | null>(null);
   const [asking, setAsking] = useState(false);
   const [askOnly, setAskOnly] = useState(true);
+  const [events, setEvents] = useState<{ name: string; date: string; venue?: string; kind?: string; url: string }[]>([]);
   const [manifest, setManifest] = useState<Manifest | null>(null);
   const [summary, setSummary] = useState<PlaceSummary | null>(null);
   const [warmOnly, setWarmOnly] = useState(false);
@@ -590,8 +591,22 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
         .filter((h) => h.km <= 60)
         .sort((a, b) => a.km - b.km)
         .slice(0, 3),
+      events,
     };
-  }, [target, cities, countries, weather, holidays, cityPlaces, heritage, visa, gateways]);
+  }, [target, cities, countries, weather, holidays, cityPlaces, heritage, visa, gateways, events]);
+
+  // Events near the selected city (Ticketmaster, when the key exists; silent otherwise).
+  useEffect(() => {
+    setEvents([]);
+    if (!target) return;
+    const ctrl = new AbortController();
+    fetch(`/api/events?lat=${target.lat.toFixed(3)}&lon=${target.lon.toFixed(3)}&days=30`, { signal: ctrl.signal })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j: { status: string; events?: typeof events } | null) => setEvents(j?.status === "ok" ? (j.events ?? []) : []))
+      .catch(() => {});
+    return () => ctrl.abort();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [target?.code, target?.lat, target?.lon]);
 
   // One paragraph from Wikivoyage for the selected city, by name.
   useEffect(() => {
