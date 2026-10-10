@@ -6,6 +6,7 @@ import citiesJson from "@/public/data/cities.json";
 import { flightMinutes, haversineKm } from "./geo";
 import { reachFrom, type ReachResult } from "./ground";
 import { allFares, hasToken } from "./travelpayouts";
+import { countryAllowed } from "./been";
 import type { City, Fare } from "./types";
 
 // Without a Travelpayouts token, the nightly Kiwi one-way file (scripts/ingest/oneway.ts) prices
@@ -61,6 +62,8 @@ export type TripParams = {
   around?: string;
   maxGroundMin: number;
   limit: number;
+  /** ISO2 countries that never host a night (the Been list with "only new countries" on). A flight through one is fine. */
+  exclude?: string[];
 };
 
 export type TripCity = { code: string; name: string; country: string; lat: number; lon: number };
@@ -161,7 +164,9 @@ export async function findTrips(params: TripParams): Promise<TripsResult> {
   if (!hasToken() && !oneway) {
     return { status: "no-token", note: "Trips need fares: run pnpm ingest:oneway (Kiwi) or set TRAVELPAYOUTS_TOKEN (SETUP.md §2).", trips: [], generatedAt };
   }
-  const { gateways, home, days, around, maxGroundMin, limit } = params;
+  const { gateways, home, days, around, maxGroundMin, limit, exclude = [] } = params;
+  // Entry and exit cities must be abroad and, when the traveller wants only new countries, unvisited.
+  const usable = (city: string) => !!CITIES[city] && CITIES[city].country !== home && countryAllowed(CITIES[city].country, exclude);
   const faresFor = async (q: { origin?: string; destination?: string }): Promise<Fare[]> => {
     if (!oneway) return allFares(q);
     return oneway.fares.filter((f) => (q.origin ? f.src === q.origin : f.dst === q.destination));
@@ -181,7 +186,7 @@ export async function findTrips(params: TripParams): Promise<TripsResult> {
       faresFor({ origin: g.iata }).then((fares) => {
         for (const f of fares) {
           const city = cityOf.get(f.dst) ?? f.dst;
-          if (!CITIES[city] || CITIES[city].country === home) continue;
+          if (!usable(city)) continue;
           const list = outByCity.get(city);
           if (list) list.push({ ...f, gateway: g });
           else outByCity.set(city, [{ ...f, gateway: g }]);
@@ -190,7 +195,7 @@ export async function findTrips(params: TripParams): Promise<TripsResult> {
       faresFor({ destination: g.iata }).then((fares) => {
         for (const f of fares) {
           const city = cityOf.get(f.src) ?? f.src;
-          if (!CITIES[city] || CITIES[city].country === home) continue;
+          if (!usable(city)) continue;
           const list = inByCity.get(city);
           if (list) list.push({ ...f, gateway: g });
           else inByCity.set(city, [{ ...f, gateway: g }]);
@@ -212,6 +217,8 @@ export async function findTrips(params: TripParams): Promise<TripsResult> {
     const outs = outByCity.get(first);
     const ins = inByCity.get(last);
     if (!outs || !ins) return;
+    // A ground hop into an excluded country would still be a night there.
+    if (exclude.length && !codes.every((c) => countryAllowed(CITIES[c].country, exclude))) return;
     const key = codes.join(">");
     if (seen.has(key)) return;
 

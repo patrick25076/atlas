@@ -4,9 +4,15 @@
 // search is one call per target (anywhere, then the nearest countries); the nights, the
 // must-include date and the flight length are filtered afterwards. Returning to a different
 // home airport is two one-way searches per shortlisted city.
-import { targetsFor, resolveGateway, toDeal, trimDeals } from "./board";
+import citiesJson from "@/public/data/cities.json";
+import countriesJson from "@/public/data/countries.json";
+import { countryAllowed } from "./been";
+import { countryLabel, hubDegree, targetsFor, resolveGateway, toDeal, trimDeals } from "./board";
 import { kiwiDate, nightsOf, searchFlight, type KiwiItinerary } from "./kiwi";
-import type { Deal } from "./types";
+import type { City, CountryInfo, Deal } from "./types";
+
+const CITIES = citiesJson as unknown as Record<string, City>;
+const COUNTRIES = countriesJson as unknown as Record<string, CountryInfo>;
 
 export type FinderParams = {
   origins: string[];
@@ -26,16 +32,112 @@ export type FinderParams = {
   returnTo?: string[];
   /** Also scan for hidden-city one-ways. */
   tricks?: boolean;
+  /**
+   * Countries (ISO2) the traveller has been to and does not want again ("Been", only new
+   * countries): never a destination, fine as a connection. Targets in them are not searched.
+   */
+  exclude?: string[];
   onDeals?: (deals: Deal[], target: string) => void;
   onProgress?: (line: string) => void;
 };
-export type FinderResult = { deals: Deal[]; searched: number; failed: number; openJaw: number; generatedAt: string };
+export type FinderResult = {
+  deals: Deal[];
+  searched: number;
+  failed: number;
+  openJaw: number;
+  generatedAt: string;
+  /** A plain sentence when nothing was searched because every target is on the been list. */
+  note?: string;
+};
 
 const addDays = (iso: string, n: number) => new Date(Date.parse(iso) + n * 86_400_000).toISOString().slice(0, 10);
 const hoursOf = (it: KiwiItinerary) => Math.max(it.outbound.durationSeconds, it.inbound?.durationSeconds ?? 0) / 3600;
 
+/** A comma list in `where` is at most this many targets, one search each. */
+const MAX_LISTED_TARGETS = 4;
+
+/**
+ * The countries a region word ("Europe", "Asia") stands for, as names Kiwi understands. Shared
+ * with lib/group.ts, which searches only the nearest few of them.
+ */
+export const REGION_COUNTRIES: Record<string, string[]> = {
+  europe: ["Albania", "Austria", "Belgium", "Bosnia & Herzegovina", "Bulgaria", "Croatia", "Cyprus", "Czechia", "Denmark", "Estonia", "Finland", "France", "Germany", "Greece", "Hungary", "Ireland", "Italy", "Latvia", "Lithuania", "Luxembourg", "Malta", "Montenegro", "Netherlands", "North Macedonia", "Norway", "Poland", "Portugal", "Romania", "Serbia", "Slovakia", "Slovenia", "Spain", "Sweden", "Switzerland", "Türkiye", "United Kingdom", "Georgia", "Armenia", "Iceland", "Moldova", "Kosovo"],
+  asia: ["Thailand", "Vietnam", "Malaysia", "Singapore", "Indonesia", "Philippines", "Cambodia", "Japan", "South Korea", "Taiwan", "Hong Kong", "China", "India", "Sri Lanka", "Maldives", "Nepal", "Uzbekistan", "Kazakhstan", "Kyrgyzstan", "United Arab Emirates", "Oman", "Qatar", "Jordan", "Israel", "Georgia", "Armenia", "Azerbaijan", "Türkiye"],
+  africa: ["Morocco", "Tunisia", "Egypt", "Kenya", "Tanzania", "South Africa", "Namibia", "Ethiopia", "Senegal", "Cape Verde", "Mauritius", "Rwanda", "Uganda", "Ghana"],
+  "north america": ["United States", "Canada", "Mexico", "Cuba", "Costa Rica", "Dominican Republic", "Jamaica", "Guatemala", "Panama", "Puerto Rico"],
+  "south america": ["Brazil", "Argentina", "Chile", "Peru", "Colombia", "Ecuador", "Bolivia", "Uruguay"],
+  oceania: ["Australia", "New Zealand", "Fiji"],
+};
+
+/**
+ * The region a word names, or null. Own keys only: a plain lookup would also match inherited
+ * names ("constructor" is a function, and new Set(function) throws), so a word that is not a
+ * region falls through to Kiwi as a place name instead of crashing the search.
+ */
+export function regionCountries(word: string): string[] | null {
+  const w = word.trim().toLowerCase();
+  return Object.hasOwn(REGION_COUNTRIES, w) ? REGION_COUNTRIES[w] : null;
+}
+
+/**
+ * City names as the traveller types them ("Milan", "Bangkok"), lower cased, to the country of
+ * that city. When two countries share a city name (London, Melbourne, Florence) the bigger hub
+ * wins, which is also the one Kiwi resolves a bare name to. Built once per process.
+ */
+const CITY_COUNTRY_BY_NAME = new Map<string, { cc: string; degree: number }>();
+/** Airport code to the city it serves, for the hidden-city tricks (the via is an airport). */
+const CITY_OF_AIRPORT = new Map<string, string>();
+for (const [code, c] of Object.entries(CITIES)) {
+  const k = c.name.toLowerCase();
+  const degree = hubDegree(code);
+  const prev = CITY_COUNTRY_BY_NAME.get(k);
+  if (!prev || degree > prev.degree) CITY_COUNTRY_BY_NAME.set(k, { cc: c.country, degree });
+  for (const a of c.airports) if (!CITY_OF_AIRPORT.has(a)) CITY_OF_AIRPORT.set(a, code);
+}
+
+/**
+ * Country names as the targets and the traveller spell them, lower cased, to ISO2: the label
+ * the boards use (Intl, "Türkiye", "Czechia") and the name in countries.json ("Turkey"),
+ * so both "Italy" and "IT" resolve. A board label that is really a city name in another
+ * country (the boards call VA "Rome") is left out, or "Rome" would mean the Vatican and
+ * Rome, Italy would be refused when only Vatican City is on the been list. Built once.
+ */
+const COUNTRY_BY_NAME = new Map<string, string>();
+for (const cc of Object.keys(COUNTRIES)) {
+  const label = countryLabel(cc).toLowerCase();
+  const city = CITY_COUNTRY_BY_NAME.get(label);
+  if (!city || city.cc === cc) COUNTRY_BY_NAME.set(label, cc);
+}
+// The names in countries.json are the canonical ones, so they win over any label.
+for (const cc of Object.keys(COUNTRIES)) {
+  const name = COUNTRIES[cc]?.name;
+  if (name) COUNTRY_BY_NAME.set(name.toLowerCase(), cc);
+}
+
+/**
+ * The country (ISO2) a search target lands in: a country name or code, a city name, a city
+ * or airport code. Null for "anywhere", a region word or anything unknown, which is never
+ * excluded here; the results are filtered by landing country afterwards anyway.
+ */
+export function targetCountry(target: string): string | null {
+  const t = target.trim();
+  if (!t || t.toLowerCase() === "anywhere") return null;
+  const upper = t.toUpperCase();
+  if (/^[A-Z]{2}$/.test(upper)) return COUNTRIES[upper] ? upper : null;
+  if (/^[A-Z]{3}$/.test(upper)) return resolveGateway(upper)?.country ?? null;
+  const lower = t.toLowerCase();
+  return COUNTRY_BY_NAME.get(lower) ?? CITY_COUNTRY_BY_NAME.get(lower)?.cc ?? null;
+}
+
+/** Drops the targets whose country is on the exclude list, so no search is spent on them. */
+export function allowedTargets(targets: string[], exclude: string[]): string[] {
+  if (!exclude.length) return targets;
+  return targets.filter((t) => countryAllowed(targetCountry(t) ?? undefined, exclude));
+}
+
 export async function findDeals(p: FinderParams): Promise<FinderResult> {
   const say = p.onProgress ?? (() => {});
+  const exclude = p.exclude ?? [];
   const origins = p.origins.filter((o) => /^[A-Z]{3}$/.test(o)).slice(0, 5);
   const flyFrom = origins.join(",");
   const minN = Math.max(1, p.minNights);
@@ -50,21 +152,37 @@ export async function findDeals(p: FinderParams): Promise<FinderResult> {
   const first = resolveGateway(origins[0]);
   let targets: string[] = [];
   const nearby = first ? targetsFor(first.lat, first.lon, first.country).filter((t) => /^[A-Za-z]/.test(t) && t.length > 3) : [];
-  const regionWord = (p.where ?? "anywhere").trim().toLowerCase();
-  const REGION_COUNTRIES: Record<string, string[]> = {
-    europe: ["Albania", "Austria", "Belgium", "Bosnia & Herzegovina", "Bulgaria", "Croatia", "Cyprus", "Czechia", "Denmark", "Estonia", "Finland", "France", "Germany", "Greece", "Hungary", "Ireland", "Italy", "Latvia", "Lithuania", "Luxembourg", "Malta", "Montenegro", "Netherlands", "North Macedonia", "Norway", "Poland", "Portugal", "Romania", "Serbia", "Slovakia", "Slovenia", "Spain", "Sweden", "Switzerland", "Türkiye", "United Kingdom", "Georgia", "Armenia", "Iceland", "Moldova", "Kosovo"],
-    asia: ["Thailand", "Vietnam", "Malaysia", "Singapore", "Indonesia", "Philippines", "Cambodia", "Japan", "South Korea", "Taiwan", "Hong Kong", "China", "India", "Sri Lanka", "Maldives", "Nepal", "Uzbekistan", "Kazakhstan", "Kyrgyzstan", "United Arab Emirates", "Oman", "Qatar", "Jordan", "Israel", "Georgia", "Armenia", "Azerbaijan", "Türkiye"],
-    africa: ["Morocco", "Tunisia", "Egypt", "Kenya", "Tanzania", "South Africa", "Namibia", "Ethiopia", "Senegal", "Cape Verde", "Mauritius", "Rwanda", "Uganda", "Ghana"],
-    "north america": ["United States", "Canada", "Mexico", "Cuba", "Costa Rica", "Dominican Republic", "Jamaica", "Guatemala", "Panama", "Puerto Rico"],
-    "south america": ["Brazil", "Argentina", "Chile", "Peru", "Colombia", "Ecuador", "Bolivia", "Uruguay"],
-    oceania: ["Australia", "New Zealand", "Fiji"],
-  };
-  if (regionWord !== "anywhere" && REGION_COUNTRIES[regionWord]) {
-    const set = new Set(REGION_COUNTRIES[regionWord]);
+  const regionList = regionCountries(p.where ?? "anywhere");
+  // "Been": a target in a country already visited is not searched at all. The excluded
+  // countries leave each list before it is cut to size, so a well-travelled visitor gets the
+  // next unvisited countries instead of a shorter list (or an empty one when the nearest
+  // eighteen are all visited). When nothing is left (where=Italy with Italy on the list) the
+  // answer is an empty run that says why.
+  let asked = 0;
+  if (regionList) {
+    const set = new Set(regionList);
     const near = nearby.filter((t) => set.has(t));
-    targets = [...near, ...REGION_COUNTRIES[regionWord].filter((t) => !near.includes(t))].slice(0, 18);
-  } else if (p.where && p.where !== "anywhere") targets = p.where.split(",").map((s) => s.trim()).filter(Boolean);
-  else targets = ["anywhere", ...nearby.slice(0, 18)];
+    const ordered = [...near, ...regionList.filter((t) => !near.includes(t))];
+    asked = ordered.length;
+    targets = allowedTargets(ordered, exclude).slice(0, 18);
+  } else if (p.where && p.where !== "anywhere") {
+    // A typed comma list is one search per entry; four at most, so a long list from the chat
+    // cannot turn one finder run into dozens of searches.
+    const listed = p.where
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+    asked = listed.length;
+    targets = allowedTargets(listed, exclude).slice(0, MAX_LISTED_TARGETS);
+  } else {
+    asked = 1 + nearby.length;
+    targets = ["anywhere", ...allowedTargets(nearby, exclude).slice(0, 18)];
+  }
+  if (!targets.length) {
+    const note = asked === 1 ? `${p.where} is on your been list (only new countries), so nothing was searched; a layover there is still fine.` : "Every place that search would try is on your been list (only new countries), so nothing was searched.";
+    say(note);
+    return { deals: [], searched: 0, failed: 0, openJaw: 0, generatedAt: new Date().toISOString(), note };
+  }
 
   // A getaway leaves the country unless the search names it.
   const home = first?.country ?? "";
@@ -88,6 +206,9 @@ export async function findDeals(p: FinderParams): Promise<FinderResult> {
           if (p.maxHours && hoursOf(it) > p.maxHours) continue;
           const d = toDeal(it.outbound.from, it, nightsOf(it)!);
           if (!domesticOk && d.country === home) continue;
+          // An "anywhere" search may land in a visited country: the deal is dropped, the
+          // search was still worth it for the other landings.
+          if (!countryAllowed(d.country, exclude)) continue;
           found.push(d);
         }
         if (found.length) {
@@ -165,15 +286,21 @@ export async function findDeals(p: FinderParams): Promise<FinderResult> {
         if (it.outbound.stops === 0) continue;
         for (const via of it.outbound.route.slice(1, -1)) {
           if (!wanted.has(via)) continue;
+          // Getting off in a visited country is a destination there, not a layover.
+          if (!countryAllowed(resolveGateway(via)?.country, exclude)) continue;
           const oneWayDirect = direct.get(via) ?? wanted.get(via)! / 2;
           if (it.price >= oneWayDirect - 15) continue;
           const seg = it.outbound.segments.find((s) => s.to === via);
           if (!seg) continue;
           const d = toDeal(it.outbound.from, it, 0);
+          // The deal is to the via city, where the traveller gets off: its city and country
+          // are what the client filters and tags by, not the ticket's final destination.
           d.dst = via;
-          d.dstCity = d.dstCity; // keeps the city of the final destination for the photo; the name below is the via city
-          d.city = seg.toCity || via;
-          d.country = seg.toCountry ? d.country : d.country;
+          d.dstCity = CITY_OF_AIRPORT.get(via) ?? d.dstCity;
+          d.city = seg.toCity || CITIES[d.dstCity]?.name || via;
+          // Our own airport data first (ISO2 for sure); Kiwi's segment country only when it
+          // is a two-letter code too, since the client compares codes.
+          d.country = resolveGateway(via)?.country ?? (/^[A-Za-z]{2}$/.test(seg.toCountry ?? "") ? seg.toCountry.toUpperCase() : d.country);
           d.price = Math.round(it.price);
           d.back = "";
           d.nights = 0;

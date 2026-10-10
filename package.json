@@ -19,6 +19,7 @@
     "ingest:countries": "tsx scripts/ingest/countries.ts",
     "ingest:holidays": "tsx scripts/ingest/holidays.ts",
     "ingest:weather": "tsx scripts/ingest/weather.ts",
+    "ingest:climate": "tsx scripts/ingest/climate.ts",
     "ingest:overture": "tsx scripts/ingest/overture-places.ts",
     "ingest:geonames": "tsx scripts/ingest/geonames.ts",
     "ingest:heritage": "tsx scripts/ingest/heritage.ts",
@@ -27,6 +28,7 @@
     "ingest:deals": "tsx scripts/ingest/deals.ts",
     "ingest:oneway": "tsx scripts/ingest/oneway.ts",
     "ingest:boards": "tsx scripts/ingest/boards.ts",
+    "ingest:hotels": "tsx scripts/ingest/hotels.ts",
     "ingest:fame": "tsx scripts/ingest/fame.ts",
     "ingest:costs": "tsx scripts/ingest/costs.ts",
     "check:tp": "tsx scripts/check-travelpayouts.ts"

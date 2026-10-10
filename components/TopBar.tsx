@@ -1,9 +1,11 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { Airport } from "@/lib/types";
+import type { Airport, CountryInfo } from "@/lib/types";
 import type { Origin } from "@/lib/ui-types";
+import type { BeenPrefs } from "@/lib/been";
 import { countryName, monthLabel, monthOptions } from "@/lib/format";
+import BeenEditor from "./BeenEditor";
 
 type Props = {
   origin: Origin | null;
@@ -16,9 +18,14 @@ type Props = {
   onAsk: (q: string) => void;
   onShare: () => void;
   copied: boolean;
+  /** The "Been" preference: countries already visited, and whether only new ones are wanted. */
+  been: BeenPrefs;
+  onBeen: (p: BeenPrefs) => void;
+  countries: Record<string, CountryInfo>;
 };
 
-function searchAirports(airports: Airport[], q: string): Airport[] {
+/** Airports matching a typed code, city or name; exact code first, then the biggest. Shared with the group editor. */
+export function searchAirports(airports: Airport[], q: string): Airport[] {
   const s = q.trim().toLowerCase();
   if (s.length < 2) return [];
   const exact = airports.filter((a) => a.iata.toLowerCase() === s);
@@ -50,7 +57,7 @@ function useDismiss(open: boolean, close: () => void) {
 }
 
 export default function TopBar(p: Props) {
-  const [open, setOpen] = useState<"from" | "when" | null>(null);
+  const [open, setOpen] = useState<"from" | "when" | "been" | null>(null);
   const [query, setQuery] = useState("");
   const [question, setQuestion] = useState("");
   const hits = useMemo(() => searchAirports(p.airports, query), [p.airports, query]);
@@ -60,6 +67,7 @@ export default function TopBar(p: Props) {
   useEffect(() => {
     if (open === "from") inputRef.current?.focus();
   }, [open]);
+  const beenCount = p.been.countries.length;
 
   return (
     <header className="topbar">
@@ -153,6 +161,26 @@ export default function TopBar(p: Props) {
             </div>
           )}
         </button>
+
+        {/* The editor holds inputs and buttons, so it sits next to the pill rather than inside it: a button cannot contain buttons. */}
+        <div className="pillwrap">
+          <button
+            className={`pill beenpill${open === "been" ? " on" : ""}${beenCount ? " set" : ""}`}
+            onClick={() => setOpen(open === "been" ? null : "been")}
+            title="Countries you have already been to"
+            aria-haspopup="dialog"
+            aria-expanded={open === "been"}
+          >
+            <span className="k">Been</span>
+            <span className={`v${beenCount ? "" : " empty"}`}>{beenCount ? `${beenCount}${p.been.newOnly ? " · only new" : ""}` : "add countries"}</span>
+            <span className="caret">▾</span>
+          </button>
+          {open === "been" && (
+            <div className="popover" role="dialog" aria-label="Countries you have been to">
+              <BeenEditor countries={p.countries} value={p.been} onChange={p.onBeen} />
+            </div>
+          )}
+        </div>
       </div>
 
       <form

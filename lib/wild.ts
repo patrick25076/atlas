@@ -10,6 +10,7 @@ import visaJson from "@/public/data/visa.json";
 import fameJson from "@/public/data/fame.json";
 import weatherJson from "@/public/data/weather.json";
 import { haversineKm } from "./geo";
+import { countryAllowed } from "./been";
 import { countryLabel, hubDegree, resolveGateway } from "./board";
 import { neighboursOf } from "./combos";
 import { kiwiDate, searchFlight, type KiwiItinerary } from "./kiwi";
@@ -68,8 +69,12 @@ export const REGIONS = {
 export type Style = "experiences" | "beaches" | "food" | "cities" | "slow";
 export type Budget = "backpacker" | "mid" | "comfort";
 export const BUDGET_SCALE: Record<Budget, number> = { backpacker: 0.65, mid: 1, comfort: 1.7 };
+/** The most countries a chain considers, custom list included: the biggest region has eight. */
+const MAX_COUNTRIES = 8;
+/** Chain steps at the most, whatever the nights or an explicit maxStops: each step is up to four searches. */
+const MAX_CHAIN_STEPS = 8;
 /** Nearby hubs that often sell the cheap long-hauls: positioning flights go here first. */
-const HUBS = ["BUD", "VIE", "WAW", "IST", "MIL", "LON", "PAR", "FRA", "AMS", "MAD", "ROM", "BER", "PRG", "ATH", "DUB", "CPH", "STO", "LIS", "BCN", "MUC", "ZRH", "BRU"];
+const HUBS =["BUD", "VIE", "WAW", "IST", "MIL", "LON", "PAR", "FRA", "AMS", "MAD", "ROM", "BER", "PRG", "ATH", "DUB", "CPH", "STO", "LIS", "BCN", "MUC", "ZRH", "BRU"];
 
 export type WildStop = { code: string; name: string; country: string; lat: number; lon: number; arrive: string; depart: string; nights: number; perDay: number; visa?: string | null; warning?: boolean; note?: string };
 export type WildLeg =
@@ -146,6 +151,10 @@ export type WildParams = {
   home: string;
   region: Region;
   month?: string;
+  /** An explicit departure window (YYYY-MM-DD) used instead of month; at most ten days wide. */
+  from?: string;
+  to?: string;
+  /** 7 to 90; past 28 the trip becomes five to seven bases of eight to twelve nights. */
   nights: number;
   style?: Style;
   budget?: Budget;
@@ -153,16 +162,23 @@ export type WildParams = {
   origin?: { lat: number; lon: number; label: string };
   /** A night or two in a hub on the way home when it costs about the same (default on). */
   stopover?: boolean;
-  /** Only these countries (ISO2), instead of the region's list. */
+  /** Only these countries (ISO2), instead of the region's list; eight at most, unknown codes ignored. */
   countries?: string[];
   /** Countries (ISO2) to favour in the chain. */
   prefer?: string[];
+  /** Chain stops; clamped to the countries available and to eight. */
   maxStops?: number;
+  /** Nights a stop; never under two (five past 28 nights). */
   nightsPerStop?: number;
   /** How to trade euros for hours: "price" takes the cheapest, "comfort" pays more for short flights and few stops. */
   tradeoff?: Tradeoff;
   /** Skip the hub positioning (fly only from the home airports). */
   noHubs?: boolean;
+  /**
+   * "Been" (ISO2): never a stop or a landing, and no stopover night in a hub there. A hub
+   * is still fine as positioning on the way in (a connection), and a layover is always fine.
+   */
+  exclude?: string[];
   onProgress?: (line: string) => void;
 };
 
@@ -186,15 +202,27 @@ export const STOPOVER_PROGRAMMES: Record<string, { airline: string; note: string
 
 export async function buildWild(p: WildParams): Promise<WildTrip | null> {
   const say = p.onProgress ?? (() => {});
+  // A plain object lookup also matches inherited names ("constructor"), and a truthy check
+  // upstream lets those through; only a key of our own is a region.
+  if (!Object.hasOwn(REGIONS, p.region)) throw new Error(`unknown region ${String(p.region)}; one of ${Object.keys(REGIONS).join(", ")}`);
   const region = REGIONS[p.region];
   const style: Style = p.style ?? "experiences";
   const budget: Budget = p.budget ?? "mid";
   const tradeoff: Tradeoff = p.tradeoff ?? "balanced";
   const [hIn, hHop, hHome] = HOUR_VALUE[tradeoff];
   const stopsPenalty = (stops: number) => (tradeoff === "comfort" ? stops * 60 : tradeoff === "balanced" ? stops * 20 : 0);
-  const only = new Set((p.countries ?? []).map((c) => c.toUpperCase()));
-  const base: [string, string][] = only.size ? [...only].map((cc) => [cc, countryLabel(cc)] as [string, string]) : region.countries;
-  const countries = base.filter(([cc]) => !unsafe(cc));
+  // A custom list is bounded like a region (eight countries) and keeps only codes we know:
+  // the way in is one search per origin and country, so an unbounded list, or a code that
+  // would reach Kiwi as "Unknown Region", multiplies searches that return nothing.
+  const only = [...new Set((p.countries ?? []).map((c) => c.toUpperCase()).filter((cc) => /^[A-Z]{2}$/.test(cc) && !!COUNTRIES[cc]))].slice(0, MAX_COUNTRIES);
+  if (p.countries?.length && !only.length) throw new Error("none of those country codes is a country we know (ISO2, for example VN or TH)");
+  const base: [string, string][] = only.length ? only.map((cc) => [cc, countryLabel(cc)] as [string, string]) : region.countries;
+  // "Been": a visited country is never a stop, so it leaves the list before any search.
+  const exclude = p.exclude ?? [];
+  const countries = base.filter(([cc]) => !unsafe(cc) && countryAllowed(cc, exclude));
+  if (!countries.length && base.some(([cc]) => !unsafe(cc))) throw new Error(`every country of ${region.label} is on your been list; pick another region or allow revisits`);
+  /** True when a night in this city is allowed (its country is not on the been list). */
+  const nightOk = (cityCode: string) => countryAllowed(CITIES[cityCode]?.country, exclude);
   const prefer = new Set((p.prefer ?? []).map((c) => c.toUpperCase()));
   // The home airport is the biggest of the visitor's airports (Otopeni, not Ghimbav); the
   // nearest small one still gets a look as a second origin.
@@ -209,17 +237,25 @@ export async function buildWild(p: WildParams): Promise<WildTrip | null> {
     return x;
   };
 
-  // The window: the first ten days of the month asked for, or three to five weeks from now.
+  // The window: the dates asked for (clipped to ten days), else the first ten days of the
+  // month asked for, else three to five weeks from now.
   const today = new Date();
   let start = new Date(today.getTime() + 21 * 86_400_000);
-  if (p.month && /^\d{4}-\d{2}$/.test(p.month)) {
+  const isoDay = (s?: string): s is string => !!s && /^\d{4}-\d{2}-\d{2}$/.test(s);
+  if (isoDay(p.from)) {
+    const earliest = new Date(today.getTime() + 2 * 86_400_000);
+    start = Date.parse(p.from) > earliest.getTime() ? new Date(Date.parse(p.from)) : earliest;
+  } else if (p.month && /^\d{4}-\d{2}$/.test(p.month)) {
     const [y, m] = p.month.split("-").map(Number);
     const first = new Date(Date.UTC(y, m - 1, 1));
     const earliest = new Date(today.getTime() + 10 * 86_400_000);
     start = first > earliest ? first : earliest;
   }
   const from = start.toISOString().slice(0, 10);
-  const to = addDays(from, 10);
+  // A window given as [from, to] is kept as is, up to ten days; from == to is one fixed day.
+  const to = isoDay(p.from) && isoDay(p.to) && p.to >= from && p.to <= addDays(from, 10) ? p.to : addDays(from, 10);
+  // Up to 90 nights; past four weeks the chain is a handful of real bases, not a sprint.
+  const totalNights = Math.min(90, Math.max(2, Math.round(p.nights)));
 
   // 1. The way in: home airport and the two nearest big hubs, to every country of the region.
   const hubs = p.noHubs
@@ -238,6 +274,8 @@ export async function buildWild(p: WildParams): Promise<WildTrip | null> {
   const entries: Entry[] = [];
   for (const r of inbound) {
     for (const it of r.its) {
+      // A country search can still land at an airport we map to a neighbour: checked per landing.
+      if (!nightOk(cityOfItinerary(it))) continue;
       const hubPenalty = isHome(r.origin) ? 0 : 70;
       // Landing somewhere worth the first nights beats landing in the cheapest corner of a country.
       entries.push({ origin: r.origin, it, score: it.price + hubPenalty + hIn * hoursOf(it) + stopsPenalty(it.outbound.stops) - 0.8 * worth(cityOfItinerary(it)) });
@@ -264,8 +302,11 @@ export async function buildWild(p: WildParams): Promise<WildTrip | null> {
     }
     const lhDay = dayOf(e.it.outbound.departureTime);
     const pos = count(await oneWay(gw.code, e.origin, addDays(lhDay, -1), lhDay));
+    // Positioning through a visited hub is a connection and stays allowed; arriving the day
+    // before would be a night there, so for such a hub only same-day arrivals count.
+    const hubNight = nightOk(e.origin);
     const ok = pos
-      .filter((x) => Date.parse(x.outbound.arrivalTime) + 3 * 3_600_000 <= Date.parse(e.it.outbound.departureTime))
+      .filter((x) => Date.parse(x.outbound.arrivalTime) + 3 * 3_600_000 <= Date.parse(e.it.outbound.departureTime) && (hubNight || dayOf(x.outbound.arrivalTime) === lhDay))
       .sort((a, b) => a.price - b.price)[0];
     if (ok) {
       entry = { ...e, positioning: ok };
@@ -279,9 +320,35 @@ export async function buildWild(p: WildParams): Promise<WildTrip | null> {
   const stops: WildStop[] = [];
   const daysBetween = (a: string, b: string) => Math.round((Date.parse(b) - Date.parse(a)) / 86_400_000);
   // Slow travel means fewer, longer stops; experiences need three nights to get out of town.
-  const maxStops = p.maxStops ? Math.min(countries.length, Math.max(1, p.maxStops)) : style === "slow" ? Math.min(countries.length, 3) : Math.min(countries.length, 5);
+  // Past four weeks the trip is lived in bases: five to seven of them, eight to twelve nights
+  // each (sixty nights is six bases of ten), however many countries the region has: a long
+  // trip may visit a second city in a country already seen (Oceania has three countries).
+  const long = totalNights > 28;
+  // Explicit values are clamped the way the defaults are: the chain never runs more than
+  // MAX_CHAIN_STEPS steps (four searches each) and a stop is never under two nights (five on
+  // a long trip), so a request for sixty one-night stops cannot spend hundreds of searches
+  // on an itinerary nobody asked for.
+  const asked = (n: number | undefined) => (n != null && Number.isFinite(n) && n > 0 ? Math.round(n) : 0);
+  const maxStops = Math.min(
+    MAX_CHAIN_STEPS,
+    asked(p.maxStops)
+      ? Math.max(1, long ? asked(p.maxStops) : Math.min(countries.length, asked(p.maxStops)))
+      : long
+        ? Math.max(5, Math.min(7, Math.round(totalNights / 10)))
+        : style === "slow"
+          ? Math.min(countries.length, 3)
+          : Math.min(countries.length, 5),
+  );
   const floorNights = style === "slow" ? 4 : style === "experiences" ? 3 : 2;
-  const nightsPerStop = p.nightsPerStop ? Math.max(1, Math.min(10, p.nightsPerStop)) : Math.min(style === "slow" ? 7 : 3, Math.max(floorNights, Math.floor((p.nights - 1) / maxStops)));
+  // Up to two weeks a stop is two or three nights; past that the stops grow with the nights
+  // asked (28 nights over five stops is five a stop), so the chain itself covers the trip
+  // instead of ending around night fifteen and leaving the way home to pick the length.
+  const capNights = style === "slow" ? 7 : totalNights > 14 ? 6 : 3;
+  const nightsPerStop = asked(p.nightsPerStop)
+    ? Math.max(long ? 5 : 2, Math.min(long ? 30 : 10, asked(p.nightsPerStop)))
+    : long
+      ? Math.max(8, Math.min(12, Math.floor((totalNights - 1) / maxStops)))
+      : Math.min(capNights, Math.max(floorNights, Math.floor((totalNights - 1) / maxStops)));
   const addStop = (code: string, arrive: string, nights = nightsPerStop) => {
     const c = CITIES[code];
     const cc = c?.country ?? "";
@@ -309,26 +376,39 @@ export async function buildWild(p: WildParams): Promise<WildTrip | null> {
   let current = cityOfItinerary(entry.it);
   let date = dayOf(entry.it.outbound.arrivalTime);
   const visited = new Set<string>([CITIES[current]?.country ?? ""]);
+  const visitedCities = new Set<string>([current]);
   const outDate = legs[0].kind === "fly" ? legs[0].date : from;
   say(`Way in found: ${legs.map((l) => (l.kind === "fly" ? `${l.fromName} → ${l.toName} €${l.price}` : "")).join(", ")}.`);
 
   // 2. The chain: two or three nights a stop, then the cheapest worthwhile hop to a country not
   // yet seen, among the four nearest. A stop's nights follow the flight that actually leaves it.
-  const endDate = addDays(outDate, p.nights);
+  const endDate = addDays(outDate, totalNights);
   addStop(current, date);
   for (let step = 0; step < maxStops; step++) {
     const earliest = addDays(stops.at(-1)!.arrive, nightsPerStop);
     if (daysBetween(earliest, endDate) < nightsPerStop + 1) break;
     const cur = CITIES[current];
-    const remaining = countries
-      .filter(([cc]) => !visited.has(cc))
-      .map(([cc, name]) => ({ cc, name, km: centroid.has(cc) && cur ? haversineKm(cur.lat, cur.lon, centroid.get(cc)!.lat, centroid.get(cc)!.lon) : 2000 }))
-      .sort((a, b) => a.km - b.km)
-      .slice(0, 4);
+    const byDistance = (list: [string, string][]) =>
+      list
+        .map(([cc, name]) => ({ cc, name, km: centroid.has(cc) && cur ? haversineKm(cur.lat, cur.lon, centroid.get(cc)!.lat, centroid.get(cc)!.lon) : 2000 }))
+        .sort((a, b) => a.km - b.km)
+        .slice(0, 4);
+    let remaining = byDistance(countries.filter(([cc]) => !visited.has(cc)));
+    // A long trip in a small region runs out of new countries before it runs out of nights:
+    // then a second city in a country already seen is fine, as long as it is a real move.
+    const revisit = !remaining.length && long;
+    if (revisit) remaining = byDistance(countries);
     if (!remaining.length) break;
+    /** A second city in a visited country must be its own place: 250 km from every earlier base there. */
+    const farEnough = (code: string) => {
+      const c = CITIES[code];
+      if (!c || visitedCities.has(code)) return false;
+      if (!visited.has(c.country)) return true;
+      return stops.every((s) => s.country !== c.country || haversineKm(s.lat, s.lon, c.lat, c.lon) >= 250);
+    };
     // Ground hops across a border count as a candidate without a search (Shenzhen to Hong Kong).
     const ground = cur
-      ? neighboursOf(current).filter((n) => CITIES[n.code] && !visited.has(CITIES[n.code].country) && remaining.some((r) => r.cc === CITIES[n.code].country) && n.minutes <= 240 && worth(n.code) >= 40)
+      ? neighboursOf(current).filter((n) => CITIES[n.code] && farEnough(n.code) && remaining.some((r) => r.cc === CITIES[n.code].country) && n.minutes <= 240 && worth(n.code) >= 40)
       : [];
     const flights = await Promise.all(remaining.map(async ({ cc, name }) => ({ cc, its: count(await oneWay(current, name, earliest, addDays(earliest, 1))) })));
     type Cand = { code: string; score: number; it?: KiwiItinerary; ground?: (typeof ground)[number] };
@@ -351,7 +431,7 @@ export async function buildWild(p: WildParams): Promise<WildTrip | null> {
     for (const f of flights) {
       for (const it of f.its.slice(0, 6)) {
         const code = cityOfItinerary(it);
-        if (code === current || !CITIES[code]) continue;
+        if (code === current || !farEnough(code) || !nightOk(code)) continue;
         const back = stops.some((s) => haversineKm(s.lat, s.lon, CITIES[code].lat, CITIES[code].lon) < 120);
         cands.push({ code, score: it.price + hHop * hoursOf(it) + stopsPenalty(it.outbound.stops) + (back ? 80 : 0) - worth(code) - variety(code), it });
       }
@@ -373,6 +453,7 @@ export async function buildWild(p: WildParams): Promise<WildTrip | null> {
     }
     addStop(current, date);
     visited.add(CITIES[current].country);
+    visitedCities.add(current);
     say(`Next: ${CITIES[current].name} (${CITIES[current].country}).`);
   }
 
@@ -382,9 +463,14 @@ export async function buildWild(p: WildParams): Promise<WildTrip | null> {
   let backLeg: Extract<WildLeg, { kind: "fly" }> | null = null;
   let lastStop: WildStop | null = null;
   for (const from of [stops.at(-1), stops.at(-2)].filter((s): s is WildStop => !!s)) {
-    // Leave on the planned end date, give or take a day; never before two nights there.
-    const earliest = addDays(from.arrive, Math.max(2, Math.min(nightsPerStop, daysBetween(from.arrive, endDate) - 1)));
+    // Leave on the planned end date, give or take a day; never before two nights there. The
+    // window stays within three days of the end even when the chain stopped early (the last
+    // stop just gets longer), so the cheapest fare never sets the trip length: someone who
+    // asked for 28 nights does not get 18 because day 18 happened to be cheap.
     const latest = addDays(endDate, 1);
+    const anchor = addDays(endDate, -3);
+    let earliest = addDays(from.arrive, Math.max(2, Math.min(nightsPerStop, daysBetween(from.arrive, endDate) - 1)));
+    if (earliest < anchor) earliest = anchor;
     if (daysBetween(earliest, latest) < 0) continue;
     // Hours weigh more on the way home: a 33-hour saving of €40 is no saving. Over 30 hours
     // only when nothing shorter exists.
@@ -409,7 +495,8 @@ export async function buildWild(p: WildParams): Promise<WildTrip | null> {
   // 3b. A stopover on the way home: a night or two in a hub when it costs about the same as
   // flying straight through (Istanbul, Dubai, Doha, or the hubs used on the way in).
   if (p.stopover !== false && style !== "slow") {
-    const hubCands = [...new Set([...hubs, "IST", "DXB", "DOH"])].filter((h) => h !== lastStop!.code && CITIES[h] && !homeGws.some((g) => (cityOf.get(g.code) ?? g.code) === h)).slice(0, 4);
+    // The stopover is a night in the hub: skipped for a hub in a visited country.
+    const hubCands = [...new Set([...hubs, "IST", "DXB", "DOH"])].filter((h) => h !== lastStop!.code && CITIES[h] && nightOk(h) && !homeGws.some((g) => (cityOf.get(g.code) ?? g.code) === h)).slice(0, 4);
     const d0 = backLeg.date;
     const options = await Promise.all(
       hubCands.map(async (h) => {
@@ -488,10 +575,30 @@ export function wildPath(gw: string, region: string, month: string | undefined, 
   return `wild/${gw}-${region}-${month ?? "next"}-${nights}-${style}-${budget}${custom ? `-${custom}` : ""}.json`;
 }
 
+/**
+ * Six characters that stand for an excluded-country list: FNV-1a over the sorted codes, in
+ * base 36. Stable across processes, so a stored trip built with a been list is found again,
+ * and short enough that a long list does not blow up the Blob path.
+ */
+export function excludeToken(exclude?: string[]): string {
+  const list = [...new Set((exclude ?? []).map((c) => c.toUpperCase()))].sort();
+  if (!list.length) return "";
+  let h = 0x811c9dc5;
+  for (const ch of list.join(",")) {
+    h ^= ch.charCodeAt(0);
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return `x${(h % 36 ** 6).toString(36).padStart(6, "0")}`;
+}
+
 /** A short stable suffix for custom country lists, so custom trips are stored apart. */
-export function customKey(countries?: string[], prefer?: string[], maxStops?: number, nightsPerStop?: number, tradeoff?: Tradeoff, noHubs?: boolean): string {
-  const parts = [...(countries ?? []).map((c) => c.toUpperCase()).sort(), ...(prefer ?? []).map((c) => `+${c.toUpperCase()}`).sort(), maxStops ? `s${maxStops}` : "", nightsPerStop ? `n${nightsPerStop}` : "", tradeoff && tradeoff !== "balanced" ? tradeoff : "", noHubs ? "direct" : ""].filter(Boolean);
-  return parts.join("").toLowerCase().slice(0, 48);
+export function customKey(countries?: string[], prefer?: string[], maxStops?: number, nightsPerStop?: number, tradeoff?: Tradeoff, noHubs?: boolean, from?: string, to?: string, exclude?: string[]): string {
+  // An explicit departure window is part of the key, so a dated trip never answers a month one.
+  const window = from && /^\d{4}-\d{2}-\d{2}$/.test(from) ? `w${from.replace(/-/g, "")}${to && /^\d{4}-\d{2}-\d{2}$/.test(to) ? to.slice(8, 10) : ""}` : "";
+  const parts = [...(countries ?? []).map((c) => c.toUpperCase()).sort(), ...(prefer ?? []).map((c) => `+${c.toUpperCase()}`).sort(), maxStops ? `s${maxStops}` : "", nightsPerStop ? `n${nightsPerStop}` : "", tradeoff && tradeoff !== "balanced" ? tradeoff : "", noHubs ? "direct" : "", window].filter(Boolean);
+  // The been token goes after the cut, so a long custom key can never drop it and make an
+  // excluded build collide with a plain one. Without a list the key is exactly what it was.
+  return parts.join("").toLowerCase().slice(0, 60) + excludeToken(exclude);
 }
 
 export { hubDegree };

@@ -3,12 +3,14 @@
 import { useState } from "react";
 import type { Deal, Gateway } from "@/lib/types";
 import { formatDuration } from "@/lib/geo";
+import { localIso, todayIso } from "@/lib/format";
 
 export type FinderQuery = { origins: string[]; from: string; to: string; include?: string; minNights: number; maxNights: number; direct: boolean; maxHours?: number; where: string; returnTo: string[]; tricks: boolean };
 export type FinderState = { status: "idle" | "loading" | "ok" | "error"; query?: FinderQuery; deals: Deal[]; lines: string[]; note?: string; searched?: number };
 
 const WHERE = ["anywhere", "Europe", "Asia", "Africa", "North America", "South America"];
-const iso = (d: Date) => d.toISOString().slice(0, 10);
+// Date inputs speak the visitor's calendar: local date parts, never the UTC day.
+const iso = localIso;
 
 /** The custom search: a period, a must-include date, nights, which of your airports, where, and whether home may be another airport. */
 export default function FinderForm({ gateways, defaults, state, onSearch, onClear }: { gateways: Gateway[]; defaults: string[]; state: FinderState; onSearch: (q: FinderQuery) => void; onClear: () => void }) {
@@ -69,7 +71,7 @@ export default function FinderForm({ gateways, defaults, state, onSearch, onClea
       </div>
       <h2>When</h2>
       <div className="form">
-        <input className="search" type="date" value={from} min={iso(new Date())} onChange={(e) => setFrom(e.target.value)} aria-label="Period start" />
+        <input className="search" type="date" value={from} min={todayIso()} onChange={(e) => setFrom(e.target.value)} aria-label="Period start" />
         <input className="search" type="date" value={to} min={from} onChange={(e) => setTo(e.target.value)} aria-label="Period end" />
       </div>
       <div className="form">

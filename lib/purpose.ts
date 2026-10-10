@@ -2,6 +2,7 @@
 // the cheapest way there from the traveller's airports. Tonight's boards answer first (free),
 // a live search fills the rest for the best few. Dates of the edition are the usual ones;
 // the chat verifies the exact edition on the web when it matters.
+import { countryAllowed } from "./been";
 import { eventsInWindow, type PurposeEvent } from "./purpose-events";
 import { dealsFor } from "./deals-source";
 import { kiwiDate, nightsOf, searchFlight } from "./kiwi";
@@ -15,9 +16,18 @@ const cityOf = new Map<string, string>();
 for (const [code, c] of Object.entries(CITIES)) for (const a of c.airports) cityOf.set(a, code);
 
 export type PurposeTrip = { event: PurposeEvent & { start: string; end: string }; deal: Deal | null; source: "board" | "live" | "none"; km: number };
+/**
+ * The list of trips, carrying the count of Kiwi searches this run sent (`searched`) and how
+ * many of them Kiwi refused (`failed`), so a caller's budget counts the exact number instead
+ * of the `live` cap. Still an array: every existing caller keeps working. JSON drops the two
+ * properties, so a route that wants them spreads them into its body.
+ */
+export type PurposeTrips = PurposeTrip[] & { searched: number; failed: number };
 
-export async function purposeTrips(gateways: string[], from: string, to: string, opts: { live?: number; kinds?: PurposeEvent["kind"][] } = {}): Promise<PurposeTrip[]> {
-  const events = eventsInWindow(from, to).filter((e) => !opts.kinds?.length || opts.kinds.includes(e.kind));
+export async function purposeTrips(gateways: string[], from: string, to: string, opts: { live?: number; kinds?: PurposeEvent["kind"][]; exclude?: string[] } = {}): Promise<PurposeTrips> {
+  // "Been": an event in a visited country is hidden before any board lookup or search.
+  const exclude = opts.exclude ?? [];
+  const events = eventsInWindow(from, to).filter((e) => (!opts.kinds?.length || opts.kinds.includes(e.kind)) && countryAllowed(e.country, exclude));
   const home = resolveGateway(gateways[0]);
   const boards = await dealsFor(gateways);
   const out: PurposeTrip[] = [];
@@ -33,11 +43,14 @@ export async function purposeTrips(gateways: string[], from: string, to: string,
   }
   // Live for the nearest few without a board hit: a return around the event, 2 to 5 nights.
   const live = out.filter((t) => !t.deal).sort((a, b) => a.km - b.km).slice(0, opts.live ?? 4);
+  let searched = 0;
+  let failed = 0;
   await Promise.all(
     live.map(async (t) => {
       try {
         const e = t.event;
         const r = await searchFlight({ flyFrom: gateways.join(","), flyTo: e.code, departureDate: kiwiDate(addDays(e.start, -2)), departureDateTo: kiwiDate(e.end), returnDate: kiwiDate(addDays(e.start, 1)), returnDateTo: kiwiDate(addDays(e.end, 3)) });
+        searched++;
         const it = r.itineraries
           .map((x) => ({ it: x, n: nightsOf(x) }))
           .filter((x) => x.n != null && x.n >= 2 && x.n <= 6 && x.it.outbound.departureTime.slice(0, 10) <= e.end && (x.it.inbound?.departureTime.slice(0, 10) ?? "") >= e.start)
@@ -63,9 +76,11 @@ export async function purposeTrips(gateways: string[], from: string, to: string,
         t.deal = d;
         t.source = "live";
       } catch {
-        // stays unpriced
+        // Kiwi refused the search (throttle, budget): the event stays unpriced, the count says so.
+        failed++;
       }
     }),
   );
-  return out.sort((a, b) => (a.deal ? a.deal.price : 9999) - (b.deal ? b.deal.price : 9999));
+  const sorted = out.sort((a, b) => (a.deal ? a.deal.price : 9999) - (b.deal ? b.deal.price : 9999));
+  return Object.assign(sorted, { searched, failed });
 }

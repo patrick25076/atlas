@@ -3,7 +3,10 @@
 import type { Board } from "./board";
 import type { Deal } from "./types";
 
-export type BoardMeta = Omit<Board, "deals">;
+/** The board without its deals, plus the route's note on a live run that found nothing (rate-limited). */
+export type BoardMeta = Omit<Board, "deals"> & { note?: string };
+
+const isAbort = (err: unknown) => (err as Error | undefined)?.name === "AbortError";
 
 export async function fetchBoard(
   gateway: string,
@@ -16,7 +19,7 @@ export async function fetchBoard(
   try {
     res = await fetch(url, { signal });
   } catch (err) {
-    if ((err as Error).name !== "AbortError") on.error("network");
+    if (!isAbort(err)) on.error("network");
     return;
   }
   if (!res.ok) {
@@ -24,7 +27,14 @@ export async function fetchBoard(
     return;
   }
   if (!res.headers.get("content-type")?.includes("ndjson")) {
-    const board = (await res.json()) as Board;
+    let board: Board;
+    try {
+      board = (await res.json()) as Board;
+    } catch (err) {
+      // An aborted body read (the visitor changed month or airport) is not an error to show.
+      if (!isAbort(err)) on.error("the board could not be read");
+      return;
+    }
     on.deals(board.deals);
     const { deals: _deals, ...meta } = board;
     void _deals;
@@ -39,32 +49,40 @@ export async function fetchBoard(
   const decoder = new TextDecoder();
   let buf = "";
   let finished = false;
-  for (;;) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    buf += decoder.decode(value, { stream: true });
-    let nl = buf.indexOf("\n");
-    while (nl >= 0) {
-      const line = buf.slice(0, nl).trim();
-      buf = buf.slice(nl + 1);
-      nl = buf.indexOf("\n");
-      if (!line) continue;
-      let msg: { deals?: Deal[]; done?: BoardMeta; error?: string };
-      try {
-        msg = JSON.parse(line);
-      } catch {
-        continue;
-      }
-      if (msg.deals) on.deals(msg.deals);
-      if (msg.done) {
-        finished = true;
-        on.done(msg.done, "live");
-      }
-      if (msg.error) {
-        finished = true;
-        on.error(msg.error);
+  try {
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      let nl = buf.indexOf("\n");
+      while (nl >= 0) {
+        const line = buf.slice(0, nl).trim();
+        buf = buf.slice(nl + 1);
+        nl = buf.indexOf("\n");
+        if (!line) continue;
+        let msg: { deals?: Deal[]; done?: BoardMeta; error?: string };
+        try {
+          msg = JSON.parse(line);
+        } catch {
+          continue;
+        }
+        if (msg.deals) on.deals(msg.deals);
+        if (msg.done) {
+          finished = true;
+          on.done(msg.done, "live");
+        }
+        if (msg.error) {
+          finished = true;
+          on.error(msg.error);
+        }
       }
     }
+  } catch (err) {
+    // reader.read() rejects with AbortError when the controller aborts mid-stream. That is the
+    // caller leaving, not a failure: no callback, no unhandled rejection in the console.
+    if (isAbort(err) || signal?.aborted) return;
+    on.error("the search stopped early");
+    return;
   }
-  if (!finished) on.error("the search stopped early");
+  if (!finished && !signal?.aborted) on.error("the search stopped early");
 }

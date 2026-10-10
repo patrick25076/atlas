@@ -1,56 +1,130 @@
 // Server-only. The shared memory of Atlas: every fare any search ever saw, with its
 // timestamp, so the next person asking gets history for free; saved trips; a log of searches.
 // Postgres through DATABASE_URL (Supabase or Neon, SETUP.md §4). Without it every function is
-// a quiet no-op, so the app runs the same with or without the database.
+// a quiet no-op, so the app runs the same with or without the database; the moment the
+// variable appears, the tables are created on first use and everything switches on.
+//
+// Connection notes (Supabase): use the pooler host in transaction mode (port 6543, user
+// postgres.<ref>), never the direct db.<ref>.supabase.co host, which is IPv6-only and
+// unreachable from Vercel. Transaction mode forbids prepared statements, hence prepare: false.
+//
+// Dates: the postgres driver turns a `date` column into a JS Date (and a timestamptz into a
+// Date too), and String(date) is "Tue Dec 15 2026 ...", so every date column is read through
+// to_char(..., 'YYYY-MM-DD') in the SQL and every timestamp through isoStamp(), so callers
+// always get "2026-12-15" and an ISO timestamp, never a locale string.
 import postgres from "postgres";
 import type { KiwiItinerary } from "./kiwi";
 
 let sql: ReturnType<typeof postgres> | null = null;
 let ready: Promise<boolean> | null = null;
+/** When the schema check last failed twice in a row (0 when it never did, or it worked since). */
+let failedAt = 0;
+/** How long a failed database is remembered as down before a call tries it again. */
+const DOWN_MS = 60_000;
+/** Seconds to wait for one connection; two attempts plus the pause bound a dead host at ~11 s, once a minute. */
+const CONNECT_TIMEOUT_S = 5;
+
+/** A YYYY-MM-DD from whatever the driver handed back: a string already, or a Date. */
+function isoDay(v: unknown): string {
+  if (v instanceof Date) return v.toISOString().slice(0, 10);
+  return String(v ?? "").slice(0, 10);
+}
+
+/** An ISO timestamp from a Date or a string the driver handed back. */
+function isoStamp(v: unknown): string {
+  if (v instanceof Date) return v.toISOString();
+  const t = Date.parse(String(v ?? ""));
+  return Number.isFinite(t) ? new Date(t).toISOString() : String(v ?? "");
+}
 
 export function hasDb(): boolean {
   return !!process.env.DATABASE_URL?.trim();
 }
 
+/** Hosted Postgres wants TLS; a local one usually has none. The URL's sslmode wins when set. */
+function sslFor(url: string): "require" | false | undefined {
+  if (/sslmode=/i.test(url)) return undefined;
+  return /localhost|127\.0\.0\.1|@db:/i.test(url) ? false : "require";
+}
+
 function client() {
   if (!hasDb()) return null;
-  if (!sql) sql = postgres(process.env.DATABASE_URL!.trim(), { max: 3, idle_timeout: 20, connect_timeout: 10, prepare: false });
+  if (!sql) {
+    const url = process.env.DATABASE_URL!.trim();
+    // Few connections per instance: a serverless deploy has many instances and the pooler has a cap.
+    // onnotice: "create table if not exists" prints a NOTICE per existing table otherwise.
+    sql = postgres(url, { max: 3, idle_timeout: 20, connect_timeout: CONNECT_TIMEOUT_S, prepare: false, ssl: sslFor(url), onnotice: () => {} });
+  }
   return sql;
 }
 
-/** Creates the tables on first use. Cheap after the first call. */
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * Creates the tables on first use. Cheap after the first success. A failure (the pooler
+ * dropping the first connection of a cold instance, a short outage) is retried once after a
+ * second and, if that fails too, the database is remembered as down for DOWN_MS: every call
+ * in that minute returns false at once instead of each paying two connect timeouts (an
+ * unreachable host, a pooler behind a stale password), and after the minute the next call
+ * tries again, so a transient error never disables the database for the life of the process.
+ */
 export function ensureSchema(): Promise<boolean> {
+  if (failedAt && Date.now() - failedAt < DOWN_MS) return Promise.resolve(false);
   if (!ready) {
     ready = (async () => {
       const db = client();
       if (!db) return false;
-      try {
-        await db`create table if not exists fares (
-          id bigserial primary key,
-          src text not null, dst text not null, src_city text, dst_city text,
-          out_date date not null, back_date date, nights int,
-          price numeric(10,2) not null, currency text default 'EUR',
-          stops int, carriers text[], hours numeric(6,1), route text[], url text,
-          seen_at timestamptz not null default now()
-        )`;
-        await db`create index if not exists fares_route_idx on fares (src, dst, out_date, seen_at desc)`;
-        await db`create index if not exists fares_dst_idx on fares (dst, seen_at desc)`;
-        await db`create table if not exists trips (
-          id text primary key, owner text not null, kind text not null, title text not null,
-          body jsonb not null, created_at timestamptz not null default now(), updated_at timestamptz not null default now()
-        )`;
-        await db`create index if not exists trips_owner_idx on trips (owner, updated_at desc)`;
-        await db`create table if not exists searches (
-          id bigserial primary key, kind text not null, params jsonb not null, results int, ms int, at timestamptz not null default now()
-        )`;
-        return true;
-      } catch (err) {
-        console.log(`db: schema ${err instanceof Error ? err.message.slice(0, 200) : err}`);
-        return false;
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const ok = await createTables(db);
+        if (ok) {
+          failedAt = 0;
+          return true;
+        }
+        if (attempt === 0) await sleep(1000);
       }
+      // Forget the failed promise and remember the time: down for a minute, then try again.
+      ready = null;
+      failedAt = Date.now();
+      return false;
     })();
   }
   return ready;
+}
+
+async function createTables(db: NonNullable<ReturnType<typeof client>>): Promise<boolean> {
+  try {
+    await db`create table if not exists fares (
+      id bigserial primary key,
+      src text not null, dst text not null, src_city text, dst_city text,
+      out_date date not null, back_date date, nights int,
+      price numeric(10,2) not null, currency text default 'EUR',
+      stops int, carriers text[], hours numeric(6,1), route text[], url text,
+      seen_at timestamptz not null default now()
+    )`;
+    await db`create index if not exists fares_route_idx on fares (src, dst, out_date, seen_at desc)`;
+    await db`create index if not exists fares_dst_idx on fares (dst, seen_at desc)`;
+    await db`create table if not exists trips (
+      id text primary key, owner text not null, kind text not null, title text not null,
+      body jsonb not null, created_at timestamptz not null default now(), updated_at timestamptz not null default now()
+    )`;
+    await db`create index if not exists trips_owner_idx on trips (owner, updated_at desc)`;
+    await db`create table if not exists searches (
+      id bigserial primary key, kind text not null, params jsonb not null, results int, ms int, at timestamptz not null default now()
+    )`;
+    // Nightly hotel snapshots (scripts/ingest/hotels.ts): the cheapest decent hotel per
+    // city for a standard weekend, so a price well under its own history is a hotel deal.
+    await db`create table if not exists hotel_prices (
+      id bigserial primary key,
+      city_code text not null, checkin date not null, checkout date not null,
+      hotel_id text not null, hotel_name text not null, stars int,
+      per_night numeric(10,2) not null, seen_at timestamptz not null default now()
+    )`;
+    await db`create index if not exists hotel_prices_city_idx on hotel_prices (city_code, seen_at desc)`;
+    return true;
+  } catch (err) {
+    console.log(`db: schema ${err instanceof Error ? err.message.slice(0, 200) : err}`);
+    return false;
+  }
 }
 
 /** Every itinerary a Kiwi search returned, remembered with the time it was seen. */
@@ -83,46 +157,105 @@ export async function recordFares(itineraries: KiwiItinerary[]): Promise<void> {
 
 export type FareSeen = { src: string; dst: string; out: string; back: string | null; nights: number | null; price: number; stops: number; carriers: string[]; hours: number; url: string; seenAt: string };
 
+/** A fares row as the queries below select it: dates already text through to_char. */
+type FareRow = { src: string; dst: string; out_iso: string; back_iso: string | null; nights: number | null; price: string; stops: number; carriers: string[]; hours: string; url: string; seen_at: string | Date };
+
+function fareOf(r: FareRow): FareSeen {
+  return { src: r.src, dst: r.dst, out: isoDay(r.out_iso), back: r.back_iso ? isoDay(r.back_iso) : null, nights: r.nights, price: Number(r.price), stops: r.stops, carriers: r.carriers, hours: Number(r.hours), url: r.url, seenAt: isoStamp(r.seen_at) };
+}
+
 /** What this route cost whenever anyone looked: cheapest per departure date, newest first. */
 export async function fareHistory(src: string, dst: string, from?: string, to?: string, limit = 30): Promise<FareSeen[]> {
   const db = client();
   if (!db || !(await ensureSchema())) return [];
   try {
-    const rows = await db<{ src: string; dst: string; out_date: string; back_date: string | null; nights: number | null; price: string; stops: number; carriers: string[]; hours: string; url: string; seen_at: string }[]>`
-      select distinct on (out_date, coalesce(back_date, '1970-01-01')) src, dst, out_date, back_date, nights, price, stops, carriers, hours, url, seen_at
+    // The ISO aliases are named apart from the columns so distinct on / order by keep using the real date columns.
+    const rows = await db<FareRow[]>`
+      select distinct on (out_date, coalesce(back_date, '1970-01-01')) src, dst,
+        to_char(out_date, 'YYYY-MM-DD') as out_iso, to_char(back_date, 'YYYY-MM-DD') as back_iso,
+        nights, price, stops, carriers, hours, url, seen_at
       from fares where src = ${src} and dst = ${dst}
       ${from ? db`and out_date >= ${from}` : db``} ${to ? db`and out_date <= ${to}` : db``}
       order by out_date, coalesce(back_date, '1970-01-01'), price asc limit ${limit}`;
-    return rows.map((r) => ({ src: r.src, dst: r.dst, out: String(r.out_date).slice(0, 10), back: r.back_date ? String(r.back_date).slice(0, 10) : null, nights: r.nights, price: Number(r.price), stops: r.stops, carriers: r.carriers, hours: Number(r.hours), url: r.url, seenAt: String(r.seen_at) }));
+    return rows.map(fareOf);
   } catch (err) {
     console.log(`db: history ${err instanceof Error ? err.message.slice(0, 160) : err}`);
     return [];
   }
 }
 
-/** The cheapest fare seen to a city in a window, from any of several origins, in the last days. */
-export async function cheapestSeen(origins: string[], dst: string, from: string, to: string, maxAgeDays = 7): Promise<FareSeen | null> {
+/**
+ * The cheapest fare seen to a destination in a window, from any of several origins, in the
+ * last days. `dst` is one airport code or a list of them (a city's airports: BKK and DMK for
+ * Bangkok), and `dstCity` optionally matches the city name Kiwi reported (dst_city), so a
+ * fare into any airport of a multi-airport city is found in one query.
+ */
+export async function cheapestSeen(origins: string[], dst: string | string[], from: string, to: string, maxAgeDays = 7, dstCity?: string): Promise<FareSeen | null> {
   const db = client();
   if (!db || !(await ensureSchema())) return null;
+  const dsts = (Array.isArray(dst) ? dst : [dst]).map((d) => d.trim().toUpperCase()).filter(Boolean);
+  const city = dstCity?.trim();
+  if (!dsts.length && !city) return null;
   try {
-    const rows = await db<{ src: string; dst: string; out_date: string; back_date: string | null; nights: number | null; price: string; stops: number; carriers: string[]; hours: string; url: string; seen_at: string }[]>`
-      select src, dst, out_date, back_date, nights, price, stops, carriers, hours, url, seen_at from fares
-      where src = any(${origins}) and dst = ${dst} and out_date >= ${from} and out_date <= ${to} and seen_at > now() - (${maxAgeDays} || ' days')::interval
+    const rows = await db<FareRow[]>`
+      select src, dst, to_char(out_date, 'YYYY-MM-DD') as out_iso, to_char(back_date, 'YYYY-MM-DD') as back_iso,
+        nights, price, stops, carriers, hours, url, seen_at from fares
+      where src = any(${origins}) and (dst = any(${dsts}) ${city ? db`or lower(dst_city) = lower(${city})` : db``})
+      and out_date >= ${from} and out_date <= ${to} and seen_at > now() - (${maxAgeDays} || ' days')::interval
       order by price asc limit 1`;
     const r = rows[0];
-    return r ? { src: r.src, dst: r.dst, out: String(r.out_date).slice(0, 10), back: r.back_date ? String(r.back_date).slice(0, 10) : null, nights: r.nights, price: Number(r.price), stops: r.stops, carriers: r.carriers, hours: Number(r.hours), url: r.url, seenAt: String(r.seen_at) } : null;
+    return r ? fareOf(r) : null;
   } catch {
     return null;
   }
 }
 
+/**
+ * The usage log: what kind of search ran, with which parameters (never personal data: no
+ * names, coordinates or addresses), how many results, how long. Fire and forget: the routes
+ * call it without awaiting, and it never throws, so a slow or absent database costs the
+ * visitor nothing.
+ */
 export async function logSearch(kind: string, params: unknown, results: number, ms: number): Promise<void> {
-  const db = client();
-  if (!db || !(await ensureSchema())) return;
   try {
-    await db`insert into searches (kind, params, results, ms) values (${kind}, ${db.json(params as never)}, ${results}, ${ms})`;
+    const db = client();
+    if (!db || !(await ensureSchema())) return;
+    await db`insert into searches (kind, params, results, ms) values (${kind}, ${db.json(params as never)}, ${Math.round(results)}, ${Math.round(ms)})`;
   } catch {
     // never block a search on its log
+  }
+}
+
+export type HotelPriceRow = { cityCode: string; checkin: string; checkout: string; hotelId: string; hotelName: string; stars: number | null; perNight: number; seenAt?: string };
+
+/** One row per city per nightly snapshot. The whole snapshot is one insert. */
+export async function recordHotelPrices(rows: HotelPriceRow[]): Promise<boolean> {
+  const db = client();
+  if (!db || !rows.length || !(await ensureSchema())) return false;
+  const seenAt = rows[0].seenAt ?? new Date().toISOString();
+  const values = rows.map((r) => ({ city_code: r.cityCode, checkin: r.checkin, checkout: r.checkout, hotel_id: r.hotelId, hotel_name: r.hotelName.slice(0, 200), stars: r.stars, per_night: Math.round(r.perNight * 100) / 100, seen_at: r.seenAt ?? seenAt }));
+  try {
+    await db`insert into hotel_prices ${db(values, "city_code", "checkin", "checkout", "hotel_id", "hotel_name", "stars", "per_night", "seen_at")}`;
+    return true;
+  } catch (err) {
+    console.log(`db: hotel_prices ${err instanceof Error ? err.message.slice(0, 160) : err}`);
+    return false;
+  }
+}
+
+/** Every snapshot of the last `days`, newest first: what each city's cheapest decent hotel cost each night. */
+export async function hotelPriceHistory(days = 45): Promise<HotelPriceRow[]> {
+  const db = client();
+  if (!db || !(await ensureSchema())) return [];
+  try {
+    const rows = await db<{ city_code: string; checkin_iso: string; checkout_iso: string; hotel_id: string; hotel_name: string; stars: number | null; per_night: string; seen_at: string | Date }[]>`
+      select city_code, to_char(checkin, 'YYYY-MM-DD') as checkin_iso, to_char(checkout, 'YYYY-MM-DD') as checkout_iso,
+        hotel_id, hotel_name, stars, per_night, seen_at from hotel_prices
+      where seen_at > now() - (${days} || ' days')::interval order by seen_at desc limit 20000`;
+    return rows.map((r) => ({ cityCode: r.city_code, checkin: isoDay(r.checkin_iso), checkout: isoDay(r.checkout_iso), hotelId: r.hotel_id, hotelName: r.hotel_name, stars: r.stars, perNight: Number(r.per_night), seenAt: isoStamp(r.seen_at) }));
+  } catch (err) {
+    console.log(`db: hotel history ${err instanceof Error ? err.message.slice(0, 160) : err}`);
+    return [];
   }
 }
 
@@ -145,8 +278,8 @@ export async function listTrips(owner: string): Promise<SavedTrip[]> {
   const db = client();
   if (!db || !(await ensureSchema())) return [];
   try {
-    const rows = await db<{ id: string; owner: string; kind: SavedTrip["kind"]; title: string; body: unknown; created_at: string; updated_at: string }[]>`select * from trips where owner = ${owner} order by updated_at desc limit 50`;
-    return rows.map((r) => ({ id: r.id, owner: r.owner, kind: r.kind, title: r.title, body: r.body, createdAt: String(r.created_at), updatedAt: String(r.updated_at) }));
+    const rows = await db<{ id: string; owner: string; kind: SavedTrip["kind"]; title: string; body: unknown; created_at: string | Date; updated_at: string | Date }[]>`select * from trips where owner = ${owner} order by updated_at desc limit 50`;
+    return rows.map((r) => ({ id: r.id, owner: r.owner, kind: r.kind, title: r.title, body: r.body, createdAt: isoStamp(r.created_at), updatedAt: isoStamp(r.updated_at) }));
   } catch {
     return [];
   }

@@ -11,23 +11,29 @@ import { combinePlaces, type Place } from "@/lib/places";
 import type { Trip, TripCity, TripLeg, TripsResult } from "@/lib/trips";
 import type { PlaceSummary } from "@/app/api/place/route";
 import { fetchBoard } from "@/lib/boards-client";
-import { greatCircle } from "@/lib/arc";
+import { greatCircle, latitudeLines, routePath, type RouteLeg } from "@/lib/arc";
 import { isGem, type FameFile } from "@/lib/gems";
-import { countryName, dateRange } from "@/lib/format";
-import { BANDS, dealKey, type AskState, type Band, type BoardState, type DealNights, type LiveSearch, type Origin, type Sheet, type View } from "@/lib/ui-types";
+import { addDays, countryName, dateRange, localIso, todayIso } from "@/lib/format";
+import { EMPTY_BEEN, countryAllowed, excludedCountries, excludeParam, filterByCountry, loadBeen, saveBeen, type BeenPrefs } from "@/lib/been";
+import { BANDS, dealKey, REGION_CENTROIDS, WILD_REGIONS, type AskState, type Band, type BoardState, type DealNights, type GroupForm, type GroupQuery, type GroupState, type LiveSearch, type LongStayForm, type LongStayResult, type LongStayState, type Origin, type Period, type PickMode, type PickedDetail, type Sheet, type TripMode, type View } from "@/lib/ui-types";
 import type { Airport, City, CityPlaces, CountryInfo, Deal, Destination, FaresResponse, Gateway, HeritageRow, Holiday, Manifest, ReachResponse, ReachStation, Route, VisaFile, WeatherCompact, WeatherFile } from "@/lib/types";
 import { expandWeather, visaFor } from "@/lib/types";
 import Panel, { MODE_LABEL, type CombosState, type PlanState, type WildState } from "./Panel";
+import { EMPTY_LONGSTAY_FORM, emptyGroupForm, shortLoopRoute, WILD_WINDOW_DAYS, type LongStayQuery, type PurposeState, type WildQuery } from "./TripsPanel";
 import type { FinderQuery, FinderState } from "./FinderForm";
 import type { Plan } from "@/lib/plan";
 import type { PurposeTrip } from "@/lib/purpose";
 import type { EatsResponse } from "@/app/api/eats/route";
 import type { HotelsResult } from "@/lib/liteapi";
-import type { WildLeg, WildTrip } from "@/lib/wild";
+import type { WildLeg, WildStop, WildTrip } from "@/lib/wild";
 import type { Sights, Sight } from "@/app/api/sights/route";
 import TopBar from "./TopBar";
 import PriceLabels, { type LabelItem } from "./PriceLabels";
 import type { Intel } from "./PlaceIntel";
+
+const TRIP_MODES: TripMode[] = ["short", "wild", "longstay", "group", "purpose"];
+const LAT_LINES = latitudeLines(15);
+const isPhone = () => typeof window !== "undefined" && window.innerWidth <= 720;
 
 // The bundler cannot resolve MapLibre's worker from import.meta.url; see scripts/copy-worker.mjs.
 maplibregl.setWorkerUrl("/maplibre-gl-worker.mjs");
@@ -80,6 +86,25 @@ const TOOLTIP_STYLE = {
 
 function changesText(n: number | undefined): string {
   return n ? `${n} change${n === 1 ? "" : "s"}` : "direct";
+}
+
+// The city nearest a tap on the bare globe, within about thirty pixels at the current zoom
+// (never under 30 km), so a place pick works on any town, not only on a pin.
+function cityNearTap(cities: Record<string, City>, lat: number, lon: number, zoom: number): string | null {
+  const metresPerPx = (156543.03 * Math.cos((lat * Math.PI) / 180)) / Math.pow(2, zoom);
+  const radiusKm = Math.max(30, (30 * metresPerPx) / 1000);
+  let best: City | null = null;
+  let bestKm = radiusKm;
+  for (const c of Object.values(cities)) {
+    // A degree of latitude is 111 km: skip the far ones before the trigonometry.
+    if (Math.abs(c.lat - lat) * 111 > radiusKm) continue;
+    const km = haversineKm(lat, lon, c.lat, c.lon);
+    if (km < bestKm) {
+      bestKm = km;
+      best = c;
+    }
+  }
+  return best?.name ?? null;
 }
 
 type DealDot = { d: Deal; t: [number, number] };
@@ -153,8 +178,35 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
   const [wildBudget, setWildBudget] = useState("mid");
   const [wildTradeoff, setWildTradeoff] = useState("balanced");
   const [wildVariants, setWildVariants] = useState(1);
-  const [purpose, setPurpose] = useState<{ status: "idle" | "loading" | "ok" | "error"; trips: PurposeTrip[]; note?: string }>({ status: "idle", trips: [] });
+  const [wildPeriod, setWildPeriod] = useState<Period>({ from: "", to: "" });
+  const [purpose, setPurpose] = useState<PurposeState>({ status: "idle", trips: [] });
+  const [purposeKinds, setPurposeKinds] = useState<string[]>([]);
   const [plan, setPlan] = useState<PlanState>({ status: "idle" });
+  const [tripMode, setTripMode] = useState<TripMode>("short");
+  const [longStay, setLongStay] = useState<LongStayState>({ status: "idle" });
+  const [selectedBase, setSelectedBase] = useState<string | null>(null);
+  const [group, setGroup] = useState<GroupState>({ status: "idle" });
+  const [selectedOption, setSelectedOption] = useState<number | null>(null);
+  // The Long stay and Group forms live here, not in the panel: the panel unmounts on a tab
+  // or mode switch, and the visitor expects the form that produced the results to still be
+  // there when they come back (and the group editor's "defaults applied once" flag with it).
+  const [longStayForm, setLongStayForm] = useState<LongStayForm>(EMPTY_LONGSTAY_FORM);
+  const [groupForm, setGroupForm] = useState<GroupForm>(emptyGroupForm);
+  // The chat asking the globe to pick a region, a period or a place (atlas:pick events).
+  const [pick, setPick] = useState<PickMode | null>(null);
+  const [pickPeriod, setPickPeriod] = useState<Period>({ from: "", to: "" });
+  const pickRef = useRef<PickMode | null>(null);
+  pickRef.current = pick;
+  // The map's own click handler is registered once, so it reads the latest state through refs.
+  const viewRef = useRef<View>("deals");
+  const citiesRef = useRef<Record<string, City>>({});
+  const pickedRef = useRef<(d: PickedDetail) => void>(() => {});
+  // Playing the route: the index of the stop the camera is on (-1 home, n home again).
+  const [playing, setPlaying] = useState<number | null>(null);
+  const playRef = useRef<{ timer: number; cancelled: boolean } | null>(null);
+  const playStopRef = useRef<[number, number] | null>(null);
+  const stopPlayRef = useRef<() => void>(() => {});
+  const [lowZoom, setLowZoom] = useState(true);
   const [finder, setFinder] = useState<FinderState>({ status: "idle", deals: [], lines: [] });
   const [chatDeals, setChatDeals] = useState<Deal[]>([]);
   const [chatTrip, setChatTrip] = useState<WildTrip | null>(null);
@@ -162,6 +214,18 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
 
   const [boards, setBoards] = useState<Record<string, BoardState>>({});
   const [month, setMonth] = useState<string | null>(null);
+  // "Been": the countries already visited. Browser only (localStorage), never in the URL.
+  const [been, setBeenState] = useState<BeenPrefs>(EMPTY_BEEN);
+  useEffect(() => {
+    setBeenState(loadBeen());
+  }, []);
+  const setBeen = useCallback((p: BeenPrefs) => {
+    setBeenState(p);
+    saveBeen(p);
+  }, []);
+  // The countries a search must not land in: the list when "only new" is on, else nothing.
+  const exclude = useMemo(() => excludedCountries(been), [been]);
+  const excludeQ = excludeParam(been);
   const [selectedDeal, setSelectedDeal] = useState<string | null>(null);
   const [hoveredDeal, setHoveredDeal] = useState<string | null>(null);
   const [dealNights, setDealNights] = useState<DealNights>("any");
@@ -194,12 +258,25 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
   const [selectedTrip, setSelectedTrip] = useState<string | null>(null);
   const [days, setDays] = useState(5);
   sheetRef.current = sheet;
+  viewRef.current = view;
+  citiesRef.current = cities;
+
+  // On a phone a sheet opened full hides the globe; anything that frames or flies the camera
+  // drops it to half first, and reads the padding of that half through sheetRef at once.
+  const revealMap = useCallback(() => {
+    if (!isPhone() || sheetRef.current !== "full") return;
+    sheetRef.current = "half";
+    setSheet("half");
+  }, []);
 
   // Keep the interesting part of the globe clear of the panel: right of it on desktop, above
   // the sheet on phones.
   const panelPadding = useCallback(() => {
     if (typeof window !== "undefined" && window.innerWidth <= 720) {
       const s = sheetRef.current;
+      // A full sheet leaves no map to frame into (globals.css: 100vh minus the top bar); the
+      // callers drop it to half through revealMap() first, so "full" pads like "half" here
+      // rather than asking MapLibre for a padding larger than the viewport.
       return { left: 16, right: 16, top: 70, bottom: (s === "peek" ? 150 : Math.round(window.innerHeight * 0.56)) + 24 };
     }
     return { left: 504, top: 84, right: 60, bottom: 60 };
@@ -253,6 +330,16 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [view, selectedDeal]);
 
+  // "wild" was a tab of its own; it is now the Wild mode of the Trips tab, and old links keep working.
+  const changeView = useCallback((v: View) => {
+    if (v === "wild") {
+      setView("trips");
+      setTripMode("wild");
+    } else setView(v);
+  }, []);
+  const wildOpen = view === "trips" && tripMode === "wild";
+  const shortOpen = view === "trips" && tripMode === "short";
+
   // The address bar follows the globe, so any view is a link.
   useEffect(() => {
     if (!origin) return;
@@ -260,13 +347,14 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
     q.set("from", `${origin.lat.toFixed(3)},${origin.lon.toFixed(3)},${origin.label}`);
     if (month) q.set("month", month);
     if (view !== "deals") q.set("view", view);
-    if (view === "trips" && days !== 5) q.set("days", String(days));
+    if (view === "trips" && tripMode !== "short") q.set("mode", tripMode);
+    if (shortOpen && days !== 5) q.set("days", String(days));
     if (selectedPlace && view !== "deals") q.set("place", selectedPlace);
     if (selectedDeal && view === "deals") q.set("deal", selectedDeal);
-    if (selectedTrip && view === "trips") q.set("trip", selectedTrip);
+    if (selectedTrip && shortOpen) q.set("trip", selectedTrip);
     const url = `${window.location.pathname}?${q.toString()}`;
     if (url !== `${window.location.pathname}${window.location.search}`) window.history.replaceState(null, "", url);
-  }, [origin, month, view, days, selectedPlace, selectedDeal, selectedTrip]);
+  }, [origin, month, view, tripMode, shortOpen, days, selectedPlace, selectedDeal, selectedTrip]);
 
   const cityOf = useMemo(() => {
     const m = new Map<string, string>();
@@ -297,7 +385,9 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
     const toSat = (6 - d.getDay() + 7) % 7;
     const sat = new Date(d.getTime() + toSat * 86_400_000);
     const sun = new Date(sat.getTime() + 86_400_000);
-    return [sat.toISOString().slice(0, 10), sun.toISOString().slice(0, 10)];
+    // The visitor's own calendar days: toISOString would name the UTC day, which is already
+    // Sunday for a Friday evening in Lima and reads the wrong weekend's weather.
+    return [localIso(sat), localIso(sun)];
   }, []);
   const weekendMax = (code: string | null): number | null => {
     const days = code ? weather?.cities[code] : undefined;
@@ -314,7 +404,9 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
     if (m && /^\d{4}-\d{2}$/.test(m)) setMonth(m);
     const from = q.get("from")?.split(",");
     const v = q.get("view");
-    if (v === "chat" || v === "deals" || v === "all" || v === "fly" || v === "ground" || v === "trips" || v === "wild") setView(v);
+    if (v === "chat" || v === "deals" || v === "all" || v === "fly" || v === "ground" || v === "trips" || v === "wild") changeView(v);
+    const mode = q.get("mode") as TripMode | null;
+    if (mode && TRIP_MODES.includes(mode)) setTripMode(mode);
     if (from && from.length >= 2 && Number.isFinite(Number(from[0])) && Number.isFinite(Number(from[1]))) {
       setOrigin({ lat: Number(from[0]), lon: Number(from[1]), label: from.slice(2).join(",") || "shared location", source: "search" });
       const d = Number(q.get("days"));
@@ -506,7 +598,15 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
 
   // ---- deals ----
   // A custom search replaces tonight's boards until it is cleared.
-  const dealsAll = useMemo(() => (view === "chat" && chatDeals.length ? chatDeals : finder.status === "idle" ? boardList.flatMap((b) => b.deals) : finder.deals), [boardList, finder, view, chatDeals]);
+  const purposeDeals = useMemo(() => purpose.trips.map((t) => t.deal).filter((d): d is Deal => !!d), [purpose.trips]);
+  const purposeOpen = view === "trips" && tripMode === "purpose";
+  // Stored boards never saw the Been list, so deals landing in an excluded country are dropped here too.
+  // The chat's deals are left alone: its tools already filter, and the traveller can tell the
+  // chat that a been country is fine this once, which must then show on the globe as well.
+  const dealsAll = useMemo(
+    () => (view === "chat" && chatDeals.length ? chatDeals : filterByCountry(purposeOpen ? purposeDeals : finder.status === "idle" ? boardList.flatMap((b) => b.deals) : finder.deals, exclude)),
+    [boardList, finder, view, chatDeals, purposeOpen, purposeDeals, exclude],
+  );
   async function runFinder(q: FinderQuery) {
     setFinder({ status: "loading", query: q, deals: [], lines: [] });
     setSelectedDeal(null);
@@ -517,6 +617,7 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
     if (q.maxHours) params.set("maxHours", String(q.maxHours));
     if (q.returnTo.length) params.set("returnTo", q.returnTo.join(","));
     if (q.tricks) params.set("tricks", "1");
+    if (excludeQ) params.set("exclude", excludeQ);
     try {
       const r = await fetch(`/api/finder?${params}`);
       if (!r.ok) {
@@ -544,10 +645,11 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
           nl = buf.indexOf("\n");
           if (!line) continue;
           try {
-            const msg = JSON.parse(line) as { progress?: string; deals?: Deal[]; done?: { searched: number; count: number }; error?: string };
+            const msg = JSON.parse(line) as { progress?: string; deals?: Deal[]; done?: { searched: number; count: number; note?: string }; error?: string };
             if (msg.progress) setFinder((f) => ({ ...f, lines: [...f.lines, msg.progress!] }));
             if (msg.deals) setFinder((f) => { const seen = new Set(f.deals.map(dealKey)); return { ...f, deals: [...f.deals, ...msg.deals!.filter((d) => !seen.has(dealKey(d)))] }; });
-            if (msg.done) { finished = true; setFinder((f) => ({ ...f, status: "ok", searched: msg.done!.searched })); }
+            // done.note is the route's explanation of an empty answer (rate-limited); the panel shows it where the deals would be.
+            if (msg.done) { finished = true; setFinder((f) => ({ ...f, status: "ok", searched: msg.done!.searched, note: msg.done!.note })); }
             if (msg.error) { finished = true; setFinder((f) => ({ ...f, status: "error", note: msg.error })); }
           } catch {
             // partial line
@@ -622,7 +724,8 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
     const used = new Set(ask.used);
     return dealsAll.filter((d) => used.has(dealKey(d))).sort((a, b) => a.price - b.price);
   }, [dealsShown, dealsAll, ask, askOnly]);
-  const deal = selectedDeal ? (dealsAll.find((d) => dealKey(d) === selectedDeal) ?? null) : null;
+  // A deal opened from the chat or the purpose list may not be on tonight's boards.
+  const deal = selectedDeal ? (dealsAll.find((d) => dealKey(d) === selectedDeal) ?? chatDeals.find((d) => dealKey(d) === selectedDeal) ?? purposeDeals.find((d) => dealKey(d) === selectedDeal) ?? null) : null;
   const dealOptions = useMemo(() => (deal ? dealsAll.filter((d) => d.dstCity === deal.dstCity).sort((a, b) => a.price - b.price).slice(0, 8) : []), [deal, dealsAll]);
 
   async function askAgent(question: string) {
@@ -728,8 +831,8 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
     const code = target.code;
     const city = code ? cities[code] : undefined;
     const countryCode = target.country;
-    const horizon = new Date(Date.now() + 60 * 86_400_000).toISOString().slice(0, 10);
-    const today = new Date().toISOString().slice(0, 10);
+    const horizon = localIso(new Date(Date.now() + 60 * 86_400_000));
+    const today = todayIso();
     return {
       code,
       tz: city?.tz,
@@ -824,7 +927,7 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
     if (!deal) return;
     setCombos({ status: "loading" });
     try {
-      const r = await fetch(`/api/combos?gw=${deal.gw}&dst=${deal.dst}&city=${deal.dstCity}&out=${deal.out}&back=${deal.back}&price=${deal.price}`);
+      const r = await fetch(`/api/combos?gw=${deal.gw}&dst=${deal.dst}&city=${deal.dstCity}&out=${deal.out}&back=${deal.back}&price=${deal.price}${excludeQ ? `&exclude=${excludeQ}` : ""}`);
       const j = await r.json();
       if (!r.ok || j.error) setCombos({ status: "error", note: j.error ?? `failed (${r.status})` });
       else setCombos({ status: "ok", result: j });
@@ -856,8 +959,20 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
     if (!boardGateways.length || !gateways[0]) return;
     setWild({ status: "loading", lines: [] });
     setPlan({ status: "idle" });
-    const q = new URLSearchParams({ g: boardGateways.map((g) => g.iata).join(","), home: gateways[0].airport.country, region: wildRegion, nights: String(wildNights), style: wildStyle, budget: wildBudget, tradeoff: wildTradeoff, variants: String(wildVariants) });
-    if (month) q.set("month", month);
+    // The trip's identity (what /api/plan needs to find the same stored trip) and the extras
+    // (where the visitor is) are kept apart: the plan is asked with the identity only.
+    const query: WildQuery = { g: boardGateways.map((g) => g.iata).join(","), home: gateways[0].airport.country, region: wildRegion, nights: String(wildNights), style: wildStyle, budget: wildBudget, tradeoff: wildTradeoff, variants: String(wildVariants) };
+    if (month) query.month = month;
+    // The excluded countries are part of the trip's identity: the plan is looked up under the same key.
+    if (excludeQ) query.exclude = excludeQ;
+    // An explicit departure window beats the month. The engine searches at most ten departure
+    // days and the route refuses a wider window, so the window is clipped here, as the form says.
+    if (wildPeriod.from) {
+      query.from = wildPeriod.from;
+      const latest = addDays(wildPeriod.from, WILD_WINDOW_DAYS);
+      if (wildPeriod.to) query.to = wildPeriod.to < latest ? wildPeriod.to : latest;
+    }
+    const q = new URLSearchParams(query);
     if (origin) {
       q.set("lat", origin.lat.toFixed(4));
       q.set("lon", origin.lon.toFixed(4));
@@ -872,7 +987,7 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
       }
       if (!r.headers.get("content-type")?.includes("ndjson")) {
         const trip = (await r.json()) as WildTrip;
-        setWild({ status: "ok", lines: [], trip, source: "stored" });
+        setWild({ status: "ok", lines: [], trip, source: "stored", query });
         frameWild(trip);
         return;
       }
@@ -895,7 +1010,7 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
             if (msg.progress) setWild((w) => ({ ...w, lines: [...w.lines, msg.progress!] }));
             if (msg.trip) {
               finished = true;
-              setWild({ status: "ok", lines: [], trip: msg.trip, source: "live" });
+              setWild({ status: "ok", lines: [], trip: msg.trip, source: "live", query });
               frameWild(msg.trip);
             }
             if (msg.error) {
@@ -915,8 +1030,10 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
   async function planWild() {
     if (!boardGateways.length) return;
     setPlan({ status: "loading" });
-    const q = new URLSearchParams({ g: boardGateways.map((g) => g.iata).join(","), region: wildRegion, nights: String(wildNights), style: wildStyle, budget: wildBudget });
-    if (month) q.set("month", month);
+    // The plan belongs to the trip on screen, so it is asked with the exact query that built
+    // it (tradeoff, versions, departure window included), not with the form as it is now.
+    const query = wild.query ?? { g: boardGateways.map((g) => g.iata).join(","), region: wildRegion, nights: String(wildNights), style: wildStyle, budget: wildBudget, ...(month ? { month } : {}), ...(excludeQ ? { exclude: excludeQ } : {}) };
+    const q = new URLSearchParams(query);
     try {
       const r = await fetch(`/api/plan?${q}`);
       const j = (await r.json()) as Plan & { error?: string };
@@ -941,55 +1058,161 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
   async function findPurpose() {
     if (!boardGateways.length) return;
     setPurpose({ status: "loading", trips: [] });
-    const from = month ? `${month}-01` : new Date(Date.now() + 3 * 86_400_000).toISOString().slice(0, 10);
-    const to = month ? new Date(Date.UTC(Number(month.slice(0, 4)), Number(month.slice(5, 7)), 0)).toISOString().slice(0, 10) : new Date(Date.now() + 62 * 86_400_000).toISOString().slice(0, 10);
+    // Local days, so an evening visitor west of Greenwich is not asked for a window that starts tomorrow.
+    const from = month ? `${month}-01` : localIso(new Date(Date.now() + 3 * 86_400_000));
+    const to = month ? new Date(Date.UTC(Number(month.slice(0, 4)), Number(month.slice(5, 7)), 0)).toISOString().slice(0, 10) : localIso(new Date(Date.now() + 62 * 86_400_000));
+    const kinds = purposeKinds.length ? `&kinds=${purposeKinds.join(",")}` : "";
     try {
-      const r = await fetch(`/api/purpose?g=${boardGateways.map((g) => g.iata).join(",")}&from=${from}&to=${to}&live=4`);
-      const j = (await r.json()) as { trips?: PurposeTrip[]; error?: string };
+      const r = await fetch(`/api/purpose?g=${boardGateways.map((g) => g.iata).join(",")}&from=${from}&to=${to}&live=4${kinds}${excludeQ ? `&exclude=${excludeQ}` : ""}`);
+      const j = (await r.json()) as { trips?: PurposeTrip[]; note?: string; error?: string };
       if (!r.ok || j.error) setPurpose({ status: "error", trips: [], note: j.error ?? `failed (${r.status})` });
       else {
-        setPurpose({ status: "ok", trips: j.trips ?? [] });
-        setChatDeals((j.trips ?? []).map((t) => t.deal).filter((d): d is Deal => !!d));
+        // The route's note says when live prices were refused, so unpriced events are explained.
+        setPurpose({ status: "ok", trips: j.trips ?? [], note: j.note });
+        frameDeals((j.trips ?? []).map((t) => t.deal).filter((d): d is Deal => !!d));
       }
     } catch {
       setPurpose({ status: "error", trips: [], note: "network" });
     }
   }
+  // The cheapest base for a month or more in the chosen region: GET /api/longstay.
+  async function findLongStay(q: LongStayQuery) {
+    if (!boardGateways.length || !gateways[0]) return;
+    setLongStay({ status: "loading" });
+    setSelectedBase(null);
+    const params = new URLSearchParams({ g: boardGateways.map((g) => g.iata).join(","), home: gateways[0].airport.country, region: wildRegion, months: String(q.months), budget: q.budget });
+    if (q.startMonth) params.set("startMonth", q.startMonth);
+    if (q.countries?.length) params.set("countries", q.countries.join(","));
+    if (excludeQ) params.set("exclude", excludeQ);
+    try {
+      const r = await fetch(`/api/longstay?${params}`);
+      const j = (await r.json().catch(() => ({}))) as Partial<LongStayResult> & { error?: string };
+      if (!r.ok || j.error || !Array.isArray(j.bases)) {
+        setLongStay({ status: "error", note: j.error ?? `the base search failed (${r.status})` });
+        return;
+      }
+      // skipped, failed, partial and note are the engine's own account of what it left out; the panel shows them.
+      setLongStay({ status: "ok", result: { bases: j.bases, searched: j.searched ?? 0, failed: j.failed, partial: j.partial, skipped: j.skipped ?? [], generatedAt: j.generatedAt ?? new Date().toISOString(), note: j.note } });
+      framePoints(j.bases.map((b) => [b.lon, b.lat] as [number, number]), 4.5);
+    } catch {
+      setLongStay({ status: "error", note: "network" });
+    }
+  }
+  // Where a group can meet: POST /api/group with everyone's airports and free windows.
+  async function findGroup(q: GroupQuery) {
+    setGroup({ status: "loading" });
+    setSelectedOption(null);
+    try {
+      // The exclude list rides on the URL like every other search route; the body carries it too for a route that only reads JSON.
+      const r = await fetch(`/api/group${excludeQ ? `?exclude=${excludeQ}` : ""}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(excludeQ ? { ...q, exclude: excludeQ } : q) });
+      const j = (await r.json().catch(() => ({}))) as Partial<NonNullable<GroupState["result"]>> & { error?: string };
+      if (!r.ok || j.error || !Array.isArray(j.options)) {
+        setGroup({ status: "error", note: j.error ?? `the group search failed (${r.status})` });
+        return;
+      }
+      setGroup({ status: "ok", result: { windows: j.windows ?? [], options: j.options, searched: j.searched ?? 0, failed: j.failed, partial: j.partial, generatedAt: j.generatedAt ?? new Date().toISOString() } });
+      const pts = j.options.map((o) => wildCoord(o.dstCity)).filter((c): c is [number, number] => !!c);
+      for (const m of q.members) for (const o of m.origins) { const c = wildCoord(o); if (c) pts.push(c); }
+      framePoints(pts, 4.5);
+    } catch {
+      setGroup({ status: "error", note: "network" });
+    }
+  }
+  function framePoints(pts: [number, number][], maxZoom: number) {
+    const map = mapRef.current;
+    if (!map || pts.length === 0) return;
+    revealMap();
+    const bounds = new maplibregl.LngLatBounds(pts[0], pts[0]);
+    for (const q of pts) bounds.extend(q);
+    map.fitBounds(bounds, { padding: panelPadding(), maxZoom, duration: 1500 });
+  }
+  function frameDeals(ds: Deal[]) {
+    const pts = ds.map(dealCoord).filter((c): c is [number, number] => !!c);
+    if (origin) pts.push([origin.lon, origin.lat]);
+    framePoints(pts, 5);
+  }
+  // The chat's answer takes the stage: the open deal closes and the camera frames the result.
+  function frameChatDeals(ds: Deal[]) {
+    setSelectedDeal(null);
+    const map = mapRef.current;
+    const pts = ds.map(dealCoord).filter((c): c is [number, number] => !!c);
+    if (map && pts.length && origin) {
+      const b = new maplibregl.LngLatBounds([origin.lon, origin.lat], [origin.lon, origin.lat]);
+      for (const q of pts) b.extend(q);
+      map.fitBounds(b, { padding: panelPadding(), maxZoom: 5, duration: 1400 });
+    }
+  }
+  // ChatPanel stays mounted on every tab, so a slow answer can land while the visitor is on
+  // Deals or Trips with a deal open or a form half filled. The result is stored at once (the
+  // arcs may draw) but closing the deal, moving the camera and dropping a phone sheet wait
+  // until the Ask tab is in front again.
+  const pendingChatFrame = useRef<{ kind: "deals"; deals: Deal[] } | { kind: "trip"; trip: WildTrip } | null>(null);
+  function onChatDeals(ds: Deal[]) {
+    setChatTrip(null);
+    setChatDeals(ds);
+    if (viewRef.current === "chat") {
+      pendingChatFrame.current = null;
+      frameChatDeals(ds);
+    } else pendingChatFrame.current = { kind: "deals", deals: ds };
+  }
+  function onChatTrip(t: WildTrip) {
+    setChatDeals([]);
+    setChatTrip(t);
+    if (viewRef.current === "chat") {
+      pendingChatFrame.current = null;
+      frameWild(t);
+    } else pendingChatFrame.current = { kind: "trip", trip: t };
+  }
+  useEffect(() => {
+    const p = pendingChatFrame.current;
+    if (view !== "chat" || !p) return;
+    pendingChatFrame.current = null;
+    if (p.kind === "deals") frameChatDeals(p.deals);
+    else frameWild(p.trip);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [view]);
   // The place the traveller is in, as a place page.
   function showHere() {
     if (!origin) return;
     setView("all");
     setSelectedPlace("here");
   }
+  // Frame the stops of a loop, not the way there: the region fills the screen and the long
+  // arcs home run off the edge, which reads better on the globe than a half-planet fit.
   function frameWild(trip: WildTrip) {
     const map = mapRef.current;
     if (!map) return;
-    const pts: [number, number][] = [];
-    for (const s of trip.stops) pts.push([s.lon, s.lat]);
-    const home = wildCoord(trip.home);
-    if (home) pts.push(home);
-    if (pts.length < 2) return;
-    const bounds = new maplibregl.LngLatBounds(pts[0], pts[0]);
-    for (const q of pts) bounds.extend(q);
-    map.fitBounds(bounds, { padding: panelPadding(), maxZoom: 4.5, duration: 1600 });
+    const stops = trip.stops.filter((s) => s.lat || s.lon);
+    if (!stops.length) return;
+    spinRef.current = false;
+    revealMap();
+    // fitBounds on the globe with a padded viewport lands half a planet off for a loop that
+    // also stops in a hub on the way (Istanbul to Bangkok), so the camera goes where the
+    // nights are: a nights-weighted centre, zoomed for the spread of the stops.
+    const w = stops.reduce((s, x) => s + Math.max(1, x.nights), 0);
+    const lon = stops.reduce((s, x) => s + x.lon * Math.max(1, x.nights), 0) / w;
+    const lat = stops.reduce((s, x) => s + x.lat * Math.max(1, x.nights), 0) / w;
+    const span = Math.max(Math.max(...stops.map((s) => s.lon)) - Math.min(...stops.map((s) => s.lon)), 1.4 * (Math.max(...stops.map((s) => s.lat)) - Math.min(...stops.map((s) => s.lat))), 4);
+    const zoom = Math.max(2.2, Math.min(4.5, Math.log2(140 / span) + 1.5));
+    map.flyTo({ center: [lon, lat], zoom, duration: 1600, padding: panelPadding(), essential: true });
   }
 
   const homeHolidays = useMemo(() => {
     const home = gateways[0]?.airport.country;
     if (!home) return [];
-    const today = new Date().toISOString().slice(0, 10);
-    const horizon = new Date(Date.now() + 120 * 86_400_000).toISOString().slice(0, 10);
+    const today = todayIso();
+    const horizon = localIso(new Date(Date.now() + 120 * 86_400_000));
     return (holidays[home] ?? []).filter((h) => h.national && h.date >= today && h.date <= horizon).slice(0, 4);
   }, [gateways, holidays]);
   const anyFares = Object.values(faresByGateway).some((f) => f.status === "ok" && f.fares.length > 0);
   const fareSource = Object.values(faresByGateway).some((f) => f.note?.includes("Kiwi")) ? "one-way fares found on Kiwi.com (weekly search)" : "cached one-way fares from Aviasales searches";
 
   useEffect(() => {
-    if (view !== "trips" || !gateways.length) return;
+    if (!shortOpen || !gateways.length) return;
     const ctrl = new AbortController();
     setTrips(null);
     const g = gateways.map((x) => `${x.airport.iata}:${x.airport.lat}:${x.airport.lon}:${x.driveMin}`).join(",");
-    const extra = around ? `&around=${around}` : "";
+    const extra = `${around ? `&around=${around}` : ""}${exclude.length ? `&exclude=${exclude.join(",")}` : ""}`;
     fetch(`/api/trips?g=${g}&home=${gateways[0].airport.country}&days=${days}${extra}`, { signal: ctrl.signal })
       .then((r) => r.json())
       .then((j: TripsResult) => {
@@ -998,9 +1221,156 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
       })
       .catch(() => {});
     return () => ctrl.abort();
-  }, [view, gateways, days, around]);
+  }, [shortOpen, gateways, days, around, exclude]);
 
-  const trip: Trip | null = view === "trips" && trips ? (trips.trips.find((t) => t.id === selectedTrip) ?? null) : null;
+  // /api/trips already skips excluded countries; this client-side pass is belt and braces for a
+  // cached answer from before the list changed, so nothing with such a night draws or lists.
+  const tripsShown = useMemo<TripsResult | null>(() => {
+    if (!trips || !exclude.length) return trips;
+    return { ...trips, trips: trips.trips.filter((t) => t.cities.every((c) => countryAllowed(c.country, exclude))) };
+  }, [trips, exclude]);
+  // When the selected loop was dropped by the filter, the first loop left takes its place.
+  useEffect(() => {
+    if (!tripsShown) return;
+    setSelectedTrip((cur) => (cur && tripsShown.trips.some((t) => t.id === cur) ? cur : (tripsShown.trips[0]?.id ?? null)));
+  }, [tripsShown]);
+
+  const trip: Trip | null = shortOpen && tripsShown ? (tripsShown.trips.find((t) => t.id === selectedTrip) ?? null) : null;
+  const homeLabel = boardGateways[0]?.label ?? origin?.label ?? "Home";
+
+  // The trip the globe draws and plays: the wild loop, the chat's loop or the short loop, as
+  // stops and legs in one shape, plus the home point its route leaves from and returns to.
+  const route = useMemo<{ stops: WildStop[]; legs: WildLeg[]; home: [number, number] | null } | null>(() => {
+    const wt = wildOpen ? wild.trip : view === "chat" && chatTrip && !chatDeals.length ? chatTrip : null;
+    if (wt) return { stops: wt.stops, legs: wt.legs, home: wildCoord(wt.home) };
+    if (trip) {
+      const r = shortLoopRoute(trip, homeLabel);
+      const first = trip.legs[0];
+      return { ...r, home: first?.kind === "fly" ? wildCoord(first.from) : origin ? [origin.lon, origin.lat] : null };
+    }
+    return null;
+  }, [wildOpen, wild.trip, view, chatTrip, chatDeals.length, trip, wildCoord, homeLabel, origin]);
+  // Legs on the globe, coordinates resolved: a leg to the front door ends at the visitor.
+  const routeLegs = useMemo<RouteLeg[]>(() => {
+    if (!route) return [];
+    const at = (code: string): [number, number] | null => wildCoord(code) ?? (origin && code === origin.label ? [origin.lon, origin.lat] : null);
+    return route.legs.map((l) => ({ from: at(l.from), to: at(l.to), kind: l.kind })).filter((x): x is RouteLeg => !!x.from && !!x.to);
+  }, [route, wildCoord, origin]);
+
+  // Play the route: the camera flies home, then to each stop in turn, then home, 2.5 s a hop;
+  // any touch of the globe stops it.
+  function stopPlay() {
+    const cur = playRef.current;
+    if (cur) {
+      cur.cancelled = true;
+      window.clearTimeout(cur.timer);
+    }
+    playRef.current = null;
+    playStopRef.current = null;
+    setPlaying(null);
+  }
+  stopPlayRef.current = stopPlay;
+  function playRoute() {
+    const map = mapRef.current;
+    if (!map || !route || !route.stops.length) return;
+    stopPlay();
+    const pts: [number, number][] = [...(route.home ? [route.home] : []), ...route.stops.map((s) => [s.lon, s.lat] as [number, number]), ...(route.home ? [route.home] : [])];
+    const first = route.home ? -1 : 0;
+    const state = { timer: 0, cancelled: false };
+    playRef.current = state;
+    spinRef.current = false;
+    // On a phone the flight is the point, so the sheet drops to a peek for the duration and
+    // comes back to half once the camera is home again (a touch that cancels it leaves it).
+    const phone = isPhone();
+    if (phone) {
+      sheetRef.current = "peek";
+      setSheet("peek");
+    }
+    let i = first;
+    const step = () => {
+      if (state.cancelled) return;
+      const k = i - first;
+      const isStop = i >= 0 && i < route.stops.length;
+      setPlaying(i);
+      playStopRef.current = isStop ? pts[k] : null;
+      map.flyTo({ center: pts[k], zoom: isStop ? (phone ? 5.2 : 6) : 3.6, duration: 2200, easing: (t) => 1 - Math.pow(1 - t, 3), padding: panelPadding(), essential: true });
+      i++;
+      if (k + 1 < pts.length) state.timer = window.setTimeout(step, 2500);
+      else
+        state.timer = window.setTimeout(() => {
+          stopPlay();
+          if (phone) setSheet("half");
+        }, 2800);
+    };
+    step();
+  }
+  function focusStop(i: number) {
+    const s = route?.stops[i];
+    const map = mapRef.current;
+    if (!s || !map) return;
+    stopPlay();
+    revealMap();
+    map.flyTo({ center: [s.lon, s.lat], zoom: 6, duration: 1400, padding: panelPadding() });
+  }
+
+  // Picking a region: the chips, the tags on the globe and the chat all land here.
+  function selectRegion(key: string) {
+    setWildRegion(key);
+    const c = REGION_CENTROIDS[key];
+    const map = mapRef.current;
+    if (c && map) {
+      spinRef.current = false;
+      map.flyTo({ center: [c[1], c[0]], zoom: 2.8, duration: 1600, padding: panelPadding() });
+    }
+    picked({ mode: "region", region: key });
+  }
+  function picked(detail: PickedDetail) {
+    // Cleared before the event goes out: a tap on a pin reaches both deck.gl and the map in
+    // the same tick, and the chat must hear one answer, not two.
+    pickRef.current = null;
+    setPick(null);
+    window.dispatchEvent(new CustomEvent("atlas:picked", { detail }));
+    // The pick dropped the phone sheet to show the globe; the reply streams into the chat,
+    // so the sheet comes back up for it.
+    if (isPhone() && viewRef.current === "chat") setSheet("full");
+  }
+  pickedRef.current = picked;
+  function cancelPick() {
+    pickRef.current = null;
+    setPick(null);
+    if (isPhone() && viewRef.current === "chat") setSheet("full");
+  }
+  // The chat asks for a pick; the globe shows the region tags, the period picker or waits for a tap.
+  useEffect(() => {
+    const onPick = (e: Event) => {
+      const d = (e as CustomEvent<{ mode?: PickMode }>).detail;
+      if (d?.mode !== "region" && d?.mode !== "dates" && d?.mode !== "place") return;
+      setPick(d.mode);
+      if (isPhone()) setSheet(d.mode === "dates" ? "full" : "peek");
+      if (d.mode === "region") {
+        const map = mapRef.current;
+        spinRef.current = false;
+        map?.flyTo({ center: [50, 15], zoom: 1.5, duration: 1600, essential: true });
+      }
+    };
+    window.addEventListener("atlas:pick", onPick);
+    return () => window.removeEventListener("atlas:pick", onPick);
+  }, []);
+  /** A tap on a place while the chat waits for one: answer it, and still open the place. */
+  const placePicked = (name: string) => {
+    if (pickRef.current === "place") picked({ mode: "place", place: name });
+  };
+
+  // On a phone the sheet opens fully for a conversation, and to half for a trip: the route,
+  // the numbered stops and the camera playing through them need the globe in view.
+  useEffect(() => {
+    if (!isPhone()) return;
+    if (view === "chat") setSheet("full");
+    else if ((wildOpen && wild.status === "ok") || (shortOpen && selectedTrip)) setSheet("half");
+  }, [view, wildOpen, wild.status, shortOpen, selectedTrip]);
+  useEffect(() => stopPlay, [view, tripMode, selectedTrip, wild.trip]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const busy = searching || asking || wild.status === "loading" || finder.status === "loading" || longStay.status === "loading" || group.status === "loading" || purpose.status === "loading" || plan.status === "loading" || liveSearch?.status === "loading" || combos.status === "loading" || (shortOpen && !trips);
 
   const pathForSelected = useMemo<[number, number][]>(() => {
     if (!reach || selectedStation == null) return [];
@@ -1021,13 +1391,36 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
 
   // Price tags on the globe: one per city shown, cheapest first; the open or hovered one wins.
   const labelItems = useMemo<LabelItem[]>(() => {
-    if (view === "wild" || (view === "chat" && chatTrip && !chatDeals.length)) {
-      const t = view === "wild" ? wild.trip : chatTrip;
-      if (!t) return [];
-      return t.stops.map((st, i) => ({ key: `${st.code}-${i}`, lon: st.lon, lat: st.lat, text: `${st.name} · ${st.nights}n`, hot: i === 0, cheap: false }));
-    }
-    if (view !== "deals" && view !== "chat") return [];
     const out: LabelItem[] = [];
+    // Region tags: while choosing where a loop or a long stay goes, or when the chat asks.
+    // They come after the stops and bases so a result always wins the space.
+    const regions: LabelItem[] = [];
+    const picking = (view === "trips" && (tripMode === "wild" || tripMode === "longstay")) || pick === "region";
+    const showingResult = !!route || (view === "trips" && tripMode === "longstay" && longStay.status === "ok");
+    if (picking) {
+      for (const r of WILD_REGIONS) {
+        const c = REGION_CENTROIDS[r.key];
+        regions.push({ key: `region:${r.key}`, lon: c[1], lat: c[0], text: r.label, kind: "region", hot: r.key === wildRegion && !showingResult });
+      }
+    }
+    if (route) {
+      // Numbered stops of the trip on the globe; the one the camera is on is lit.
+      out.push(...route.stops.map((st, i) => ({ key: `stop:${i}`, lon: st.lon, lat: st.lat, text: `${i + 1} · ${st.name} · ${st.nights}n`, kind: "stop" as const, hot: playing === i })));
+      return [...out, ...regions];
+    }
+    if (view === "trips" && tripMode === "longstay" && longStay.status === "ok" && longStay.result) {
+      for (const b of longStay.result.bases) out.push({ key: `base:${b.code}`, lon: b.lon, lat: b.lat, text: b.name, sub: `€${b.perDay} a day`, kind: "base", hot: b.code === selectedBase });
+      return [...out, ...regions];
+    }
+    out.push(...regions);
+    if (view === "trips" && tripMode === "group" && group.status === "ok" && group.result) {
+      group.result.options.forEach((o, i) => {
+        const c = wildCoord(o.dstCity);
+        if (c) out.push({ key: `option:${i}`, lon: c[0], lat: c[1], text: `€${o.total}`, sub: o.city, kind: "base", hot: i === selectedOption, cheap: i === 0 });
+      });
+      return out;
+    }
+    if (view !== "deals" && view !== "chat" && !purposeOpen) return out;
     for (const d of dealsList.slice(0, 80)) {
       const c = dealCoord(d);
       if (!c) continue;
@@ -1040,7 +1433,24 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
     }
     out.sort((a, b) => (a.hot === b.hot ? 0 : a.hot ? -1 : 1));
     return out;
-  }, [view, dealsList, deal, selectedDeal, hoveredDeal, dealCoord, wild.trip, chatTrip, chatDeals.length]);
+  }, [view, tripMode, pick, wildRegion, route, playing, longStay, selectedBase, group, selectedOption, wildCoord, purposeOpen, dealsList, deal, selectedDeal, hoveredDeal, dealCoord]);
+  function pickLabel(key: string) {
+    if (key.startsWith("region:")) return selectRegion(key.slice(7));
+    if (key.startsWith("stop:")) return focusStop(Number(key.slice(5)));
+    if (key.startsWith("base:")) {
+      const code = key.slice(5);
+      setSelectedBase((cur) => (cur === code ? null : code));
+      const c = wildCoord(code);
+      if (c) mapRef.current?.flyTo({ center: c, zoom: 6, duration: 1300, padding: panelPadding() });
+      return;
+    }
+    if (key.startsWith("option:")) {
+      const i = Number(key.slice(7));
+      setSelectedOption((cur) => (cur === i ? null : i));
+      return;
+    }
+    focusDeal(key);
+  }
 
   // Animated layers (the trail of the selected deal, the pulse at home) are rebuilt every
   // frame from refs; everything else is rebuilt when state changes.
@@ -1086,6 +1496,26 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
         }),
       );
     }
+    // The stop the camera is on while the route plays pulses in mint.
+    const ps = playStopRef.current;
+    if (ps) {
+      const phase = (t % 1.4) / 1.4;
+      anim.push(
+        new ScatterplotLayer<{ p: [number, number] }>({
+          id: "play-pulse",
+          data: [{ p: ps }],
+          getPosition: (x) => x.p,
+          radiusUnits: "pixels",
+          getRadius: 8 + phase * 26,
+          getFillColor: [111, 240, 196, Math.round(120 * (1 - phase))],
+          stroked: true,
+          lineWidthUnits: "pixels",
+          getLineWidth: 1.5,
+          getLineColor: [111, 240, 196, Math.round(200 * (1 - phase))],
+          updateTriggers: { getRadius: [phase], getFillColor: [phase], getLineColor: [phase] },
+        }),
+      );
+    }
     overlay.setProps({ layers: [...baseLayersRef.current, ...anim] });
   }, []);
 
@@ -1125,12 +1555,23 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
     const overlay = new MapLibreOverlay({ interleaved: false, layers: [], getTooltip: tooltip });
     map.addControl(overlay);
 
+    // A touch of the globe stops the slow spin and any route being played.
     const stop = () => {
       spinRef.current = false;
+      stopPlayRef.current();
     };
     map.on("mousedown", stop);
     map.on("touchstart", stop);
     map.on("wheel", stop);
+    // While the chat waits for a place, a tap anywhere on the globe answers with the nearest
+    // city; a tap on a pin or a dot answers through its own handler first and clears the pick.
+    map.on("click", (e) => {
+      if (pickRef.current !== "place") return;
+      const name = cityNearTap(citiesRef.current, e.lngLat.lat, e.lngLat.lng, map.getZoom());
+      if (name) pickedRef.current({ mode: "place", place: name });
+    });
+    // The latitude grid shows only when the whole globe is in view.
+    map.on("zoom", () => setLowZoom(map.getZoom() < 3.4));
 
     let raf = 0;
     const frame = () => {
@@ -1146,6 +1587,8 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
     mapRef.current = map;
     overlayRef.current = overlay;
     setMapObj(map);
+    // The map on the window in development only, so a browser test can read the camera.
+    if (process.env.NODE_ENV !== "production") (window as unknown as { __atlasMap?: maplibregl.Map }).__atlasMap = map;
     return () => {
       cancelAnimationFrame(raf);
       map.remove();
@@ -1173,6 +1616,7 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
   function focusDestination(iata: string | null) {
     setSelectedDest(iata);
     const dest = iata ? byIata.get(iata) : null;
+    if (dest) placePicked(dest.city ?? dest.name);
     if (dest && gateway) {
       const map = mapRef.current;
       if (!map) return;
@@ -1184,7 +1628,10 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
   function focusStation(id: number | null) {
     setSelectedStation(id);
     const s = id != null ? reach?.reached.find((r) => r.id === id) : null;
-    if (s) fitTo(s.lat, s.lon, 7);
+    if (s) {
+      placePicked(s.town || s.name);
+      fitTo(s.lat, s.lon, 7);
+    }
   }
 
   function focusPlace(key: string | null) {
@@ -1195,12 +1642,15 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
     }
     const p = key ? places.find((x) => x.key === key) : null;
     setSelectedStation(p?.ground && p.mode !== "plane" ? p.ground.id : null);
-    if (p) fitTo(p.lat, p.lon, p.mode === "plane" ? 5 : 7);
+    if (p) {
+      placePicked(p.name);
+      fitTo(p.lat, p.lon, p.mode === "plane" ? 5 : 7);
+    }
   }
 
   function focusTrip(id: string | null) {
     setSelectedTrip(id);
-    const t = id ? trips?.trips.find((x) => x.id === id) : null;
+    const t = id ? tripsShown?.trips.find((x) => x.id === id) : null;
     const map = mapRef.current;
     if (!map || !t || !origin) return;
     const bounds = new maplibregl.LngLatBounds([origin.lon, origin.lat], [origin.lon, origin.lat]);
@@ -1209,11 +1659,15 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
   }
 
   function focusDeal(key: string | null) {
-    if (key && view === "chat") setView("deals");
+    const d = key ? (dealsAll.find((x) => dealKey(x) === key) ?? chatDeals.find((x) => dealKey(x) === key) ?? purposeDeals.find((x) => dealKey(x) === key)) : null;
+    // A pin tapped while the chat waits for a place answers the chat and stays on the Ask tab:
+    // switching to Deals would unmount the chat and lose the reply it is about to stream.
+    const answering = !!d && pickRef.current === "place";
+    if (d) placePicked(d.city);
+    if (key && !answering && (view === "chat" || view === "trips")) setView("deals");
     setSelectedDeal(key);
     setLiveSearch(null);
-    if (key && sheetRef.current === "peek") setSheet("half");
-    const d = key ? dealsAll.find((x) => dealKey(x) === key) : null;
+    if (key && !answering && sheetRef.current === "peek") setSheet("half");
     const map = mapRef.current;
     const g = d ? gwCoord(d.gw) : null;
     const c = d ? dealCoord(d) : null;
@@ -1238,21 +1692,22 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
     setTimeout(() => setCopied(false), 1600);
   }
 
-  // The trail of the selected deal follows the great circle from its home airport.
+  // The trail: the great circle of the open deal, or the whole route of the trip on show
+  // (great circles for flights, straight lines for ground hops), run end to end.
   useEffect(() => {
-    if (!deal) {
-      trailRef.current = null;
+    if (deal && (view === "deals" || view === "chat")) {
+      const g = gwCoord(deal.gw);
+      const c = dealCoord(deal);
+      if (!g || !c) {
+        trailRef.current = null;
+        return;
+      }
+      const path = greatCircle(g, c, 72);
+      trailRef.current = { path, timestamps: path.map((_, i) => i) };
       return;
     }
-    const g = gwCoord(deal.gw);
-    const c = dealCoord(deal);
-    if (!g || !c) {
-      trailRef.current = null;
-      return;
-    }
-    const path = greatCircle(g, c, 72);
-    trailRef.current = { path, timestamps: path.map((_, i) => i) };
-  }, [deal, gwCoord, dealCoord]);
+    trailRef.current = routeLegs.length ? routePath(routeLegs) : null;
+  }, [deal, view, gwCoord, dealCoord, routeLegs]);
 
   // deck.gl layers follow the state. Globe needs back-face culling off or arcs disappear.
   useEffect(() => {
@@ -1262,10 +1717,12 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
     const ground = view === "ground";
     const all = view === "all";
     const fly = view === "fly";
-    const tripView = view === "trips";
-    const dealView = view === "deals" || (view === "chat" && chatDeals.length > 0);
-    const wildView = view === "wild" || (view === "chat" && !!chatTrip && chatDeals.length === 0);
-    const wildTrip = view === "wild" ? wild.trip : chatTrip ?? undefined;
+    const tripView = shortOpen;
+    const dealView = view === "deals" || (view === "chat" && chatDeals.length > 0) || purposeOpen;
+    const wildView = wildOpen || (view === "chat" && !!chatTrip && chatDeals.length === 0);
+    const wildTrip = wildOpen ? wild.trip : view === "chat" ? (chatTrip ?? undefined) : undefined;
+    const bases = view === "trips" && tripMode === "longstay" && longStay.status === "ok" ? (longStay.result?.bases ?? []) : [];
+    const groupOptions = view === "trips" && tripMode === "group" && group.status === "ok" ? (group.result?.options ?? []) : [];
     const flownPlaces = placesShown.filter((p) => p.mode === "plane" && p.air && p.key === selectedPlace);
     const dealDots: DealDot[] = dealView ? dealsList.map((d) => ({ d, t: dealCoord(d) })).filter((x): x is DealDot => !!x.t) : [];
     if (dealView && deal && !dealDots.some((x) => dealKey(x.d) === selectedDeal)) {
@@ -1287,10 +1744,71 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
       .filter((x): x is { s: [number, number]; t: [number, number]; leg: Extract<TripLeg, { kind: "fly" }> } => !!x.s && !!x.t);
     const groundLegs = (trip?.legs ?? []).filter((l): l is Extract<TripLeg, { kind: "ground" }> => l.kind === "ground");
     const tripCities = new Map<string, TripCity>();
-    for (const t of trips?.trips ?? []) for (const c of t.cities) tripCities.set(c.code, c);
+    for (const t of tripsShown?.trips ?? []) for (const c of t.cities) tripCities.set(c.code, c);
     const isHot = (x: DealDot) => dealKey(x.d) === selectedDeal || dealKey(x.d) === hoveredDeal;
 
     const layers: (Layer | null)[] = [
+      lowZoom
+        ? new PathLayer<[number, number][]>({
+            id: "lat-grid",
+            data: LAT_LINES,
+            getPath: (d) => d,
+            getColor: [160, 180, 220, 22],
+            getWidth: 1,
+            widthUnits: "pixels",
+            parameters: { cullMode: "none" },
+          })
+        : null,
+      bases.length
+        ? new ScatterplotLayer<(typeof bases)[number]>({
+            id: "bases",
+            data: bases,
+            getPosition: (b) => [b.lon, b.lat],
+            radiusUnits: "pixels",
+            getRadius: (b) => (b.code === selectedBase ? 9 : 6),
+            getFillColor: (b) => (b.code === selectedBase ? MINT : [255, 180, 84, 240]),
+            stroked: true,
+            lineWidthUnits: "pixels",
+            getLineWidth: 2,
+            getLineColor: [5, 7, 14, 230],
+            pickable: true,
+            updateTriggers: { getRadius: [selectedBase], getFillColor: [selectedBase] },
+            onClick: (info) => {
+              const b = info.object as (typeof bases)[number] | undefined;
+              if (b) pickLabel(`base:${b.code}`);
+            },
+          })
+        : null,
+      groupOptions.length
+        ? new ArcLayer<{ s: [number, number]; t: [number, number] }>({
+            id: "group-arcs",
+            data: (selectedOption != null ? [groupOptions[selectedOption]] : groupOptions.slice(0, 1))
+              .filter(Boolean)
+              .flatMap((o) => o.perMember.map((m) => ({ s: wildCoord(m.from), t: wildCoord(o.dstCity) })))
+              .filter((x): x is { s: [number, number]; t: [number, number] } => !!x.s && !!x.t),
+            getSourcePosition: (x) => x.s,
+            getTargetPosition: (x) => x.t,
+            getSourceColor: [124, 196, 255, 220],
+            getTargetColor: [111, 240, 196, 230],
+            getWidth: 2.5,
+            greatCircle: true,
+            parameters: { cullMode: "none" },
+          })
+        : null,
+      groupOptions.length
+        ? new ScatterplotLayer<(typeof groupOptions)[number] & { c: [number, number] }>({
+            id: "group-cities",
+            data: groupOptions.map((o) => ({ ...o, c: wildCoord(o.dstCity) })).filter((o): o is (typeof groupOptions)[number] & { c: [number, number] } => !!o.c),
+            getPosition: (o) => o.c,
+            radiusUnits: "pixels",
+            getRadius: 6,
+            getFillColor: [111, 240, 196, 240],
+            stroked: true,
+            lineWidthUnits: "pixels",
+            getLineWidth: 2,
+            getLineColor: [5, 7, 14, 230],
+          })
+        : null,
       dealView && selectedDot && selectedGw
         ? new PathLayer<{ path: [number, number][] }>({
             id: "deal-arc",
@@ -1618,7 +2136,7 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
     render();
     // focus* helpers only read refs and state setters; listing them would re-run this on every render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [airports, shown, gateways, gatewayIata, origin, selectedDest, live, view, reachBand, selectedStation, pathForSelected, placesShown, selectedPlace, trips, trip, warmOnly, weather, dealsList, selectedDeal, hoveredDeal, deal, render, selectedCombo, combos, sightsOnMap, sights, wild.trip, wildCoord, chatTrip, chatDeals]);
+  }, [airports, shown, gateways, gatewayIata, origin, selectedDest, live, view, reachBand, selectedStation, pathForSelected, placesShown, selectedPlace, tripsShown, trip, warmOnly, weather, dealsList, selectedDeal, hoveredDeal, deal, render, selectedCombo, combos, sightsOnMap, sights, wild.trip, wildCoord, chatTrip, chatDeals, shortOpen, wildOpen, purposeOpen, tripMode, longStay, selectedBase, group, selectedOption, lowZoom]);
 
   const groundFeeds = reach ? reach.feeds.map((f) => f.attribution.split(" via ")[0].split(" (")[0]).join(", ") : "";
 
@@ -1626,7 +2144,9 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
     <div className="app">
       <div className="space" />
       <div ref={mapEl} className="map" />
-      <PriceLabels map={mapObj} items={labelItems} onPick={focusDeal} onHover={setHoveredDeal} />
+      <div className="vignette" aria-hidden="true" />
+      <PriceLabels map={mapObj} items={labelItems} onPick={pickLabel} onHover={(k) => setHoveredDeal(k && !k.includes(":") ? k : null)} />
+      <div className={`progressline${busy ? " on" : ""}`} aria-hidden="true" />
       <TopBar
         origin={origin}
         airports={airports}
@@ -1650,11 +2170,14 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
         }}
         onShare={share}
         copied={copied}
+        been={been}
+        onBeen={setBeen}
+        countries={countries}
       />
       <Panel
         view={view}
         onView={(v) => {
-          setView(v);
+          changeView(v);
           setSelectedDest(null);
           setSelectedStation(null);
           setSelectedPlace(null);
@@ -1704,52 +2227,97 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
         onCombos={findCombosFor}
         selectedCombo={selectedCombo}
         onCombo={focusCombo}
-        chatContext={{ origin: origin ? { lat: origin.lat, lon: origin.lon, label: origin.label } : undefined, gateways: boardGateways.map((g) => g.iata), home: gateways[0]?.airport.country ?? "RO", month: month ?? undefined }}
+        chatContext={{ origin: origin ? { lat: origin.lat, lon: origin.lon, label: origin.label } : undefined, gateways: boardGateways.map((g) => g.iata), home: gateways[0]?.airport.country ?? "RO", month: month ?? undefined, been: been.countries.length ? { countries: been.countries, newOnly: been.newOnly } : undefined }}
         chatSeed={chatSeed}
         onChatSeedConsumed={() => setChatSeed(null)}
-        onChatDeals={(ds) => {
-          setChatTrip(null);
-          setChatDeals(ds);
-          setSelectedDeal(null);
-          const map = mapRef.current;
-          const pts = ds.map(dealCoord).filter((c): c is [number, number] => !!c);
-          if (map && pts.length && origin) {
-            const b = new maplibregl.LngLatBounds([origin.lon, origin.lat], [origin.lon, origin.lat]);
-            for (const q of pts) b.extend(q);
-            map.fitBounds(b, { padding: panelPadding(), maxZoom: 5, duration: 1400 });
-          }
-        }}
-        onChatTrip={(t) => {
-          setChatDeals([]);
-          setChatTrip(t);
-          frameWild(t);
-        }}
+        onChatDeals={onChatDeals}
+        onChatTrip={onChatTrip}
+        been={been}
         finder={finder}
         onFinder={runFinder}
         onFinderClear={() => {
           setFinder({ status: "idle", deals: [], lines: [] });
           setSelectedDeal(null);
         }}
-        wild={wild}
-        wildRegion={wildRegion}
-        onWildRegion={setWildRegion}
-        wildNights={wildNights}
-        onWildNights={setWildNights}
-        wildStyle={wildStyle}
-        onWildStyle={setWildStyle}
-        wildBudget={wildBudget}
-        onWildBudget={setWildBudget}
-        wildTradeoff={wildTradeoff}
-        onWildTradeoff={setWildTradeoff}
-        wildVariants={wildVariants}
-        onWildVariants={setWildVariants}
-        onWild={buildWildTrip}
-        onWildAlternative={showAlternative}
-        purpose={purpose}
-        onPurpose={findPurpose}
+        tripsPanel={{
+          mode: tripMode,
+          onMode: (m) => {
+            setTripMode(m);
+            setSelectedTrip(null);
+            setSelectedDeal(null);
+            // Choosing a region wants the whole globe in view, centred on the current pick.
+            if ((m === "wild" && wild.status !== "ok") || (m === "longstay" && longStay.status !== "ok")) {
+              const c = REGION_CENTROIDS[wildRegion];
+              spinRef.current = false;
+              mapRef.current?.flyTo({ center: c ? [c[1], c[0]] : [50, 15], zoom: isPhone() ? 1.1 : 1.6, duration: 1600, essential: true });
+            }
+          },
+          month,
+          airports,
+          gateways,
+          countries,
+          homeLabel,
+          airlines,
+          playing,
+          onPlay: playRoute,
+          onStopPlay: stopPlay,
+          onFocusStop: focusStop,
+          trips: tripsShown,
+          selectedTrip,
+          onTrip: focusTrip,
+          days,
+          onDays: setDays,
+          homeHolidays,
+          around,
+          onAround: setAround,
+          wild,
+          wildRegion,
+          onWildRegion: selectRegion,
+          wildNights,
+          onWildNights: setWildNights,
+          wildStyle,
+          onWildStyle: setWildStyle,
+          wildBudget,
+          onWildBudget: setWildBudget,
+          wildTradeoff,
+          onWildTradeoff: setWildTradeoff,
+          wildVariants,
+          onWildVariants: setWildVariants,
+          wildPeriod,
+          onWildPeriod: setWildPeriod,
+          onWild: buildWildTrip,
+          onWildAlternative: showAlternative,
+          plan,
+          onPlan: planWild,
+          longStay,
+          longStayForm,
+          onLongStayForm: setLongStayForm,
+          onLongStay: findLongStay,
+          selectedBase,
+          onBase: (code) => {
+            setSelectedBase(code);
+            const c = code ? wildCoord(code) : null;
+            if (c) mapRef.current?.flyTo({ center: c, zoom: 6, duration: 1300, padding: panelPadding() });
+          },
+          group,
+          groupForm,
+          onGroupForm: setGroupForm,
+          onGroup: findGroup,
+          selectedOption,
+          onOption: setSelectedOption,
+          purpose,
+          purposeKinds,
+          onPurposeKinds: setPurposeKinds,
+          onPurpose: findPurpose,
+          onDeal: focusDeal,
+          excludedCount: exclude.length,
+        }}
         onHere={showHere}
-        plan={plan}
-        onPlan={planWild}
+        pick={pick}
+        pickPeriod={pickPeriod}
+        onPickPeriod={setPickPeriod}
+        onPicked={picked}
+        onPickCancel={cancelPick}
         gateways={gateways}
         routeCounts={routeCounts}
         gatewayIata={gatewayIata}
@@ -1776,14 +2344,6 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
         totalPlaces={places.length}
         selectedPlace={selectedPlace}
         onPlace={focusPlace}
-        trips={trips}
-        selectedTrip={selectedTrip}
-        onTrip={focusTrip}
-        days={days}
-        onDays={setDays}
-        homeHolidays={homeHolidays}
-        around={around}
-        onAround={setAround}
       />
       {manifest && (
         <div

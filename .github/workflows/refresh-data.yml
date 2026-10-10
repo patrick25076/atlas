@@ -1,28 +1,32 @@
 # Keeps the data fresh without anyone's laptop. Every source here is free and needs no key,
-# except the Blob store the price boards are written to (BLOB_READ_WRITE_TOKEN secret).
-# A commit by this workflow redeploys production (Vercel builds every push to main).
+# except the Blob store the price boards and hotel snapshots are written to
+# (BLOB_READ_WRITE_TOKEN secret), LiteAPI for the hotel snapshot (LITEAPI_KEY secret) and
+# the optional Postgres (DATABASE_URL secret, empty until the database is reachable).
+# A commit by the refresh job redeploys production (Vercel builds every push to main). The
+# boards and hotels jobs write to Blob only and commit nothing. The repository is public, so
+# Actions minutes are unlimited; the schedules below cost nothing.
 name: Refresh data
 
 on:
   schedule:
     - cron: "15 3 * * *" # daily: weather, rates, advisories, airports, airlines, cities, holidays
     - cron: "45 3 * * 1" # weekly (Monday): towns, ground graph (GTFS), one-way fares
-    - cron: "30 4 1 * *" # monthly (1st): Overture places and ferries, heritage, visa, fame
-    - cron: "0 1 */2 * *" # every other night: price boards for ~150 airports, straight to Blob (private-repo minutes)
+    - cron: "30 4 1 * *" # monthly (1st): Overture places and ferries, heritage, visa, fame, costs, climate
+    - cron: "0 1 * * *" # nightly: price boards for ~150 airports straight to Blob, then the hotel snapshot
   workflow_dispatch:
     inputs:
       set:
         description: "Which set to refresh"
         type: choice
         default: daily
-        options: [daily, weekly, monthly, boards, all]
+        options: [daily, weekly, monthly, boards, hotels, all]
 
 permissions:
   contents: write
 
 jobs:
   refresh:
-    if: github.event.schedule != '0 1 */2 * *' && inputs.set != 'boards'
+    if: github.event.schedule != '0 1 * * *' && inputs.set != 'boards' && inputs.set != 'hotels'
     runs-on: ubuntu-latest
     timeout-minutes: 90
     concurrency:
@@ -76,6 +80,9 @@ jobs:
           pnpm ingest:gtfs
           pnpm ingest:fame
           pnpm ingest:costs
+          # Climate normals per city (public/data/climate.json, NASA POWER); resumable, so a
+          # month that runs out of time continues where it stopped the next month.
+          pnpm ingest:climate
 
       - name: Commit what changed
         run: |
@@ -92,9 +99,10 @@ jobs:
           fi
 
   # Each shard runs on its own runner (its own address): Kiwi throttles an address after a
-  # couple of thousand searches, and 150 airports need about 6,000.
+  # couple of thousand searches, and 150 airports need about 6,000. Eight shards, fifteen
+  # minutes each, every night.
   boards:
-    if: github.event.schedule == '0 1 */2 * *' || inputs.set == 'boards' || inputs.set == 'all'
+    if: github.event.schedule == '0 1 * * *' || inputs.set == 'boards' || inputs.set == 'all'
     runs-on: ubuntu-latest
     timeout-minutes: 120
     strategy:
@@ -116,3 +124,30 @@ jobs:
           BLOB_READ_WRITE_TOKEN: ${{ secrets.BLOB_READ_WRITE_TOKEN }}
           BOARDS_SHARD: ${{ matrix.shard }}/8
         run: pnpm ingest:boards
+
+  # The hotel snapshot: 80 cities, two LiteAPI calls each, one standard weekend four weeks
+  # out, into Blob (hotels/snapshot-<date>.json, hotels/latest.json) and into Postgres when
+  # DATABASE_URL is set. Runs after the boards so the two never overlap; runs even when a
+  # boards shard failed or the boards job was skipped (a "hotels" dispatch).
+  hotels:
+    needs: [boards]
+    if: ${{ !cancelled() && (github.event.schedule == '0 1 * * *' || inputs.set == 'hotels' || inputs.set == 'all') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.9.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Snapshot the cheapest decent hotel per city
+        env:
+          LITEAPI_KEY: ${{ secrets.LITEAPI_KEY }}
+          LITEAPI_ENV: production
+          BLOB_READ_WRITE_TOKEN: ${{ secrets.BLOB_READ_WRITE_TOKEN }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: pnpm ingest:hotels

@@ -1,72 +1,75 @@
 # Atlas
 
-The cheapest getaways from where you are, and what it is like there. A globe with three tabs:
+The cheapest way to be somewhere else, from wherever you are, and what it is like there.
+A globe (MapLibre and deck.gl) with a panel: live flight prices from Kiwi.com, nightly
+price boards for about 150 airports worldwide, a custom period search, two-city combos,
+long multi-country "wild" trips with a day-by-day plan, long stays, group trips, a price
+calendar per destination, hotel prices and hotel deals, events from the cities' own open
+feeds, sights from Wikivoyage, rated restaurants, and a chat agent that can call all of it.
 
-- **Deals**: real return prices for the next six weeks from the home airports (Kiwi.com,
-  searched nightly), as cards with a photo, dates, airline and a booking button.
-- **Explore**: every place within ten hours by plane, train, coach or ferry, with the best
-  way there and a door-to-door estimate.
-- **Trips**: three-countries-in-five-days loops priced from one-way fares.
+Live: https://atlas-kappa-wheat.vercel.app
 
-Plus **Ask**, a concierge agent over the same data, and a place card with weather, sea
-temperature, money, plugs, languages, visa for your passport, warnings, holidays, World
-Heritage nearby, how many restaurants and bars, and a Wikivoyage paragraph.
+## Run it
 
-Built source by source. Every number on the globe says where it came from
-(`public/data/manifest.json`, shown in the bottom-right chip). `docs/MORNING.md` is the
-plain-language status and the list of keys still needed.
+```
+pnpm install          # also copies MapLibre's worker into public/
+pnpm dev -p 3210      # http://localhost:3210
+pnpm typecheck
+```
+
+The committed `public/data/*.json` files are enough to run the globe. Flight prices come
+from Kiwi.com's public search (no key). Everything else is optional and switches on when
+its key appears in `.env.local` (copy `.env.example`; the names are listed there and the
+accounts are explained step by step in `SETUP.md`):
+
+| Key | What it switches on |
+|---|---|
+| `BLOB_READ_WRITE_TOKEN` | the stored price boards, wild trips, plans and hotel snapshots (Vercel Blob) |
+| `DATABASE_URL` | the shared fare memory, hotel price history, saved trips, the usage log (Postgres, Supabase pooler) |
+| `AWS_BEARER_TOKEN_BEDROCK` | the Ask agent, the trip judge, the day planner |
+| `LITEAPI_KEY` (+ `LITEAPI_ENV=production`) | hotel prices, the nightly hotel snapshot |
+| `FOURSQUARE_API_KEY` | rated restaurants and sweet places |
+| `TAVILY_API_KEY` | live web research for the planner and the agent |
+| `TRAVELPAYOUTS_TOKEN`, `TRAVELPAYOUTS_MARKER` | cached one-way fares, commission on booking links |
+| `TICKETMASTER_KEY` | ticketed events where no city feed exists |
+
+Never commit `.env.local`. No real value belongs in the repository.
 
 ## Layout
 
 | Path | What |
 |---|---|
-| `app/` | Next.js app router: layout, page (reads Vercel's location hint), global styles |
-| `app/api/fares` | Cheapest cached one-way fares per destination for an origin (Travelpayouts) |
-| `app/api/reach` | Stations reachable by train and coach from a point (Dijkstra over the ground graph) |
-| `components/Globe.tsx` | MapLibre globe + deck.gl layers; three views: any way, by air, by train and coach |
-| `components/Panel.tsx` | Side panel (bottom sheet on phones): origin search, places, gateways, destinations |
-| `lib/places.ts` | The combined view: one place per city, best mode, door-to-door estimate, price |
-| `lib/ground.ts` | Ground graph in memory, reach search with frequency-based expected waits |
-| `lib/travelpayouts.ts` | Fares API client; maps city codes to airports; booking links with the marker |
-| `lib/geo.ts` | Haversine, gateway selection, drive and flight time estimates |
-| `scripts/ingest/` | DuckDB scripts that turn a source into `public/data/*.json` |
-| `public/data/` | Derived data, committed so a deploy needs no ingest |
-| `SETUP.md` | Manual steps (accounts, keys), numbered |
+| `app/` | Next.js App Router: the page, the API routes under `app/api/*` |
+| `components/Globe.tsx` | the globe, all client state, deck.gl layers |
+| `components/Panel.tsx`, `TripsPanel.tsx`, `ChatPanel.tsx`, `FinderForm.tsx`, `RouteStrip.tsx`, `PriceLabels.tsx`, `TopBar.tsx` | the panel's tabs and widgets |
+| `lib/` | server libraries: `kiwi.ts` (the one gate to Kiwi), `board.ts`, `finder.ts`, `scan.ts`, `wild.ts`, `longstay.ts`, `group.ts`, `plan.ts`, `combos.ts`, `agent-tools.ts`, `boards-store.ts` (Blob), `db.ts` (Postgres), `hotel-deals.ts`, `memo.ts`, `params.ts` |
+| `scripts/ingest/` | the ingests that build `public/data/*.json` and the nightly jobs (`boards.ts`, `hotels.ts`) |
+| `public/data/` | derived data, committed, with `manifest.json` saying where each file came from |
+| `.github/workflows/refresh-data.yml` | the schedules: daily, weekly, monthly, nightly boards then hotels |
+| `docs/architecture.md` | how it fits together, storage, jobs, costs, limits |
+| `docs/data-inventory.md` | every data layer, coverage per region, what to add next |
+| `docs/MORNING.md`, `docs/TODO.md` | the plain-language status and the running list |
+| `SETUP.md` | every manual step outside the code, numbered |
 
-## Data sources so far
+## Data and licences
 
-| Source | Licence | Used for | Refresh |
-|---|---|---|---|
-| OurAirports | Public domain | Airports with scheduled service (nodes) | nightly upstream; `pnpm ingest:airports` |
-| OpenFlights routes | ODbL, frozen 2014 | Indicative network (which pairs were ever connected) | placeholder; dims once fares are live |
-| Travelpayouts airports.json | free static data | City code → airports mapping for the fares API | `pnpm ingest:tp-airports`, monthly |
-| Travelpayouts / Aviasales Data API | free with token (SETUP §2) | Cheapest cached one-way fare per destination, booking links with the marker | live, cached 1 h per origin |
-| GTFS feeds (`scripts/ingest/feeds.ts`): gtfs.de long-distance (CC BY 4.0), Romanian railways (OGL-ROU 1.0), SNCF TGV/Intercités/TER (ODbL), Eurostar (Etalab 2.0), FlixBus + FlixTrain Europe (ODbL) | per feed | Ground graph: 7.4k stations, 220k direct connections, walking transfers; `/api/reach` Dijkstra with expected waits | `pnpm ingest:gtfs`, weekly |
-| MET Norway locationforecast + oceanforecast | CC BY 4.0 | 7-day forecast for 2,805 cities; weather strip, "Warm this weekend"; sea temperature for cities within 15 km of a ferry port | `pnpm ingest:weather`, nightly |
-| Frankfurter (ECB rates) | free, commercial OK | Today's rate per euro, 104 countries | `pnpm ingest:countries`, daily |
-| Wikidata | CC0 | Plug types and voltage, 223 countries | monthly |
-| German Federal Foreign Office | open data | Travel warnings, full and partial, 200 countries | daily |
-| Nager.Date | open source | 2,878 public holidays, 204 countries, next 400 days; home holidays become trip-date chips | `pnpm ingest:holidays`, weekly |
-| Wikivoyage | CC BY-SA 4.0 | One paragraph per place, live via `/api/place`, cached a day, attributed | live |
-| Travelpayouts cities.json | free static data | City names, coordinates, time zones (local time on the card) | `pnpm ingest:tp-airports`, monthly |
-| Overture Maps places (S3 parquet via DuckDB) | CDLA-Permissive 2.0 | Counts of restaurants, cafés, bars, nightlife, culture, nature, shops, lodging within ~5 km of 2,707 cities; no places stored | `pnpm ingest:overture`, monthly |
-| Overture Maps transportation (water segments) | CDLA-Permissive 2.0 | Named ferry routes with ports → estimated crossings in the ground graph | `pnpm ingest:ferries`, monthly |
-| GeoNames cities15000 | CC BY 4.0 | 34k towns with population; city population, town names for stations, "big places" ranking | `pnpm ingest:geonames`, monthly |
-| Wikidata: World Heritage Sites | CC0 | 1,887 sites; the nearest within 60 km on the card | `pnpm ingest:heritage`, monthly |
-| Wikidata: country facts | CC0 | Plugs, voltage, official languages, calling code, driving side | with `ingest:countries` |
-| Passport Index dataset (imorte, continuing ilyankou) | MIT | Visa requirement for the visitor's passport at each destination, labelled indicative with the dataset date | `pnpm ingest:visa`, monthly |
-| Kiwi.com public MCP (`lib/kiwi.ts`) | no key; terms not published | **Deals**: cheapest return getaways from the home airports × 117 cities, 6-week window, 2-7 nights, with booking links; **one-way fares** for the trip finder; `/api/deals` live re-price | `pnpm ingest:deals`, `pnpm ingest:oneway`, nightly |
-| Amazon Bedrock (AI SDK) | your credits | **Ask**: a concierge over the deals and place facts, `/api/ask` (needs `AWS_BEARER_TOKEN_BEDROCK`) | live |
-| Ticketmaster Discovery | free key | events near a place, `/api/events` (needs `TICKETMASTER_KEY`) | live, cached 6 h |
+Every file in `public/data` is listed in `public/data/manifest.json` with its source,
+licence and fetch date, and the globe shows it. Sources include OurAirports (public
+domain), OpenFlights (ODbL), Travelpayouts static data, GTFS feeds from gtfs.de, SNCF,
+Eurostar, FlixBus, Renfe, SNCB, Irish Rail, VIA Rail and the Romanian railways, MET Norway
+(CC BY 4.0), NASA POWER climate normals, Frankfurter ECB rates, Wikidata (CC0), the German
+Federal Foreign Office advisories, Nager.Date holidays, Overture Maps (CDLA-Permissive 2.0),
+GeoNames (CC BY 4.0), the Passport Index dataset (MIT), Wikivoyage (CC BY-SA 4.0), World
+Bank price levels, and twenty cities' own open event feeds (`docs/events-sources.md`).
+Hotel prices come only from LiteAPI; restaurant ratings only from Foursquare. Nothing is
+scraped from Google, Booking, Yelp or Tripadvisor.
 
-## Refresh
+## Jobs
 
-`.github/workflows/refresh-data.yml` re-runs the ingests on a schedule (daily, weekly on
-Monday, monthly on the 1st) and commits `public/data`, which redeploys production. Run it by
-hand from the Actions tab with the set you want. Locally: `pnpm ingest` for the daily set,
-`pnpm ingest:gtfs` for the ground graph, `pnpm ingest:overture` for the place counts.
-
-## Stack decisions
-
-New repo, web first (phone-sized layout included), MapLibre GL + deck.gl on OpenFreeMap tiles,
-DuckDB for ingest, static JSON (later PMTiles) for the globe, Neon Postgres later for state.
+`.github/workflows/refresh-data.yml` keeps the data fresh from GitHub's runners: the daily
+set (weather, rates, advisories, holidays, airports), the weekly set (towns, ground graph,
+one-way fares), the monthly set (places, ferries, heritage, visa, fame, costs, climate) and,
+every night at 01:00 UTC, the price boards for about 150 airports (eight shards, `pnpm
+ingest:boards`) followed by the hotel snapshot (`pnpm ingest:hotels`). The first three
+commit `public/data` and redeploy; the nightly two write to Blob (and Postgres) only. Run
+any set by hand from the Actions tab.

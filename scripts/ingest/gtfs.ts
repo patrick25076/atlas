@@ -5,17 +5,36 @@
 //
 // Usage: pnpm ingest:gtfs            (all feeds)
 //        pnpm ingest:gtfs de-fv      (one feed)
+//        GTFS_OFFLINE=1 ...          (reuse the files already in data/raw, no download)
 import { DuckDBInstance } from "@duckdb/node-api";
 import { unzipSync } from "fflate";
 import { existsSync } from "node:fs";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, open, readFile, rm, writeFile } from "node:fs/promises";
+import path from "node:path";
 import { haversineKm } from "../../lib/geo";
 import { FEEDS, type Feed } from "./feeds";
 import { recordManifest } from "./manifest";
 
 const RAW = "data/raw/gtfs";
-const OUT = "public/data/ground-graph.json";
+// GTFS_OUT points a test run at another file (and skips the manifest), so trying one feed
+// never replaces the graph the running site imports: a partial run rewrites the whole graph.
+const OUT = process.env.GTFS_OUT || "public/data/ground-graph.json";
+const TEST_RUN = Boolean(process.env.GTFS_OUT);
+// Files in a GTFS zip the ingest never reads. shapes.txt alone is 153 MB in the Thai feed and
+// the fare tables another 64 MB; writing them once filled the disk (2026-10-10).
+const SKIP_FILES = new Set(["shapes.txt", "fare_attributes.txt", "fare_rules.txt", "pathways.txt", "transfers.txt", "levels.txt"]);
 const GRID = 200; // 1/200 degree ≈ 500 m: stops closer than that are one station
+// Fastest straight-line average a direct connection can honestly run at (a TGV leg averages
+// under 300 km/h); anything above means the feed's times are placeholders, not a timetable.
+// A feed can lower these per mode (feeds.ts `maxKmh`): Thailand's trains never average over 80.
+const MAX_KMH: Record<string, number> = { rail: 350, coach: 140, ferry: 90, other: 140 };
+// When a time is a placeholder the duration is estimated from distance. The straight line is
+// shorter than the track or road, so the kilometres are stretched by DETOUR (the same 1.3 as
+// driveMinutes in lib/geo.ts) and run at a slow average, so the estimate errs long: Bangkok to
+// Chiang Mai (577 km straight, 751 km of rail, 11 to 13 h by train) comes out at 12.6 h.
+const DETOUR = 1.3;
+const ESTIMATE_KMH: Record<string, number> = { rail: 60, coach: 55, ferry: 25, other: 50 };
+const estimateMinutes = (km: number, mode: string) => Math.round(5 + ((km * DETOUR) / ESTIMATE_KMH[mode]) * 60);
 
 type Station = {
   id: number;
@@ -37,31 +56,87 @@ const wanted = process.argv.slice(2);
 const feeds = wanted.length ? FEEDS.filter((f) => wanted.includes(f.id)) : FEEDS;
 if (!feeds.length) throw new Error(`No feed matches ${wanted.join(", ")}`);
 
+// A zip entry the ingest reads: a plain GTFS text file at the root of the archive. The feeds are
+// third-party downloads, so an entry name is untrusted: one with a folder part, a backslash
+// (Node treats it as a separator on Windows) or ".." could be written outside the feed folder.
+function wantedEntry(name: string): boolean {
+  if (!name.endsWith(".txt") || SKIP_FILES.has(name)) return false;
+  if (name.includes("/") || name.includes("\\") || name.includes("..")) return false;
+  return path.basename(name) === name;
+}
+
 async function download(feed: Feed): Promise<string> {
   const dir = `${RAW}/${feed.id}`;
   await mkdir(dir, { recursive: true });
+  if (process.env.GTFS_OFFLINE && existsSync(`${dir}/stop_times.txt`)) {
+    console.log(`${feed.id}: GTFS_OFFLINE set, using the files in ${dir}`);
+    return dir;
+  }
   const res = await fetch(feed.url);
   if (!res.ok) throw new Error(`${feed.id}: HTTP ${res.status} from ${feed.url}`);
   const zip = new Uint8Array(await res.arrayBuffer());
-  const files = unzipSync(zip);
+  // The filter stops fflate inflating the skipped entries at all: without it the Thai feed's
+  // 153 MB shapes.txt and the SNCB zip were decompressed in memory only to be thrown away.
+  const files = unzipSync(zip, { filter: (f) => wantedEntry(f.name) });
   for (const [name, data] of Object.entries(files)) {
-    if (name.endsWith(".txt") && !name.includes("/")) await writeFile(`${dir}/${name}`, data);
+    if (!wantedEntry(name)) continue;
+    await writeFile(path.join(dir, name), data);
   }
-  console.log(`${feed.id}: ${(zip.length / 1e6).toFixed(1)} MB, ${Object.keys(files).length} files`);
+  console.log(`${feed.id}: ${(zip.length / 1e6).toFixed(1)} MB, ${Object.keys(files).length} files kept`);
   return dir;
 }
 
 const secs = (col: string) =>
   `(split_part(${col}, ':', 1)::INT * 3600 + split_part(${col}, ':', 2)::INT * 60 + split_part(${col}, ':', 3)::INT)`;
 
+// The column names of a GTFS file, from its first line. GTFS makes many columns optional
+// (parent_station, agency_id), and DuckDB fails the whole query when a SELECT names a column
+// the file does not have, so every optional column is checked here before it is used.
+async function columnsOf(file: string): Promise<Set<string>> {
+  const fh = await open(file, "r");
+  try {
+    const buf = Buffer.alloc(8192);
+    const { bytesRead } = await fh.read(buf, 0, buf.length, 0);
+    const firstLine = buf.toString("utf8", 0, bytesRead).replace(/^﻿/, "").split(/\r?\n/)[0] ?? "";
+    return new Set(firstLine.split(",").map((c) => c.trim().replace(/^"|"$/g, "")));
+  } finally {
+    await fh.close();
+  }
+}
+
+// Only some of a feed's routes are wanted (feeds.ts `keep`): a national feed that mixes
+// intercity trains with a capital's city buses would otherwise flood the graph with bus stops.
+function routeFilterSql(feed: Feed, routeColumns: Set<string>): string {
+  const clauses: string[] = [];
+  const keep = feed.keep;
+  if (!keep) return "";
+  if (keep.routeTypes?.length) clauses.push(`r.route_type IN (${keep.routeTypes.map((t) => `'${t}'`).join(", ")})`);
+  if (keep.dropAgencies?.length) {
+    if (routeColumns.has("agency_id")) {
+      clauses.push(`COALESCE(r.agency_id, '') NOT IN (${keep.dropAgencies.map((a) => `'${a.replace(/'/g, "''")}'`).join(", ")})`);
+    } else {
+      console.log(`${feed.id}: routes.txt has no agency_id column, dropAgencies ignored`);
+    }
+  }
+  return clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
+}
+
 const stations = new Map<string, Station>();
 const edgeAgg = new Map<string, Edge>();
 const feedStats: Record<string, { stations: number; edges: number }> = {};
 
-function stationFor(name: string, lat: number, lon: number, feedId: string): number {
+// Thailand's OTP feed writes every stop name as "ไทย;English" and some with a trailing tab;
+// the app shows the name, so keep the English half. No other feed uses a semicolon in names.
+function cleanName(raw: string): string {
+  const parts = raw.split(";").map((p) => p.trim()).filter(Boolean);
+  return (parts.length > 1 ? parts[parts.length - 1] : parts[0]) ?? raw.trim();
+}
+
+function stationFor(rawName: string, lat: number, lon: number, feedId: string): number {
   const key = `${Math.round(lat * GRID)},${Math.round(lon * GRID)}`;
   let s = stations.get(key);
   if (!s) {
+    const name = cleanName(rawName);
     s = { id: stations.size, name, lat: +lat.toFixed(5), lon: +lon.toFixed(5), feeds: [], nbrs: new Set(), dep: 0 };
     stations.set(key, s);
   }
@@ -69,9 +144,21 @@ function stationFor(name: string, lat: number, lon: number, feedId: string): num
   return s.id;
 }
 
+// DuckDB is capped because this runs on a 16 GB laptop next to the dev server: the SNCB feed
+// (198 MB stop_times) self-joined without a limit helped exhaust the machine's memory on
+// 2026-10-10. Under the cap DuckDB spills to disk in temp_directory instead of growing.
+const DUCKDB_TMP = `${RAW}/.duckdb-tmp`;
+const DUCKDB_LIMITS = `SET memory_limit = '2GB'; SET threads = 2; SET preserve_insertion_order = false; SET temp_directory = '${DUCKDB_TMP}';`;
+
 for (const feed of feeds) {
   const dir = await download(feed);
-  const db = await (await DuckDBInstance.create()).connect();
+  // A run that died mid-query leaves its spill files behind (2 GB on 2026-10-10); clear them
+  // before the next feed so a crash never eats the disk twice.
+  await rm(DUCKDB_TMP, { recursive: true, force: true });
+  await mkdir(DUCKDB_TMP, { recursive: true });
+  const instance = await DuckDBInstance.create();
+  const db = await instance.connect();
+  await db.run(DUCKDB_LIMITS);
   const csv = (f: string) => `read_csv('${dir}/${f}', header = true, all_varchar = true)`;
 
   // Days per week each service runs: calendar.txt, or calendar_dates.txt when that is all there is.
@@ -84,54 +171,154 @@ for (const feed of feeds) {
          FROM ${csv("calendar_dates.txt")} WHERE exception_type = '1' GROUP BY service_id`
       : `SELECT NULL::VARCHAR AS service_id, 7 AS days WHERE false`;
 
+  // parent_station is optional in GTFS (Amtrak, KTM and Thailand's feed leave it out). Without
+  // it every stop is its own station; the 500 m grid in stationFor still merges platforms.
+  const stopColumns = await columnsOf(`${dir}/stops.txt`);
+  const stationExpr = stopColumns.has("parent_station") ? "COALESCE(NULLIF(parent_station, ''), stop_id)" : "stop_id";
+  const routeFilter = routeFilterSql(feed, await columnsOf(`${dir}/routes.txt`));
+
+  // frequencies.txt (optional) describes a trip that repeats all day: "every 30 minutes from
+  // 06:00 to 20:00". Thailand's coaches and ferries are written that way; without this a coach
+  // that runs 28 times a day would count as one, and lib/ground.ts would give every such leg
+  // the maximum wait. The multiplier is the number of runs a day over all of a trip's rows.
+  const hasFrequencies = existsSync(`${dir}/frequencies.txt`);
+  const freqSql = hasFrequencies
+    ? `SELECT trip_id, greatest(1, sum(greatest(0, ${secs("end_time")} - ${secs("start_time")}) / headway_secs::DOUBLE)) AS runs
+       FROM ${csv("frequencies.txt")} WHERE headway_secs IS NOT NULL AND TRY_CAST(headway_secs AS INT) > 0 GROUP BY trip_id`
+    : `SELECT NULL::VARCHAR AS trip_id, 1.0 AS runs WHERE false`;
+  const ceilings = { ...MAX_KMH, ...feed.maxKmh };
+  const maxKmhSql = `CASE mode WHEN 'rail' THEN ${ceilings.rail} WHEN 'coach' THEN ${ceilings.coach} WHEN 'ferry' THEN ${ceilings.ferry} ELSE ${ceilings.other} END`;
+
   await db.run(`
     CREATE TABLE services AS ${serviceSql};
     CREATE TABLE stops AS
       SELECT stop_id, stop_name, stop_lat::DOUBLE AS lat, stop_lon::DOUBLE AS lon,
-             COALESCE(NULLIF(parent_station, ''), stop_id) AS station
+             ${stationExpr} AS station
       FROM ${csv("stops.txt")}
-      WHERE stop_lat IS NOT NULL AND stop_lon IS NOT NULL;
+      WHERE stop_lat IS NOT NULL AND stop_lon IS NOT NULL AND stop_lat <> '' AND stop_lon <> '';
     CREATE TABLE trips AS
-      SELECT t.trip_id, t.service_id, t.route_id, r.route_type
-      FROM ${csv("trips.txt")} t JOIN ${csv("routes.txt")} r USING (route_id);
+      SELECT t.trip_id, t.service_id, t.route_id, ${modeSql("r.route_type", feed.mode)} AS mode
+      FROM ${csv("trips.txt")} t JOIN ${csv("routes.txt")} r USING (route_id)
+      ${routeFilter};
     CREATE TABLE st AS
       SELECT trip_id, stop_sequence::INT AS seq, stop_id,
              ${secs("arrival_time")} AS arr, ${secs("departure_time")} AS dep
       FROM ${csv("stop_times.txt")}
-      WHERE arrival_time IS NOT NULL AND departure_time IS NOT NULL AND arrival_time <> '' AND departure_time <> '';
+      WHERE arrival_time IS NOT NULL AND departure_time IS NOT NULL AND arrival_time <> '' AND departure_time <> ''
+        -- Only the kept routes' trips. The self-join below grows with the square of a trip's
+        -- stops, and the queries join trips anyway, so dropped routes (Bangkok's 11,800 minibus
+        -- stops in the Thai feed) must leave here, not after the join: with them the Thai feed
+        -- made 3.7 million pairs and spilled over a gigabyte to disk; without, 63,000 pairs.
+        AND trip_id IN (SELECT trip_id FROM trips);
+    CREATE TABLE freq AS ${freqSql};
+    -- One row per trip: its mode and how many times a week it runs.
+    CREATE TABLE trip_info AS
+      SELECT t.trip_id, t.mode, COALESCE(sv.days, 1) * COALESCE(fq.runs, 1) AS per_week
+      FROM trips t
+      LEFT JOIN services sv ON sv.service_id = t.service_id
+      LEFT JOIN freq fq ON fq.trip_id = t.trip_id;
+    -- A rail feed lists the same train once per calendar (SNCF: 60,000 trips), with identical
+    -- stops and times. The pair query below is quadratic in a trip's stops, so it runs over
+    -- distinct stop patterns, each carrying the summed weekly runs of its trips. On 2026-10-10
+    -- the per-trip version spilled 2.8 GB to a full disk on the SNCF feed and died.
+    -- The pattern id folds a hash of every stop row (sequence, stop, times) with XOR plus the
+    -- row count: order-independent, so it needs no sorted string aggregate, which held the
+    -- SNCB feed's 2.4 million rows in memory and died at the 2 GB cap.
+    CREATE TABLE trip_pattern AS
+      SELECT trip_id, hash(count(*), bit_xor(hash(seq, stop_id, arr, dep))) AS pid
+      FROM st GROUP BY trip_id;
+    -- One row per pattern: a representative trip, its mode, weekly runs, and the fastest
+    -- straight-line average a time on it may imply before it counts as a placeholder.
+    CREATE TABLE patterns AS
+      SELECT pid, min(p.trip_id) AS trip_id, any_value(ti.mode) AS mode, sum(ti.per_week) AS per_week
+      FROM trip_pattern p JOIN trip_info ti ON ti.trip_id = p.trip_id
+      GROUP BY pid;
+    ALTER TABLE patterns ADD COLUMN max_kmh DOUBLE;
+    UPDATE patterns SET max_kmh = ${maxKmhSql};
+    CREATE TABLE pst AS
+      SELECT p.pid, s.seq, s.stop_id, s.arr, s.dep FROM patterns p JOIN st s ON s.trip_id = p.trip_id;
+    -- Patterns whose times are placeholders as a whole: the end-to-end run implies a speed over
+    -- the ceiling, or no time at all. Thailand's feed times Bangkok to Chiang Mai at 7 minutes,
+    -- and the stops in between share the same compression, so a pair inside such a trip that
+    -- happens to pass the per-pair check (short hop, times a minute apart) is not real either.
+    -- Stored as a column of patterns: a LEFT JOIN of this list after the self-join below sent
+    -- DuckDB into a plan that spilled a gigabyte on the SNCF feed; as a flag it costs nothing.
+    ALTER TABLE patterns ADD COLUMN placeholder BOOLEAN DEFAULT false;
+    UPDATE patterns SET placeholder = true WHERE pid IN (
+      SELECT e.pid
+      FROM (SELECT pid, arg_min(stop_id, seq) AS first_stop, arg_max(stop_id, seq) AS last_stop,
+                   arg_min(dep, seq) AS dep0, arg_max(arr, seq) AS arr1
+            FROM pst GROUP BY pid) e
+      JOIN stops a ON a.stop_id = e.first_stop
+      JOIN stops b ON b.stop_id = e.last_stop
+      JOIN patterns p ON p.pid = e.pid
+      WHERE arr1 - dep0 <= 0 OR ${kmSql("a", "b")} / ((arr1 - dep0) / 3600.0) > p.max_kmh);
+    -- One position per station (a platform's coordinates; the 500 m grid merges the rest), so
+    -- the pair query groups on station ids alone and joins names and coordinates afterwards.
+    CREATE TABLE station_pos AS
+      SELECT station, arg_min(stop_name, stop_id) AS name, arg_min(lat, stop_id) AS lat, arg_min(lon, stop_id) AS lon
+      FROM stops GROUP BY station;
   `);
 
-  // Every (from, to) a single trip serves, weighted by how many days a week that trip runs.
+  // Every (from, to) a single trip serves, weighted by how many times a week that trip runs.
+  // The shortest time is taken only over plausible times (per-trip and per-pair check); a pair
+  // no trip times plausibly gets NULL and is estimated by distance below. Checking before the
+  // minimum matters: one glitched trip (Emmerich to Arnhem in 60 s in the German feed) used to
+  // discard the 94 trips that timed the same pair at 13 minutes.
+  // No cap on how many stops apart a pair may be: Amtrak's Floridian has 46 stops, Thai coaches
+  // up to 144, and the old 40 cut their end-to-end edge. Size is kept in check by the route
+  // filter above and the pattern table, not by trip length.
   const reader = await db.runAndReadAll(`
     WITH pairs AS (
-      SELECT a.stop_id AS from_stop, b.stop_id AS to_stop, (b.arr - a.dep) AS s,
-             COALESCE(sv.days, 1) AS days, t.route_type
-      FROM st a
-      JOIN st b ON a.trip_id = b.trip_id AND b.seq > a.seq AND b.seq - a.seq <= 40
-      JOIN trips t ON t.trip_id = a.trip_id
-      LEFT JOIN services sv ON sv.service_id = t.service_id
-      WHERE b.arr > a.dep
+      SELECT sf.station AS from_station, stt.station AS to_station, p.mode, p.per_week,
+             -- Equal times are kept in the count (placeholder feeds give several stops the same
+             -- minute); the time only counts when positive and plausible.
+             CASE WHEN NOT p.placeholder AND b.arr > a.dep AND ${kmSql("sf", "stt")} / ((b.arr - a.dep) / 3600.0) <= p.max_kmh
+                  THEN b.arr - a.dep END AS ok_s
+      FROM pst a
+      JOIN pst b ON a.pid = b.pid AND b.seq > a.seq
+      JOIN patterns p ON p.pid = a.pid
+      JOIN stops sf ON sf.stop_id = a.stop_id
+      JOIN stops stt ON stt.stop_id = b.stop_id
+      WHERE b.arr >= a.dep AND sf.station <> stt.station
+    ),
+    agg AS (
+      SELECT from_station, to_station, mode, min(ok_s)::INT AS min_secs, sum(per_week)::DOUBLE AS trips_per_week
+      FROM pairs GROUP BY 1, 2, 3
     )
-    SELECT sf.station AS from_station, sf.stop_name AS from_name, sf.lat AS from_lat, sf.lon AS from_lon,
-           stt.station AS to_station, stt.stop_name AS to_name, stt.lat AS to_lat, stt.lon AS to_lon,
-           min(s)::INT AS min_secs, sum(days)::DOUBLE AS trips_per_week, any_value(route_type) AS route_type
-    FROM pairs p
-    JOIN stops sf ON sf.stop_id = p.from_stop
-    JOIN stops stt ON stt.stop_id = p.to_stop
-    WHERE sf.station <> stt.station
-    GROUP BY 1,2,3,4,5,6,7,8
+    SELECT f.name AS from_name, f.lat AS from_lat, f.lon AS from_lon,
+           t.name AS to_name, t.lat AS to_lat, t.lon AS to_lon,
+           agg.mode, agg.min_secs, agg.trips_per_week
+    FROM agg
+    JOIN station_pos f ON f.station = agg.from_station
+    JOIN station_pos t ON t.station = agg.to_station
   `);
   const rows = reader.getRowObjects() as Record<string, unknown>[];
 
   const before = stations.size;
   let edges = 0;
+  let timedByDistance = 0;
   for (const r of rows) {
-    const from = stationFor(String(r.from_name), Number(r.from_lat), Number(r.from_lon), feed.id);
-    const to = stationFor(String(r.to_name), Number(r.to_lat), Number(r.to_lon), feed.id);
+    const fromLat = Number(r.from_lat);
+    const fromLon = Number(r.from_lon);
+    const toLat = Number(r.to_lat);
+    const toLon = Number(r.to_lon);
+    const from = stationFor(String(r.from_name), fromLat, fromLon, feed.id);
+    const to = stationFor(String(r.to_name), toLat, toLon, feed.id);
     if (from === to) continue;
-    const mode = modeOf(String(r.route_type), feed.mode);
+    const mode = String(r.mode);
     const key = `${from}>${to}>${mode}`;
-    const minutes = Math.round(Number(r.min_secs) / 60);
+    // A pair without a plausible time keeps the connection with a distance estimate at a slow
+    // average, rather than pretending to know its duration.
+    const km = haversineKm(fromLat, fromLon, toLat, toLon);
+    const secs = r.min_secs == null ? null : Number(r.min_secs);
+    let minutes: number;
+    if (secs == null || secs <= 0) {
+      minutes = estimateMinutes(km, mode);
+      timedByDistance++;
+    } else {
+      minutes = Math.round(secs / 60);
+    }
     const tpw = Math.round(Number(r.trips_per_week));
     const prev = edgeAgg.get(key);
     if (prev) {
@@ -147,18 +334,22 @@ for (const feed of feeds) {
   // departures a week leave each one.
   const hops = await db.runAndReadAll(`
     WITH ordered AS (
-      SELECT trip_id, stop_id, LEAD(stop_id) OVER (PARTITION BY trip_id ORDER BY seq) AS next_stop FROM st
+      SELECT pid, stop_id, LEAD(stop_id) OVER (PARTITION BY pid ORDER BY seq) AS next_stop FROM pst
+    ),
+    agg AS (
+      SELECT a.station AS from_station, b.station AS to_station, sum(p.per_week)::DOUBLE AS dep_per_week
+      FROM ordered o
+      JOIN stops a ON a.stop_id = o.stop_id
+      JOIN stops b ON b.stop_id = o.next_stop
+      JOIN patterns p ON p.pid = o.pid
+      WHERE a.station <> b.station
+      GROUP BY 1, 2
     )
-    SELECT a.stop_name AS from_name, a.lat AS from_lat, a.lon AS from_lon,
-           b.stop_name AS to_name, b.lat AS to_lat, b.lon AS to_lon,
-           sum(COALESCE(sv.days, 1))::DOUBLE AS dep_per_week
-    FROM ordered o
-    JOIN stops a ON a.stop_id = o.stop_id
-    JOIN stops b ON b.stop_id = o.next_stop
-    JOIN trips t ON t.trip_id = o.trip_id
-    LEFT JOIN services sv ON sv.service_id = t.service_id
-    WHERE a.station <> b.station
-    GROUP BY 1, 2, 3, 4, 5, 6
+    SELECT f.name AS from_name, f.lat AS from_lat, f.lon AS from_lon,
+           t.name AS to_name, t.lat AS to_lat, t.lon AS to_lon, agg.dep_per_week
+    FROM agg
+    JOIN station_pos f ON f.station = agg.from_station
+    JOIN station_pos t ON t.station = agg.to_station
   `);
   const byId = [...stations.values()];
   for (const r of hops.getRowObjects() as Record<string, unknown>[]) {
@@ -173,8 +364,17 @@ for (const feed of feeds) {
   }
 
   feedStats[feed.id] = { stations: stations.size - before, edges };
-  console.log(`${feed.id}: +${stations.size - before} stations, ${edges} direct connections`);
+  console.log(
+    `${feed.id}: +${stations.size - before} stations, ${edges} direct connections` +
+      (timedByDistance ? `, ${timedByDistance} timed by distance (no trip gave a plausible time)` : ""),
+  );
 
+  // Free the feed's tables before the next download; each feed gets a fresh instance, so an
+  // instance left open would keep its memory for the rest of the run.
+  db.closeSync();
+  instance.closeSync();
+
+  if (TEST_RUN) continue;
   await recordManifest(`gtfs:${feed.id}`, {
     source: feed.name,
     url: feed.url,
@@ -185,13 +385,24 @@ for (const feed of feeds) {
     file: OUT,
   });
 }
+// DuckDB deletes its spill files on close but leaves the folder; the run should leave no trace.
+await rm(DUCKDB_TMP, { recursive: true, force: true });
 
-function modeOf(routeType: string, fallback: Feed["mode"]): string {
-  const t = Number(routeType);
-  if ([0, 1, 2].includes(t) || (t >= 100 && t < 200) || (t >= 400 && t < 500)) return "rail";
-  if (t === 3 || (t >= 200 && t < 300) || (t >= 700 && t < 800)) return "coach";
-  if (t === 4 || (t >= 1000 && t < 1100)) return "ferry";
-  return fallback === "mixed" ? "other" : fallback;
+// The mode of a route from its GTFS route_type (basic and extended codes), as a SQL expression.
+// Computed in DuckDB because the speed ceiling per trip depends on it.
+function modeSql(routeType: string, fallback: Feed["mode"]): string {
+  const rt = `TRY_CAST(${routeType} AS INT)`;
+  return `CASE
+    WHEN ${rt} IN (0, 1, 2) OR ${rt} BETWEEN 100 AND 199 OR ${rt} BETWEEN 400 AND 499 THEN 'rail'
+    WHEN ${rt} = 3 OR ${rt} BETWEEN 200 AND 299 OR ${rt} BETWEEN 700 AND 799 THEN 'coach'
+    WHEN ${rt} = 4 OR ${rt} BETWEEN 1000 AND 1099 THEN 'ferry'
+    ELSE '${fallback === "mixed" ? "other" : fallback}' END`;
+}
+
+// Straight-line kilometres between two stop rows (haversine), the SQL twin of lib/geo.ts.
+function kmSql(a: string, b: string): string {
+  return `(2 * 6371 * asin(sqrt(pow(sin(radians(${b}.lat - ${a}.lat) / 2), 2)
+          + cos(radians(${a}.lat)) * cos(radians(${b}.lat)) * pow(sin(radians(${b}.lon - ${a}.lon) / 2), 2))))`;
 }
 
 // Ferries (scripts/ingest/ferries.ts): ports become stations, crossings become edges both ways.

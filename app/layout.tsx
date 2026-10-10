@@ -37,12 +37,15 @@ const TRAVELPAYOUTS_DRIVE = `(function () {
       document.head.appendChild(script);
   })();`;
 
+// The snippet is registered for the production host only: on localhost it logs "config is
+// not valid" and a 403 on every page load, so development and preview builds leave it out.
+// On Vercel VERCEL_ENV says which build this is; elsewhere NODE_ENV is the only signal.
+const LOAD_DRIVE = process.env.VERCEL_ENV ? process.env.VERCEL_ENV === "production" : process.env.NODE_ENV === "production";
+
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en" className={`${geist.variable} ${geistMono.variable}`}>
-      <head>
-        <script data-cmp-ab="2" data-cfasync="false" dangerouslySetInnerHTML={{ __html: TRAVELPAYOUTS_DRIVE }} />
-      </head>
+      <head>{LOAD_DRIVE && <script data-cmp-ab="2" data-cfasync="false" dangerouslySetInnerHTML={{ __html: TRAVELPAYOUTS_DRIVE }} />}</head>
       <body>{children}</body>
     </html>
   );

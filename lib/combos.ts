@@ -4,9 +4,10 @@
 // no coverage, nearby cities with an airport stand in with an estimated road time.
 import citiesJson from "@/public/data/cities.json";
 import airportsJson from "@/public/data/airports.json";
+import { countryAllowed } from "./been";
 import { haversineKm } from "./geo";
 import { reachFrom } from "./ground";
-import { hubDegree } from "./board";
+import { hubDegree, resolveGateway } from "./board";
 import { kiwiDate, searchFlight } from "./kiwi";
 import type { Airport, City } from "./types";
 
@@ -68,6 +69,8 @@ export type CombosResult = {
   combos: Combo[];
   searched: number;
   generatedAt: string;
+  /** A plain sentence when the deal's own destination is on the been list and nothing was searched. */
+  note?: string;
 };
 
 const MAX_GROUND_MIN = 300;
@@ -96,8 +99,24 @@ export function neighboursOf(cityCode: string): { code: string; minutes: number;
   return [...out.values()].sort((a, b) => a.minutes - b.minutes || hubDegree(b.code) - hubDegree(a.code)).slice(0, CANDIDATES);
 }
 
-export async function findCombos(gateway: string, dst: string, dstCity: string, out: string, back: string, base: number): Promise<CombosResult> {
-  const neighbours = neighboursOf(dstCity);
+/** Options a caller may add: the "Been" list (ISO2), so a neighbour in a visited country is never proposed (nor searched). */
+export type CombosOptions = { exclude?: string[] };
+/** The same request as one object, the shape the chat tools use. */
+export type CombosParams = { gateway: string; dst: string; dstCity: string; out: string; back: string; base: number } & CombosOptions;
+
+export async function findCombos(params: CombosParams): Promise<CombosResult>;
+export async function findCombos(gateway: string, dst: string, dstCity: string, out: string, back: string, base: number, opts?: CombosOptions): Promise<CombosResult>;
+/** Both call shapes land here: the positional one the route always used, and the object one. */
+export async function findCombos(a: CombosParams | string, dstArg?: string, dstCityArg?: string, outArg?: string, backArg?: string, baseArg?: number, opts: CombosOptions = {}): Promise<CombosResult> {
+  const { gateway, dst, dstCity, out, back, base, exclude = [] }: CombosParams = typeof a === "string" ? { gateway: a, dst: dstArg ?? "", dstCity: dstCityArg ?? "", out: outArg ?? "", back: backArg ?? "", base: baseArg ?? 0, exclude: opts.exclude } : a;
+  // The deal's own destination is where the traveller lands and sleeps first: in a visited
+  // country the combo is not proposed at all, so none of its six searches is spent.
+  const dstCountry = CITIES[dstCity]?.country ?? resolveGateway(dst)?.country;
+  if (!countryAllowed(dstCountry, exclude)) {
+    return { gateway, city: dstCity, base, outPrice: null, outUrl: null, outDate: out, combos: [], searched: 0, generatedAt: new Date().toISOString(), note: `${CITIES[dstCity]?.name ?? dstCity} is on your been list (only new countries), so no two-city combo was searched; a layover there is still fine.` };
+  }
+  // The neighbour is where the traveller sleeps and flies home from: a destination, not a layover.
+  const neighbours = neighboursOf(dstCity).filter((n) => countryAllowed(CITIES[n.code]?.country, exclude));
   const oneWay = async (from: string, to: string, date: string) => {
     const r = await searchFlight({ flyFrom: from, flyTo: to, departureDate: kiwiDate(date), departureDateFlexDays: 1 });
     const it = r.itineraries.sort((a, b) => a.price - b.price)[0];

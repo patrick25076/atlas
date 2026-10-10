@@ -1,23 +1,51 @@
 import { NextResponse } from "next/server";
-import { purposeTrips, type PurposeTrip } from "@/lib/purpose";
+import { parseExclude } from "@/lib/been";
+import { purposeTrips, type PurposeTrips } from "@/lib/purpose";
+import { InFlight, TtlLru } from "@/lib/memo";
+import { bad, iataList, intIn, isoDay } from "@/lib/params";
 
-// GET /api/purpose?g=OTP,SBZ&from=2026-10-15&to=2026-12-15[&kinds=festival,sport][&live=4]
-// Events worth flying for in a window, each with the cheapest way there. Memoised an hour.
+// GET /api/purpose?g=OTP,SBZ&from=2026-10-15&to=2026-12-15[&kinds=festival,sport][&live=4][&exclude=RO,HU]
+// exclude is the "Been" list (ISO2): events in those countries are hidden, no search spent.
+// Events worth flying for in a window, each with the cheapest way there: the stored boards
+// first, then up to `live` Kiwi searches for the events the boards miss. Memoised an hour,
+// except when every live search of the run failed (throttling): that answer is returned
+// once with a note and not kept, so the next visitor searches again. The body carries
+// `searched` and `failed` (this run's live searches and how many Kiwi refused) so the chat
+// can budget on exact numbers; a memo hit repeats the counts of the run that produced it.
 export const maxDuration = 90;
-const memo = new Map<string, { at: number; body: PurposeTrip[] }>();
+const memo = new TtlLru<PurposeTrips>(500, 3_600_000);
+const inflight = new InFlight<PurposeTrips>();
+const CACHE = { "Cache-Control": "public, max-age=900, stale-while-revalidate=3600" };
+const KIND = /^[a-z-]{2,24}$/;
 
 export async function GET(request: Request) {
   const p = new URL(request.url).searchParams;
-  const gateways = (p.get("g") ?? "").split(",").map((s) => s.trim().toUpperCase()).filter((s) => /^[A-Z]{3}$/.test(s)).slice(0, 4);
-  const from = p.get("from") ?? "";
-  const to = p.get("to") ?? "";
-  const kinds = (p.get("kinds") ?? "").split(",").filter(Boolean) as never;
-  const live = Math.min(8, Math.max(0, Number(p.get("live")) || 4));
-  if (!gateways.length || !/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to)) return NextResponse.json({ error: "g, from and to required" }, { status: 400 });
-  const key = `${gateways.join(",")}|${from}|${to}|${kinds}|${live}`;
+  const gateways = iataList(p.get("g"), 4);
+  const from = isoDay(p.get("from"));
+  const to = isoDay(p.get("to"));
+  const kinds = (p.get("kinds") ?? "").split(",").map((k) => k.trim().toLowerCase()).filter((k) => KIND.test(k)).slice(0, 8) as never;
+  const live = intIn(p.get("live"), 0, 8, 4);
+  const exclude = parseExclude(p.get("exclude"));
+  if (!gateways.length) return bad("g must be a comma list of three-letter airport codes");
+  if (!from || !to) return bad("from and to must be real dates, YYYY-MM-DD");
+  if (to < from) return bad("to must not be before from");
+  if ((Date.parse(to) - Date.parse(from)) / 86_400_000 > 400) return bad("the window must be 400 days or less");
+  const key = `${gateways.join(",")}|${from}|${to}|${kinds}|${live}|${exclude.join(",")}`;
   const hit = memo.get(key);
-  if (hit && Date.now() - hit.at < 3_600_000) return NextResponse.json({ trips: hit.body }, { headers: { "Cache-Control": "public, max-age=900" } });
-  const trips = await purposeTrips(gateways, from, to, { live, kinds });
-  memo.set(key, { at: Date.now(), body: trips });
-  return NextResponse.json({ trips }, { headers: { "Cache-Control": "public, max-age=900" } });
+  // JSON.stringify drops the counts hung on the array, so they are spread into the body by hand.
+  if (hit) return NextResponse.json({ trips: hit, searched: hit.searched, failed: hit.failed }, { headers: { ...CACHE, "X-Purpose": "memo" } });
+  try {
+    // lib/purpose.ts swallows each failed live search (the event stays unpriced) and counts
+    // this run's own searches, so the counts say whether its live searches all failed, with
+    // no help from the gate's process-wide counters (other routes move those too).
+    const { promise } = inflight.run(key, () => purposeTrips(gateways, from, to, { live, kinds, exclude }));
+    const trips = await promise;
+    const { searched, failed } = trips;
+    const allLiveFailed = searched > 0 && failed >= searched && !trips.some((t) => t.source === "live");
+    if (!allLiveFailed) memo.set(key, trips);
+    const note = allLiveFailed ? "live prices are rate-limited right now; events without a stored fare are unpriced, try again in a few minutes" : undefined;
+    return NextResponse.json({ trips, searched, failed, note }, { headers: { ...(allLiveFailed ? { "Cache-Control": "no-store" } : CACHE), "X-Purpose": allLiveFailed ? "live-failed" : "live" } });
+  } catch (err) {
+    return NextResponse.json({ error: err instanceof Error ? err.message : "the event search failed" }, { status: 502, headers: { "Cache-Control": "no-store" } });
+  }
 }

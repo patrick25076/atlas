@@ -1,14 +1,22 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+// The Ask tab: a conversation with the Atlas agent. The agent acts first and asks at most one
+// question, which arrives as a widget (dates, month, nights, region, choices, people, a pick
+// on the globe) rendered here; an answer is sent back as a short message. Results come back
+// as cards, a price calendar, bases or group options, and flow to the globe as pins or a
+// route. Threads are kept in the browser; voice input uses the Web Speech API when it exists.
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport, type UIMessage } from "ai";
 import type { Deal } from "@/lib/types";
 import type { WildTrip } from "@/lib/wild";
-import { countryName, dateRange } from "@/lib/format";
+import { countryName, dateRange, monthLabel, monthOptions } from "@/lib/format";
 import { formatDuration } from "@/lib/geo";
+import { WILD_REGIONS } from "@/lib/ui-types";
+import { FOLLOWUPS, ISO_DAY_RE, LOCAL_DAY, NIGHT_OPTIONS, TOOL_LABEL, addDays, quickDateRanges, toolProgress, widgetAnswer, type PersonRow, type WidgetKind, type WidgetSpec } from "@/lib/chat-widgets";
+import s from "./ChatPanel.module.css";
 
-export type ChatContext = { origin?: { lat: number; lon: number; label: string }; gateways: string[]; home: string; month?: string };
+export type ChatContext = { origin?: { lat: number; lon: number; label: string }; gateways: string[]; home: string; month?: string; today?: string; been?: { countries: string[]; newOnly: boolean } };
 
 type Props = {
   context: ChatContext;
@@ -19,44 +27,207 @@ type Props = {
   onOpenDeal: (key: string) => void;
 };
 
-const STORE = "atlas-chat-v1";
-const TOOL_LABEL: Record<string, string> = {
-  home_airports: "Looking at your airports",
-  cheapest_deals: "Reading tonight's prices",
-  find_getaways: "Searching live for your dates",
-  reprice_route: "Pricing the route live",
-  two_city_combos: "Checking two-city combos",
-  wild_trip: "Building the loop (a minute or two)",
-  plan_days: "Planning the days",
-  sights: "Reading the guide",
-  events_near: "Checking what's on",
-  eats_near: "Checking rated restaurants",
-  hotels_near: "Checking hotel prices",
-  oneway_fares: "Reading one-way fares",
-  ground_reach: "Checking trains and coaches",
-  place_facts: "Looking up the facts",
-  web_search: "Searching the web",
-};
-const STARTERS = ["A 3 to 6 night getaway to a cool autumn place between 20 and 30 October", "Where is warm and cheap for a weekend?", "Plan me two weeks in Southeast Asia, true experiences, mid budget", "Best traditional food in Lisbon without tourist prices", "Which of my airports is worth the drive?"];
-
+type Thread = { id: string; title: string; updated: number; messages: UIMessage[] };
+type Store = { active: string; threads: Thread[] };
 type ToolPart = { type: string; toolCallId?: string; state?: string; input?: unknown; output?: unknown; errorText?: string };
+type ScanRow = { month: string; cheapest: number | null; out?: string; back?: string; nights?: number; perNight?: number; stops?: number; airline?: string; from?: string; homeFrom?: string; url?: string; url2?: string; failed?: boolean };
+type ScanOut = { to: string; nights: string; oneWay: boolean; searched: number; failed?: number; note?: string; best: ScanRow | null; months: ScanRow[]; openJaw: ScanRow[]; raw?: Deal[] };
+type BaseOut = { base: string; country: string; flightIn: string; flightOut: string; rentPerMonth: number; livingPerMonth: number; total: number; perDay: number; why: string[]; sideTrips: string[]; visa?: string | null; urlIn?: string; urlOut?: string };
+type GroupOut = { windows: { dates: string; nights: number; everyone: boolean; compromises: string[] }[]; options: { city: string; country: string; dates: string; nights: number; everyone: boolean; total: number; perMember: { name: string; price: number; from: string; out: string; back: string; url: string; note?: string }[] }[] };
+type Itin = { price: number; out: string; back?: string; nights: number | null; stops: number; via?: string[]; carriers: string[]; hours: number; url: string };
+type InsightOut = { route: string; month: string; typical: number | null; samples: number; low: number | null; verdict: string; note?: string };
+type MonthsOut = { city: string; best: string[]; months: { month: string; highC: number; rainMm: number; score: number }[] };
 
-function loadStored(): UIMessage[] {
+// Threads live in localStorage as one small index plus one key per thread, so a turn writes
+// only the thread it changed; the older one-key stores (v2, and the single v1 conversation)
+// are moved over once and removed.
+const INDEX_KEY = "atlas-chat-threads-v3";
+const MSGS_KEY = (id: string) => `atlas-chat-msgs-v3:${id}`;
+const V2_STORE = "atlas-chat-threads-v2";
+const V1_STORE = "atlas-chat-v1";
+const MAX_MESSAGES = 40;
+const MAX_THREADS = 30;
+/** A thread past this many bytes loses its oldest turns before it is written. */
+const MAX_THREAD_BYTES = 200_000;
+/** A streamed answer writes at most this often; the end of a turn writes at once. */
+const SAVE_DEBOUNCE_MS = 500;
+const STARTERS = ["I want to get back to San Francisco", "A 3 to 6 night getaway to a cool autumn place between 20 and 30 October", "Where is warm and cheap for a weekend?", "Two months somewhere warm this winter, mid budget", "Plan a weekend for me and two friends from different cities"];
+const RAW_DEAL_TOOLS = new Set(["find_getaways", "cheapest_deals", "scan_cheapest", "long_stay", "group_trip", "events_worth_travelling_for"]);
+const STORAGE_NOTE = "This browser's storage is full or off, so this conversation will not be kept after you leave.";
+
+const newId = () => (typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID().slice(0, 8) : Math.random().toString(36).slice(2, 10));
+const blankThread = (): Thread => ({ id: newId(), title: "New chat", updated: Date.now(), messages: [] });
+type ThreadMeta = { id: string; title: string; updated: number };
+
+function readKey<T>(k: string): T | null {
   try {
-    const raw = localStorage.getItem(STORE);
-    if (!raw) return [];
-    const j = JSON.parse(raw) as { messages?: UIMessage[] };
-    return Array.isArray(j.messages) ? j.messages.slice(-30) : [];
+    const raw = localStorage.getItem(k);
+    return raw ? (JSON.parse(raw) as T) : null;
   } catch {
-    return [];
+    return null;
+  }
+}
+function writeKey(k: string, v: unknown): boolean {
+  try {
+    localStorage.setItem(k, JSON.stringify(v));
+    return true;
+  } catch {
+    return false;
+  }
+}
+const isToolPart = (p: unknown): p is ToolPart => !!p && typeof p === "object" && typeof (p as ToolPart).type === "string" && (p as ToolPart).type.startsWith("tool-");
+
+/** The scan_cheapest parts of one assistant message whose calendar is NOT drawn: when the model
+ * scanned the same destination over the same months twice (once plain, once with the open-jaw),
+ * the two tables would say the same thing, so only one is kept, the one that has the open-jaw
+ * rows (else the first). Keyed by the part's position in the message. */
+function duplicateCalendars(m: UIMessage): Set<number> {
+  const skip = new Set<number>();
+  const groups = new Map<string, number[]>();
+  m.parts.forEach((part, i) => {
+    if (!isToolPart(part) || part.type !== "tool-scan_cheapest" || part.state !== "output-available") return;
+    const out = part.output as (Partial<ScanOut> & { error?: unknown }) | undefined;
+    if (!out || !Array.isArray(out.months) || typeof out.error === "string") return;
+    const key = `${out.to ?? ""}|${out.oneWay ? 1 : 0}|${out.months.map((r) => r.month).join(",")}`;
+    groups.set(key, [...(groups.get(key) ?? []), i]);
+  });
+  for (const idx of groups.values()) {
+    if (idx.length < 2) continue;
+    const withJaw = idx.find((i) => ((m.parts[i] as ToolPart).output as Partial<ScanOut>).openJaw?.length);
+    const keep = withJaw ?? idx[0];
+    for (const i of idx) if (i !== keep) skip.add(i);
+  }
+  return skip;
+}
+
+/** A tool call that never got its answer (Stop, a tab switch mid-search, a closed tab) becomes a
+ * plain error part, so the thread can go on: the server also drops such calls, but a part left
+ * in "input-available" would otherwise spin forever in the list. */
+function settle(messages: UIMessage[]): UIMessage[] {
+  return messages.map((m) => {
+    if (m.role !== "assistant") return m;
+    let changed = false;
+    const parts = m.parts.map((p) => {
+      if (!isToolPart(p) || (p.state !== "input-streaming" && p.state !== "input-available")) return p;
+      changed = true;
+      return { ...p, state: "output-error", errorText: "stopped before it finished", input: p.input ?? {} } as unknown as typeof p;
+    });
+    return changed ? { ...m, parts } : m;
+  });
+}
+
+/** What is written to the browser: settled, without the raw payloads (the cards redraw from the
+ * compact rows), at most MAX_MESSAGES, and under MAX_THREAD_BYTES with the oldest turns dropped. */
+function slim(messages: UIMessage[]): UIMessage[] {
+  let out = settle(messages.slice(-MAX_MESSAGES)).map((m) => {
+    if (m.role !== "assistant") return m;
+    let changed = false;
+    const parts = m.parts.map((p) => {
+      if (!isToolPart(p) || !p.output || typeof p.output !== "object" || !("raw" in p.output)) return p;
+      changed = true;
+      const { raw: _raw, ...rest } = p.output as Record<string, unknown>;
+      void _raw;
+      return { ...p, output: rest } as typeof p;
+    });
+    return changed ? { ...m, parts } : m;
+  });
+  while (out.length > 2 && JSON.stringify(out).length > MAX_THREAD_BYTES) {
+    out = out.slice(1);
+    while (out.length && out[0].role !== "user") out = out.slice(1);
+  }
+  return out;
+}
+
+/** Threads from the browser; an older store is moved into the per-thread keys once. */
+function loadStore(): Store {
+  try {
+    const idx = readKey<{ active: string; threads: ThreadMeta[] }>(INDEX_KEY);
+    if (idx && Array.isArray(idx.threads) && idx.threads.length) {
+      const threads: Thread[] = idx.threads
+        .filter((t) => t && typeof t.id === "string")
+        .slice(0, MAX_THREADS)
+        .map((t) => ({ id: t.id, title: String(t.title ?? "New chat"), updated: Number(t.updated) || 0, messages: settle((readKey<UIMessage[]>(MSGS_KEY(t.id)) ?? []).filter((m) => m && Array.isArray(m.parts))) }));
+      if (threads.length) return { active: threads.some((t) => t.id === idx.active) ? idx.active : threads[0].id, threads };
+    }
+    let moved: Store | null = null;
+    const v2 = readKey<Store>(V2_STORE);
+    if (v2 && Array.isArray(v2.threads) && v2.threads.length) {
+      const threads = v2.threads.filter((t) => t && typeof t.id === "string").slice(0, MAX_THREADS).map((t) => ({ id: t.id, title: t.title || "New chat", updated: t.updated || 0, messages: slim(Array.isArray(t.messages) ? t.messages : []) }));
+      if (threads.length) moved = { active: threads.some((t) => t.id === v2.active) ? v2.active : threads[0].id, threads };
+    }
+    if (!moved) {
+      const v1 = readKey<{ messages?: UIMessage[] }>(V1_STORE);
+      const msgs = slim(Array.isArray(v1?.messages) ? v1!.messages! : []);
+      if (msgs.length) {
+        const t: Thread = { ...blankThread(), title: titleOf(msgs) ?? "Earlier chat", messages: msgs };
+        moved = { active: t.id, threads: [t] };
+      }
+    }
+    if (moved) {
+      for (const t of moved.threads) writeKey(MSGS_KEY(t.id), t.messages);
+      writeKey(INDEX_KEY, { active: moved.active, threads: moved.threads.map(({ id, title, updated }) => ({ id, title, updated })) });
+      try {
+        localStorage.removeItem(V2_STORE);
+        localStorage.removeItem(V1_STORE);
+      } catch {
+        // storage off
+      }
+      return moved;
+    }
+  } catch {
+    // storage off or unreadable
+  }
+  const t = blankThread();
+  return { active: t.id, threads: [t] };
+}
+/** Writes the index and, when given, one thread's messages. False when the browser refused. */
+function saveStore(st: Store, threadId?: string): boolean {
+  let ok = writeKey(INDEX_KEY, { active: st.active, threads: st.threads.map(({ id, title, updated }) => ({ id, title, updated })) });
+  if (threadId) {
+    const t = st.threads.find((x) => x.id === threadId);
+    if (t) ok = writeKey(MSGS_KEY(t.id), slim(t.messages)) && ok;
+  }
+  return ok;
+}
+function dropThreadKey(id: string) {
+  try {
+    localStorage.removeItem(MSGS_KEY(id));
+  } catch {
+    // storage off
   }
 }
 
+type CompactDeal = { key: string; city: string; country: string; price: number; dates?: string; nights?: number; from?: string; stops?: number; url?: string; homeVia?: string; flightMinutes?: number };
+/** The deals of a tool result for the cards: the raw ones while this session has them, else the
+ * compact rows (what a restored thread keeps) turned back into the Deal shape the cards read. */
+function cardDeals(out: Record<string, unknown>): Deal[] {
+  if (Array.isArray(out.raw) && out.raw.length) return out.raw as Deal[];
+  const rows = Array.isArray(out.deals) ? (out.deals as CompactDeal[]) : [];
+  return rows
+    .filter((r) => r && typeof r.key === "string" && typeof r.price === "number")
+    .map((r) => {
+      const [gw = "", dst = "", outDay = ""] = r.key.split("|");
+      const [o, b] = String(r.dates ?? "").split(" to ");
+      return { gw, dst, dstCity: dst, city: String(r.city ?? dst), country: String(r.country ?? ""), price: r.price, out: o || outDay, back: b ?? "", nights: r.nights ?? 0, stops: r.stops ?? 0, carriers: [], outMin: r.flightMinutes ?? 0, backMin: 0, url: String(r.url ?? ""), ...(r.homeVia ? { backTo: r.homeVia } : {}) };
+    });
+}
+function titleOf(msgs: UIMessage[]): string | null {
+  const first = msgs.find((m) => m.role === "user");
+  const text = first?.parts.find((p) => p.type === "text") as { text?: string } | undefined;
+  const t = text?.text?.trim();
+  return t ? (t.length > 48 ? t.slice(0, 46) + "…" : t) : null;
+}
+const ago = (t: number) => {
+  const m = Math.round((Date.now() - t) / 60_000);
+  return m < 2 ? "now" : m < 60 ? `${m} min` : m < 1440 ? `${Math.round(m / 60)} h` : `${Math.round(m / 1440)} d`;
+};
+const euro = (n: number | null | undefined) => (n == null ? "" : `€${Math.round(n)}`);
+
 /** Light markdown: paragraphs, **bold**, [links](url) and bare urls. */
 function Text({ text }: { text: string }) {
-  const paras = text.split(/\n{2,}/);
-  const render = (s: string) =>
-    s.split(/(\*\*[^*]+\*\*|\[[^\]]+\]\(https?:\/\/[^\s)]+\)|https?:\/\/[^\s)]+)/).map((bit, k) => {
+  const paras = text.split(/\n{2,}/).filter((p) => p.trim());
+  const render = (str: string) =>
+    str.split(/(\*\*[^*]+\*\*|\[[^\]]+\]\(https?:\/\/[^\s)]+\)|https?:\/\/[^\s)]+)/).map((bit, k) => {
       if (bit.startsWith("**") && bit.endsWith("**")) return <b key={k}>{bit.slice(2, -2)}</b>;
       const link = bit.match(/^\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)$/);
       if (link)
@@ -74,54 +245,481 @@ function Text({ text }: { text: string }) {
       return <span key={k}>{bit}</span>;
     });
   return (
-    <>
+    <div className={s.text}>
       {paras.map((para, i) => (
         <p key={i}>{render(para.replace(/\n/g, " "))}</p>
       ))}
+    </div>
+  );
+}
+
+function DealCards({ deals, onOpen }: { deals: Deal[]; onOpen: (key: string) => void }) {
+  return (
+    <div className={s.cards}>
+      {deals.slice(0, 6).map((d) => (
+        <button key={`${d.gw}|${d.dst}|${d.out}|${d.backTo ?? ""}`} className={s.card} onClick={() => onOpen(`${d.gw}|${d.dst}|${d.out}`)}>
+          <span className={s.price}>€{d.price}</span>
+          <span className={s.body}>
+            <b>
+              {d.city} <span className={s.sub}>{countryName(d.country)}</span>
+            </b>
+            <span className={s.sub}>
+              {d.back ? dateRange(d.out, d.back) : d.out}
+              {d.nights ? ` · ${d.nights}n` : ""} · {d.gw}
+              {d.backTo ? ` → ${d.backTo}` : ""} · {d.stops ? `${d.stops} stop` : "direct"}
+              {d.outMin ? ` · ${formatDuration(d.outMin)}` : ""}
+            </span>
+          </span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/** The price calendar: one row per month, the cheapest highlighted, a bar for the price. */
+function Calendar({ out }: { out: ScanOut }) {
+  const rows = out.months ?? [];
+  const prices = rows.map((r) => r.cheapest).filter((p): p is number => p != null);
+  if (!prices.length) return <p className={s.caption}>{out.failed ? `The searches failed (Kiwi refused ${out.failed} of them); nothing is known about these ${rows.length} months yet.` : `No fares found in ${rows.length} months from these airports.`}</p>;
+  const max = Math.max(...prices);
+  const min = Math.min(...prices);
+  return (
+    <>
+      <table className={s.calendar}>
+        <thead>
+          <tr>
+            <th>Month</th>
+            <th></th>
+            <th className={s.num}>{out.oneWay ? "One way" : "Return"}</th>
+            <th>Dates</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((r) => (
+            <tr key={r.month} className={r.cheapest != null && r.cheapest === min ? s.best : undefined}>
+              <td>{monthLabel(r.month)}</td>
+              <td style={{ width: "26%" }}>{r.cheapest != null && <i className={s.bar} style={{ width: `${Math.max(8, Math.round((r.cheapest / max) * 100))}%` }} />}</td>
+              <td className={s.num}>{r.cheapest != null ? euro(r.cheapest) : r.failed ? "search failed" : "no fare"}</td>
+              <td>
+                {r.out ? (r.back ? dateRange(r.out, r.back) : r.out) : ""}
+                {r.nights ? ` · ${r.nights}n` : ""}
+                {r.from ? ` · ${r.from}` : ""}
+                {r.stops != null ? ` · ${r.stops ? `${r.stops} stop` : "direct"}` : ""}
+              </td>
+              <td>
+                {r.url && (
+                  <a href={r.url} target="_blank" rel="noreferrer">
+                    Book
+                  </a>
+                )}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {out.openJaw?.length > 0 && (
+        <>
+          <p className={s.caption}>Open-jaw: in to {out.to}, home from another city.</p>
+          <table className={s.calendar}>
+            <tbody>
+              {out.openJaw.map((r, i) => (
+                <tr key={`${r.month}-${r.homeFrom}-${i}`}>
+                  <td>{monthLabel(r.month)}</td>
+                  <td>home from {r.homeFrom ?? "?"}</td>
+                  <td className={s.num}>{euro(r.cheapest)}</td>
+                  <td>
+                    {r.out ? (r.back ? dateRange(r.out, r.back) : r.out) : ""}
+                    {r.nights ? ` · ${r.nights}n` : ""}
+                  </td>
+                  <td>
+                    {r.url && (
+                      <a href={r.url} target="_blank" rel="noreferrer">
+                        Out
+                      </a>
+                    )}
+                    {r.url2 && (
+                      <>
+                        {" "}
+                        <a href={r.url2} target="_blank" rel="noreferrer">
+                          Home
+                        </a>
+                      </>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </>
+      )}
+      <p className={s.caption}>
+        {out.searched} live searches, {out.nights} nights.{out.failed ? ` ${out.failed} failed: those months are unknown, not empty.` : ""}
+      </p>
     </>
   );
 }
 
+function Bases({ bases }: { bases: BaseOut[] }) {
+  return (
+    <div className={s.cards}>
+      {bases.slice(0, 5).map((b) => (
+        <div key={b.base} className={s.base}>
+          <div className={s.row}>
+            <b>
+              {b.base} <span className={s.sub}>{b.country}</span>
+            </b>
+            <span className={s.price}>{euro(b.total)}</span>
+          </div>
+          <span className={s.sub}>
+            about €{b.perDay} a day · rent €{b.rentPerMonth} a month · living €{b.livingPerMonth}
+            {b.visa ? ` · ${b.visa}` : ""}
+          </span>
+          <span className={s.sub}>
+            In {b.flightIn}
+            {b.urlIn && (
+              <>
+                {" "}
+                <a href={b.urlIn} target="_blank" rel="noreferrer">
+                  book
+                </a>
+              </>
+            )}
+            . Out {b.flightOut}
+            {b.urlOut && (
+              <>
+                {" "}
+                <a href={b.urlOut} target="_blank" rel="noreferrer">
+                  book
+                </a>
+              </>
+            )}
+          </span>
+          {b.why?.length > 0 && <span className={s.sub}>{b.why.slice(0, 2).join(". ")}</span>}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function GroupOptions({ out }: { out: GroupOut }) {
+  return (
+    <div className={s.cards}>
+      {(out.options ?? []).slice(0, 4).map((o) => (
+        <div key={`${o.city}-${o.dates}`} className={s.base}>
+          <div className={s.row}>
+            <b>
+              {o.city} <span className={s.sub}>{o.country}</span>
+            </b>
+            <span className={s.price}>{euro(o.total)}</span>
+          </div>
+          <span className={s.sub}>
+            {o.dates} · {o.nights}n · {o.everyone ? "everyone can" : "not everyone"}
+          </span>
+          <ul className={s.members}>
+            {o.perMember.map((m) => (
+              <li key={m.name}>
+                <span>
+                  {m.name} from {m.from}
+                  {m.note ? `, ${m.note}` : ""}
+                </span>
+                <span>
+                  {euro(m.price)}{" "}
+                  {m.url && (
+                    <a href={m.url} target="_blank" rel="noreferrer">
+                      book
+                    </a>
+                  )}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function Itineraries({ items }: { items: Itin[] }) {
+  return (
+    <div className={s.cards}>
+      {items.slice(0, 4).map((it, i) => (
+        <a key={i} className={s.card} href={it.url} target="_blank" rel="noreferrer">
+          <span className={s.price}>€{it.price}</span>
+          <span className={s.body}>
+            <b>
+              {it.out.slice(0, 10)}
+              {it.back ? ` to ${it.back.slice(0, 10)}` : ", one way"}
+            </b>
+            <span className={s.sub}>
+              {it.nights != null ? `${it.nights}n · ` : ""}
+              {it.stops ? `${it.stops} stop${it.via?.length ? ` via ${it.via.join(", ")}` : ""}` : "direct"} · {it.hours} h · {it.carriers.slice(0, 2).join(", ")}
+            </span>
+          </span>
+        </a>
+      ))}
+    </div>
+  );
+}
+
+function MonthStrip({ out }: { out: MonthsOut }) {
+  const max = Math.max(...out.months.map((m) => m.score), 1);
+  return (
+    <div className={s.months}>
+      {out.months.map((m) => (
+        <div key={m.month} className={`${s.month} ${out.best.includes(m.month) ? s.good : ""}`} title={`${m.month}: ${m.highC} C, ${m.rainMm} mm`}>
+          <i style={{ height: `${Math.max(4, Math.round((m.score / max) * 28))}px` }} />
+          {m.month.slice(0, 1)}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/** The one question, as a component. Answered widgets stay visible but inert. */
+function Widget({ spec, answered, disabled, onAnswer }: { spec: WidgetSpec; answered: boolean; disabled: boolean; onAnswer: (text: string) => void }) {
+  const d = (spec.defaults ?? {}) as Record<string, unknown>;
+  // The visitor's own calendar day (local clock, not UTC): the pickers' minimum and the quick chips start from it.
+  const today = LOCAL_DAY(new Date());
+  const [from, setFrom] = useState(typeof d.from === "string" ? d.from : "");
+  const [to, setTo] = useState(typeof d.to === "string" ? d.to : "");
+  const [people, setPeople] = useState<PersonRow[]>(() => {
+    // Whatever the model put in defaults: only objects, only string fields, so a stray number
+    // or a null row never reaches .trim() in the render below.
+    const str = (v: unknown) => (typeof v === "string" ? v : typeof v === "number" ? String(v) : "");
+    const given = Array.isArray(d.people) ? d.people.filter((p): p is Record<string, unknown> => !!p && typeof p === "object") : [];
+    const rows = given.slice(0, 8).map((p) => ({ name: str(p.name).slice(0, 40), origin: str(p.origin).slice(0, 40), from: ISO_DAY_RE.test(str(p.from)) ? str(p.from) : "", to: ISO_DAY_RE.test(str(p.to)) ? str(p.to) : "" }));
+    while (rows.length < 2) rows.push({ name: "", origin: "", from: "", to: "" });
+    return rows;
+  });
+  const [picking, setPicking] = useState(false);
+  const inert = answered || disabled;
+
+  // The globe answers a map pick with an atlas:picked event; the first one after our request wins.
+  useEffect(() => {
+    if (!picking) return;
+    const onPicked = (e: Event) => {
+      const det = (e as CustomEvent<{ mode?: string; region?: string; from?: string; to?: string; place?: string }>).detail ?? {};
+      setPicking(false);
+      if (det.region) {
+        const label = WILD_REGIONS.find((r) => r.key === det.region)?.label ?? det.region;
+        onAnswer(widgetAnswer("map-region", `${label} (${det.region})`));
+      } else if (det.place) onAnswer(widgetAnswer("map-place", det.place));
+      else if (det.from || det.to) onAnswer(widgetAnswer("dates", { from: det.from, to: det.to }));
+    };
+    window.addEventListener("atlas:picked", onPicked);
+    return () => window.removeEventListener("atlas:picked", onPicked);
+  }, [picking, onAnswer]);
+
+  const chips = (items: string[], send: (v: string) => string) => (
+    <div className={s.chips}>
+      {items.map((o) => (
+        <button key={o} className={s.chip} disabled={inert} onClick={() => onAnswer(send(o))}>
+          {o}
+        </button>
+      ))}
+    </div>
+  );
+
+  let body: React.ReactNode = null;
+  switch (spec.kind) {
+    case "dates":
+      body = (
+        <>
+          <div className={s.chips}>
+            {quickDateRanges(today).map((q) => (
+              <button key={q.label} className={s.chip} disabled={inert} onClick={() => onAnswer(widgetAnswer("dates", q.from ? { from: q.from, to: q.to } : {}))}>
+                {q.label}
+              </button>
+            ))}
+          </div>
+          <div className={s.dates}>
+            <input className={s.field} type="date" min={today} value={from} disabled={inert} onChange={(e) => setFrom(e.target.value)} aria-label="From" />
+            <input className={s.field} type="date" min={from || today} value={to} disabled={inert} onChange={(e) => setTo(e.target.value)} aria-label="To" />
+            <button className={s.go} disabled={inert || !from} onClick={() => onAnswer(widgetAnswer("dates", { from, to: to || addDays(from, 7) }))}>
+              Use these
+            </button>
+          </div>
+        </>
+      );
+      break;
+    case "month":
+      body = chips([...(spec.options?.length ? spec.options : monthOptions().map(monthLabel)), "Anytime"], (o) => widgetAnswer("month", o));
+      break;
+    case "nights":
+      body = chips(spec.options?.length ? spec.options : NIGHT_OPTIONS, (o) => widgetAnswer("nights", o));
+      break;
+    case "region":
+      body = chips(
+        WILD_REGIONS.map((r) => r.label),
+        (o) => widgetAnswer("region", `${o} (${WILD_REGIONS.find((r) => r.label === o)?.key ?? ""})`),
+      );
+      break;
+    case "choices":
+      body = chips(spec.options?.length ? spec.options : ["Yes", "No"], (o) => widgetAnswer("choices", o));
+      break;
+    case "people": {
+      const set = (i: number, patch: Partial<PersonRow>) => setPeople((rows) => rows.map((r, k) => (k === i ? { ...r, ...patch } : r)));
+      const ok = people.filter((p) => p.name.trim() && p.origin.trim()).length >= 2;
+      body = (
+        <div className={s.people}>
+          {people.map((p, i) => (
+            <div key={i} className={s.person}>
+              <input className={s.field} placeholder="Name" value={p.name} disabled={inert} onChange={(e) => set(i, { name: e.target.value })} />
+              <input className={s.field} placeholder="Airport or city" value={p.origin} disabled={inert} onChange={(e) => set(i, { origin: e.target.value })} />
+              <input className={s.field} type="date" value={p.from} min={today} disabled={inert} onChange={(e) => set(i, { from: e.target.value })} aria-label="Free from" />
+              <input className={s.field} type="date" value={p.to} min={p.from || today} disabled={inert} onChange={(e) => set(i, { to: e.target.value })} aria-label="Free to" />
+              <button className={s.tiny} disabled={inert || people.length <= 2} title="Remove" onClick={() => setPeople((rows) => rows.filter((_, k) => k !== i))}>
+                ×
+              </button>
+            </div>
+          ))}
+          <div className={s.chips}>
+            <button className={s.chip} disabled={inert || people.length >= 8} onClick={() => setPeople((rows) => [...rows, { name: "", origin: "", from: "", to: "" }])}>
+              + Add a person
+            </button>
+            <button className={s.go} disabled={inert || !ok} onClick={() => onAnswer(widgetAnswer("people", people))}>
+              Find our weekend
+            </button>
+          </div>
+        </div>
+      );
+      break;
+    }
+    case "map-region":
+    case "map-place":
+      body = picking ? (
+        <span className={s.picking}>
+          <i className={s.spinner} /> {spec.kind === "map-region" ? "Pick a region on the globe" : "Tap any city on the globe"}, or{" "}
+          <button className={s.tiny} onClick={() => setPicking(false)}>
+            cancel
+          </button>
+        </span>
+      ) : (
+        <div className={s.chips}>
+          <button
+            className={s.go}
+            disabled={inert}
+            onClick={() => {
+              setPicking(true);
+              window.dispatchEvent(new CustomEvent("atlas:pick", { detail: { mode: spec.kind === "map-region" ? "region" : "place" } }));
+            }}
+          >
+            {spec.kind === "map-region" ? "Pick a region on the globe" : "Tap any city on the globe"}
+          </button>
+          {spec.kind === "map-region" && chips(WILD_REGIONS.slice(0, 5).map((r) => r.label), (o) => widgetAnswer("region", `${o} (${WILD_REGIONS.find((r) => r.label === o)?.key ?? ""})`))}
+        </div>
+      );
+      break;
+  }
+  return (
+    <div className={`${s.widget} ${answered ? s.answered : ""}`}>
+      <p className={s.question}>{spec.question}</p>
+      {body}
+    </div>
+  );
+}
+
+type Recognizer = { start: () => void; stop: () => void; abort: () => void; lang: string; interimResults: boolean; continuous: boolean; onresult: ((e: { results: ArrayLike<ArrayLike<{ transcript: string }> & { isFinal: boolean }> }) => void) | null; onend: (() => void) | null; onerror: (() => void) | null };
+function speechCtor(): (new () => Recognizer) | null {
+  if (typeof window === "undefined") return null;
+  const w = window as unknown as { SpeechRecognition?: new () => Recognizer; webkitSpeechRecognition?: new () => Recognizer };
+  return w.SpeechRecognition ?? w.webkitSpeechRecognition ?? null;
+}
+
 export default function ChatPanel(p: Props) {
-  const [initial] = useState<UIMessage[]>(() => (typeof window === "undefined" ? [] : loadStored()));
+  const [store, setStore] = useState<Store>(() => (typeof window === "undefined" ? { active: "ssr", threads: [{ id: "ssr", title: "New chat", updated: 0, messages: [] }] } : loadStore()));
+  const storeRef = useRef(store);
+  storeRef.current = store;
+  const activeRef = useRef(store.active);
   const contextRef = useRef(p.context);
   contextRef.current = p.context;
-  const transport = useMemo(() => new DefaultChatTransport({ api: "/api/chat", prepareSendMessagesRequest: ({ messages }) => ({ body: { messages, context: contextRef.current } }) }), []);
-  const { messages, sendMessage, status, stop, setMessages, error } = useChat({ transport, messages: initial });
+  // What goes to the server: the thread settled (a stopped tool call is an error, not a call
+  // still waiting), so a turn after Stop never fails on the half-finished one, and the
+  // visitor's own calendar day, so the agent and the date widgets agree on what "today" is.
+  const transport = useMemo(() => new DefaultChatTransport({ api: "/api/chat", prepareSendMessagesRequest: ({ messages }) => ({ body: { messages: settle(messages), context: { ...contextRef.current, today: LOCAL_DAY(new Date()) } } }) }), []);
+  const initial = useMemo(() => store.threads.find((t) => t.id === store.active)?.messages ?? [], []); // eslint-disable-line react-hooks/exhaustive-deps
+  const { messages, sendMessage, status, stop, setMessages, error, regenerate, clearError } = useChat({ transport, messages: initial });
+  const messagesRef = useRef(messages);
+  messagesRef.current = messages;
   const [draft, setDraft] = useState("");
+  const [threadsOpen, setThreadsOpen] = useState(false);
+  const [renaming, setRenaming] = useState<string | null>(null);
+  const [listening, setListening] = useState(false);
+  const [storageNote, setStorageNote] = useState<string | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
-  const applied = useRef(new Set<string>());
+  const taRef = useRef<HTMLTextAreaElement>(null);
+  const recRef = useRef<Recognizer | null>(null);
+  // Tool outputs already shown on the globe. A restored thread starts fully applied: only
+  // results produced in this session move the camera or pin deals.
+  const applied = useRef(new Set<string>(initial.flatMap((m) => m.parts.map((part) => (isToolPart(part) && part.toolCallId) || "")).filter(Boolean)));
+  const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const stickToBottom = useRef(true);
   const busy = status === "submitted" || status === "streaming";
+  const canSpeak = !!speechCtor();
 
+  // The active thread is written to the browser at most twice a second while an answer
+  // streams, and at once when a turn ends; only that thread's key is rewritten.
+  const persist = useCallback((now = false) => {
+    const run = () => {
+      saveTimer.current = null;
+      const id = activeRef.current;
+      const msgs = messagesRef.current;
+      const threads = storeRef.current.threads.map((t) => (t.id === id ? { ...t, messages: msgs, title: t.title === "New chat" ? titleOf(msgs) ?? t.title : t.title, updated: msgs.length ? Date.now() : t.updated } : t));
+      const next = { ...storeRef.current, threads };
+      storeRef.current = next;
+      setStore(next);
+      setStorageNote(saveStore(next, id) ? null : STORAGE_NOTE);
+    };
+    if (saveTimer.current) clearTimeout(saveTimer.current);
+    if (now) run();
+    else saveTimer.current = setTimeout(run, SAVE_DEBOUNCE_MS);
+  }, []);
   useEffect(() => {
-    try {
-      localStorage.setItem(STORE, JSON.stringify({ messages: messages.slice(-30) }));
-    } catch {
-      // storage off
-    }
-    listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: "smooth" });
-  }, [messages]);
+    persist(false);
+    if (stickToBottom.current) listRef.current?.scrollTo({ top: listRef.current.scrollHeight });
+  }, [messages, persist]);
+  // A turn that ended (finished, stopped, or failed) is written at once, and any tool call it
+  // left without an answer is settled so the thread can continue.
+  useEffect(() => {
+    if (busy) return;
+    const settled = settle(messagesRef.current);
+    if (settled.some((m, i) => m !== messagesRef.current[i])) setMessages(settled);
+    else persist(true);
+  }, [busy, persist, setMessages]);
+  // Leaving the page or the tab (the panel unmounts on a tab switch) writes what is there.
+  useEffect(() => {
+    const flush = () => persist(true);
+    window.addEventListener("pagehide", flush);
+    return () => {
+      window.removeEventListener("pagehide", flush);
+      flush();
+    };
+  }, [persist]);
 
-  // A question typed in the top bar lands here.
+  // A question typed in the top bar lands here. While a turn is streaming the seed waits (the
+  // panel keeps it until it is sent) and goes out the moment the turn ends: the effect runs
+  // again when busy flips, and the seed is marked consumed only once it has been sent.
   useEffect(() => {
-    if (p.seed && !busy) {
-      sendMessage({ text: p.seed });
-      p.onSeedConsumed();
-    }
+    if (!p.seed || busy) return;
+    stickToBottom.current = true;
+    sendMessage({ text: p.seed });
+    p.onSeedConsumed();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [p.seed]);
+  }, [p.seed, busy]);
 
   // Results flow to the globe: deals as pins and cards, a trip as a route.
   useEffect(() => {
     for (const m of messages) {
-      for (const part of m.parts as ToolPart[]) {
-        if (!part.type.startsWith("tool-") || part.state !== "output-available" || !part.toolCallId || applied.current.has(part.toolCallId)) continue;
+      for (const part of m.parts) {
+        if (!isToolPart(part) || part.state !== "output-available" || !part.toolCallId || applied.current.has(part.toolCallId)) continue;
+        const name = part.type.slice(5);
         const out = part.output as { raw?: unknown } | undefined;
-        if ((part.type === "tool-find_getaways" || part.type === "tool-cheapest_deals") && Array.isArray(out?.raw)) {
+        if (RAW_DEAL_TOOLS.has(name) && Array.isArray(out?.raw) && out!.raw.length) {
           applied.current.add(part.toolCallId);
           p.onDeals(out!.raw as Deal[]);
         }
-        if (part.type === "tool-wild_trip" && out?.raw && typeof out.raw === "object") {
+        if (name === "wild_trip" && out?.raw && typeof out.raw === "object") {
           applied.current.add(part.toolCallId);
           p.onTrip(out.raw as WildTrip);
         }
@@ -130,116 +728,321 @@ export default function ChatPanel(p: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [messages]);
 
-  const send = (text: string) => {
-    const t = text.trim();
-    if (!t || busy) return;
-    sendMessage({ text: t });
-    setDraft("");
+  const send = useCallback(
+    (text: string) => {
+      const t = text.trim();
+      if (!t || busy) return;
+      stickToBottom.current = true;
+      sendMessage({ text: t });
+      setDraft("");
+      if (taRef.current) taRef.current.style.height = "auto";
+    },
+    [busy, sendMessage],
+  );
+
+  /** Replaces the store in memory and in the browser; `threadId` names the thread whose messages changed. */
+  const commit = (st: Store, threadId?: string) => {
+    storeRef.current = st;
+    setStore(st);
+    setStorageNote(saveStore(st, threadId) ? null : STORAGE_NOTE);
+  };
+  const switchThread = (id: string) => {
+    if (busy || id === activeRef.current) return setThreadsOpen(false);
+    persist(true);
+    const t = storeRef.current.threads.find((x) => x.id === id);
+    if (!t) return;
+    activeRef.current = id;
+    for (const m of t.messages) for (const part of m.parts) if (isToolPart(part) && part.toolCallId) applied.current.add(part.toolCallId);
+    commit({ ...storeRef.current, active: id });
+    setMessages(t.messages);
+    setThreadsOpen(false);
+  };
+  const newThread = () => {
+    if (busy) return;
+    persist(true);
+    const t = blankThread();
+    activeRef.current = t.id;
+    const dropped = storeRef.current.threads.filter((x) => !x.messages.length);
+    for (const d of dropped) dropThreadKey(d.id);
+    commit({ active: t.id, threads: [t, ...storeRef.current.threads.filter((x) => x.messages.length)].slice(0, MAX_THREADS) }, t.id);
+    setMessages([]);
+    setThreadsOpen(false);
+  };
+  const deleteThread = (id: string) => {
+    if (busy) return;
+    dropThreadKey(id);
+    const rest = storeRef.current.threads.filter((t) => t.id !== id);
+    if (id === activeRef.current) {
+      const next = rest[0] ?? blankThread();
+      activeRef.current = next.id;
+      setMessages(next.messages);
+      commit({ active: next.id, threads: rest.length ? rest : [next] }, rest.length ? undefined : next.id);
+    } else commit({ ...storeRef.current, threads: rest });
+  };
+  const renameThread = (id: string, title: string) => {
+    commit({ ...storeRef.current, threads: storeRef.current.threads.map((t) => (t.id === id ? { ...t, title: title.trim() || t.title } : t)) });
+    setRenaming(null);
+  };
+
+  const toggleVoice = () => {
+    if (listening) {
+      recRef.current?.stop();
+      return;
+    }
+    const Ctor = speechCtor();
+    if (!Ctor) return;
+    const rec = new Ctor();
+    rec.lang = navigator.language || "en-GB";
+    rec.interimResults = true;
+    rec.continuous = false;
+    let finalText = "";
+    rec.onresult = (e) => {
+      let interim = "";
+      for (let i = 0; i < e.results.length; i++) {
+        const r = e.results[i];
+        if (r.isFinal) finalText += r[0].transcript;
+        else interim += r[0].transcript;
+      }
+      setDraft((finalText + interim).trim());
+    };
+    rec.onend = () => {
+      setListening(false);
+      recRef.current = null;
+      if (finalText.trim()) send(finalText);
+    };
+    rec.onerror = () => {
+      setListening(false);
+      recRef.current = null;
+    };
+    recRef.current = rec;
+    setListening(true);
+    try {
+      rec.start();
+    } catch {
+      setListening(false);
+    }
+  };
+
+  const active = store.threads.find((t) => t.id === store.active);
+  const last = messages.at(-1);
+  const lastUserIndex = messages.reduce((acc, m, i) => (m.role === "user" ? i : acc), -1);
+  const lastTool = useMemo(() => {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (messages[i].role !== "assistant") continue;
+      const tools = (messages[i].parts as ToolPart[]).filter((x) => x.type.startsWith("tool-") && x.type !== "tool-ask");
+      if (tools.length) return tools.at(-1)!.type.slice(5);
+    }
+    return null;
+  }, [messages]);
+  const openWidget = !busy && last?.role === "assistant" && (last.parts as ToolPart[]).some((x) => x.type === "tool-ask" && x.state === "output-available");
+  const followups = FOLLOWUPS[lastTool ?? ""] ?? FOLLOWUPS.default;
+
+  const renderTool = (tp: ToolPart, i: number, answered: boolean, skipCalendar = false) => {
+    const name = tp.type.slice(5);
+    const out = tp.output as Record<string, unknown> | undefined;
+    const running = tp.state === "input-streaming" || tp.state === "input-available";
+    const failed = tp.state === "output-error";
+    const soft = tp.state === "output-available" && out && typeof out === "object" && typeof out.error === "string";
+    if (name === "ask") {
+      if (tp.state !== "output-available" || !out) return null;
+      return <Widget key={tp.toolCallId ?? i} spec={out as unknown as WidgetSpec} answered={answered} disabled={busy} onAnswer={send} />;
+    }
+    const count = out && typeof out === "object" ? ((out.found as number | undefined) ?? (Array.isArray(out.bases) ? out.bases.length : undefined) ?? (Array.isArray(out.options) ? out.options.length : undefined) ?? (out.count as number | undefined)) : undefined;
+    const searched = out && typeof out === "object" ? (out.searched as number | undefined) : undefined;
+    return (
+      <div key={tp.toolCallId ?? i} className={s.toolwrap}>
+        <div className={`${s.toolchip} ${failed ? s.fail : soft ? s.warn : running ? "" : s.done}`}>
+          {running ? <i className={s.spinner} /> : failed || soft ? "!" : "✓"}
+          <span>
+            {running ? toolProgress(name, tp.input) : TOOL_LABEL[name] ?? name}
+            {!running && !failed && !soft && count != null ? `: ${count} found` : ""}
+            {!running && !failed && !soft && searched != null && count == null ? `: ${searched} searches` : ""}
+            {failed ? `: ${tp.errorText ?? "failed"}` : soft ? `: ${String(out!.error)}` : ""}
+          </span>
+        </div>
+        {tp.state === "output-available" && out && !soft && (
+          <>
+            {name === "scan_cheapest" && !skipCalendar && <Calendar out={out as unknown as ScanOut} />}
+            {name === "long_stay" && Array.isArray(out.bases) && <Bases bases={out.bases as BaseOut[]} />}
+            {name === "group_trip" && Array.isArray(out.options) && <GroupOptions out={out as unknown as GroupOut} />}
+            {name === "reprice_route" && Array.isArray(out.itineraries) && <Itineraries items={out.itineraries as Itin[]} />}
+            {name === "best_months" && Array.isArray(out.months) && <MonthStrip out={out as unknown as MonthsOut} />}
+            {name === "price_insight" && (
+              <span className={`${s.verdict} ${s[(out as unknown as InsightOut).verdict] ?? ""}`}>
+                {(out as unknown as InsightOut).verdict === "unknown" ? "No fare history yet for this route" : `Fare memory: ${(out as unknown as InsightOut).verdict}${(out as unknown as InsightOut).typical != null ? `, usually ${euro((out as unknown as InsightOut).typical)}` : ""}${(out as unknown as InsightOut).low != null ? `, lowest seen ${euro((out as unknown as InsightOut).low)}` : ""}`}
+              </span>
+            )}
+            {(name === "find_getaways" || name === "cheapest_deals" || name === "events_worth_travelling_for") && cardDeals(out).length > 0 && <DealCards deals={cardDeals(out)} onOpen={p.onOpenDeal} />}
+          </>
+        )}
+      </div>
+    );
   };
 
   return (
-    <div className="chat">
-      <div ref={listRef} className="msgs">
+    <div className={s.chat}>
+      <div className={s.top}>
+        <button className={s.threadBtn} onClick={() => setThreadsOpen((v) => !v)} title="Your conversations">
+          <span>{active?.title ?? "New chat"}</span>
+          <small>{store.threads.length > 1 ? `${store.threads.length} chats` : ""} ▾</small>
+        </button>
+        <button className={s.iconBtn} onClick={newThread} disabled={busy} title="New conversation (the old ones are kept)">
+          +
+        </button>
+        {threadsOpen && (
+          <div className={s.threadList}>
+            {store.threads.map((t) => (
+              <div key={t.id} className={`${s.threadRow} ${t.id === store.active ? s.active : ""}`} onClick={() => renaming !== t.id && switchThread(t.id)}>
+                {renaming === t.id ? (
+                  <input
+                    className={s.rename}
+                    autoFocus
+                    defaultValue={t.title}
+                    onClick={(e) => e.stopPropagation()}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") renameThread(t.id, (e.target as HTMLInputElement).value);
+                      if (e.key === "Escape") setRenaming(null);
+                    }}
+                    onBlur={(e) => renameThread(t.id, e.target.value)}
+                  />
+                ) : (
+                  <span>
+                    {t.title}
+                    <small>{t.updated ? ago(t.updated) : ""}</small>
+                  </span>
+                )}
+                <button
+                  className={s.tiny}
+                  title="Rename"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setRenaming(t.id);
+                  }}
+                >
+                  rename
+                </button>
+                <button
+                  className={s.tiny}
+                  title="Delete"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    deleteThread(t.id);
+                  }}
+                >
+                  delete
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div
+        ref={listRef}
+        className={s.msgs}
+        onScroll={(e) => {
+          const el = e.currentTarget;
+          stickToBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
+        }}
+      >
         {messages.length === 0 && (
-          <div className="chatintro">
-            <p>Tell me what you are after and I will search the real prices, the guides and the web, then keep refining with you. I know where you are and your airports.</p>
-            <div className="chips">
-              {STARTERS.map((s) => (
-                <button key={s} className="chip ghost" onClick={() => send(s)}>
-                  {s}
+          <div className={s.intro}>
+            <p>Say where, when or how long, in any order. I search the real fares first, show the cheapest months and the best three options, and ask one thing at most. I know where you are and your airports.</p>
+            <div className={s.chips}>
+              {STARTERS.map((st) => (
+                <button key={st} className={s.chip} onClick={() => send(st)}>
+                  {st}
                 </button>
               ))}
             </div>
           </div>
         )}
-        {messages.map((m) => (
-          <div key={m.id} className={`bubble ${m.role === "user" ? "user" : "ai"}`}>
-            {m.parts.map((part, i) => {
-              if (part.type === "text") return <Text key={i} text={part.text} />;
-              const tp = part as ToolPart;
-              if (!tp.type.startsWith("tool-")) return null;
-              const name = tp.type.slice(5);
-              const label = TOOL_LABEL[name] ?? name;
-              const out = tp.output as { raw?: Deal[]; error?: string; deals?: unknown[]; found?: number } | undefined;
-              return (
-                <div key={i} className="toolwrap">
-                  <div className={`toolchip ${tp.state === "output-available" ? "done" : tp.state === "output-error" ? "err" : "busy"}`}>
-                    {tp.state === "output-available" ? "✓" : tp.state === "output-error" ? "!" : <span className="dot busy" />} {label}
-                    {tp.state === "output-available" && out?.found != null ? `: ${out.found} found` : ""}
-                    {tp.state === "output-error" ? `: ${tp.errorText ?? "failed"}` : ""}
-                  </div>
-                  {tp.state === "output-available" && Array.isArray(out?.raw) && out!.raw.length > 0 && (
-                    <div className="chatcards">
-                      {out!.raw.slice(0, 6).map((d) => (
-                        <button key={`${d.gw}|${d.dst}|${d.out}`} className="chatcard" onClick={() => p.onOpenDeal(`${d.gw}|${d.dst}|${d.out}`)}>
-                          <span className="price">€{d.price}</span>
-                          <span className="chatcardbody">
-                            <b>
-                              {d.city} <span className="sub">{countryName(d.country)}</span>
-                            </b>
-                            <span className="sub">
-                              {dateRange(d.out, d.back)} · {d.nights}n · {d.gw}
-                              {d.backTo ? ` → ${d.backTo}` : ""} · {d.stops ? `${d.stops} stop` : "direct"} · {formatDuration(d.outMin)}
-                            </span>
-                          </span>
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              );
-            })}
+        {messages.map((m, mi) => {
+          const dupes = m.role === "assistant" ? duplicateCalendars(m) : null;
+          return (
+            <div key={m.id} className={`${s.bubble} ${m.role === "user" ? s.user : s.ai}`}>
+              {m.parts.map((part, i) => {
+                if (part.type === "text") return m.role === "user" ? <span key={i}>{part.text}</span> : <Text key={i} text={part.text} />;
+                const tp = part as ToolPart;
+                if (!tp.type.startsWith("tool-")) return null;
+                return renderTool(tp, i, mi < lastUserIndex, dupes?.has(i) ?? false);
+              })}
+            </div>
+          );
+        })}
+        {busy && last?.role === "user" && (
+          <div className={`${s.bubble} ${s.ai}`}>
+            <span className={s.thinking}>
+              <i />
+              <i />
+              <i />
+            </span>
           </div>
-        ))}
-        {!busy && messages.length > 0 && messages.at(-1)?.role === "assistant" && (
-          <div className="chips followups">
-            {["Direct flights only", "Try my other airports too", "Two-city version", "What do I eat there?", "Hotels for those dates", "Make it a week longer"].map((f) => (
-              <button key={f} className="chip ghost" onClick={() => send(f)}>
+        )}
+        {!busy && !error && messages.length > 0 && last?.role === "assistant" && !openWidget && (
+          <div className={`${s.chips} ${s.followups}`}>
+            {followups.map((f) => (
+              <button key={f} className={s.chip} onClick={() => send(f)}>
                 {f}
               </button>
             ))}
           </div>
         )}
-        {busy && messages.at(-1)?.role === "user" && (
-          <div className="bubble ai">
-            <p className="muted">Thinking…</p>
+        {error && (
+          <div className={`${s.bubble} ${s.ai} ${s.err}`}>
+            <span>The chat failed: {error.message.slice(0, 160)}.</span>
+            <button
+              className={s.chip}
+              onClick={() => {
+                clearError();
+                regenerate();
+              }}
+            >
+              Retry
+            </button>
           </div>
         )}
-        {error && <div className="bubble ai err">The chat failed: {error.message}. Try again.</div>}
       </div>
+
+      {storageNote && <p className={s.note}>{storageNote}</p>}
+      {busy && p.seed && <p className={s.note}>Next, when this answer is done: {p.seed}</p>}
       <form
-        className="chatinput"
+        className={s.inputBar}
         onSubmit={(e) => {
           e.preventDefault();
           send(draft);
         }}
       >
-        <input className="search" placeholder={busy ? "Searching…" : "Ask or refine: 'make it direct', 'from Cluj too', 'what do I eat there'"} value={draft} onChange={(e) => setDraft(e.target.value)} disabled={busy && false} />
+        <textarea
+          ref={taRef}
+          className={s.textarea}
+          rows={1}
+          placeholder={listening ? "Listening…" : busy ? "Searching… you can type the next thing" : "Where, when, how long, in any order"}
+          value={draft}
+          onChange={(e) => {
+            setDraft(e.target.value);
+            e.target.style.height = "auto";
+            e.target.style.height = Math.min(140, e.target.scrollHeight) + "px";
+          }}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && !e.shiftKey) {
+              e.preventDefault();
+              send(draft);
+            }
+          }}
+        />
+        {canSpeak && (
+          <button type="button" className={`${s.iconBtn} ${listening ? s.listening : ""}`} onClick={toggleVoice} title={listening ? "Stop listening" : "Speak"} aria-pressed={listening}>
+            {listening ? "■" : "🎙"}
+          </button>
+        )}
         {busy ? (
-          <button type="button" className="chip" onClick={() => stop()}>
+          <button type="button" className={`${s.send} ${s.stop}`} onClick={() => stop()}>
             Stop
           </button>
         ) : (
-          <button type="submit" className="chip on" disabled={!draft.trim()}>
+          <button type="submit" className={s.send} disabled={!draft.trim()}>
             Send
-          </button>
-        )}
-        {messages.length > 0 && !busy && (
-          <button
-            type="button"
-            className="chip ghost"
-            title="Start a new conversation"
-            onClick={() => {
-              setMessages([]);
-              applied.current.clear();
-              try {
-                localStorage.removeItem(STORE);
-              } catch {
-                // storage off
-              }
-            }}
-          >
-            New
           </button>
         )}
       </form>

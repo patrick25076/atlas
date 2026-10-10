@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server";
 import { isNoise, sourcesNear, type EventItem as OpenEvent } from "@/lib/events/sources";
+import { TtlLru } from "@/lib/memo";
+import { bad, intIn, latLon } from "@/lib/params";
 
 // GET /api/events?lat=48.85&lon=2.35&days=30 → what's on near a point: the city's own open
 // event feed where one exists (lib/events/sources.ts: markets, exhibitions, festivals, film,
@@ -21,8 +23,10 @@ export type EventItem = {
 };
 export type EventsResponse = { status: "ok" | "none" | "no-key" | "error"; note?: string; events: EventItem[]; sources: { id: string; name: string; licence: string }[] };
 
-const memo = new Map<string, { at: number; body: EventsResponse }>();
-const TTL = 3 * 3_600_000;
+// Up to four feed windows plus Ticketmaster per point; memoised three hours, bounded.
+export const maxDuration = 30;
+const memo = new TtlLru<EventsResponse>(500, 3 * 3_600_000);
+const CACHE = { "Cache-Control": "public, max-age=1800, stale-while-revalidate=10800" };
 
 async function ticketmaster(lat: number, lon: number, from: Date, to: Date, key: string): Promise<EventItem[]> {
   const iso = (d: Date) => d.toISOString().replace(/\.\d{3}Z$/, "Z");
@@ -63,13 +67,13 @@ async function ticketmaster(lat: number, lon: number, from: Date, to: Date, key:
 
 export async function GET(request: Request) {
   const p = new URL(request.url).searchParams;
-  const lat = Number(p.get("lat"));
-  const lon = Number(p.get("lon"));
-  const days = Math.min(90, Math.max(1, Number(p.get("days")) || 30));
-  if (!Number.isFinite(lat) || !Number.isFinite(lon)) return NextResponse.json({ error: "lat and lon required" }, { status: 400 });
+  const at = latLon(p.get("lat"), p.get("lon"));
+  if (!at) return bad("lat and lon must be coordinates");
+  const { lat, lon } = at;
+  const days = intIn(p.get("days"), 1, 90, 30);
   const key = `${lat.toFixed(2)},${lon.toFixed(2)},${days}`;
   const hit = memo.get(key);
-  if (hit && Date.now() - hit.at < TTL) return NextResponse.json(hit.body, { headers: { "Cache-Control": "public, max-age=1800" } });
+  if (hit) return NextResponse.json(hit, { headers: { ...CACHE, "X-Events": "memo" } });
 
   const start = new Date();
   const end = new Date(start.getTime() + days * 86_400_000);
@@ -116,6 +120,6 @@ export async function GET(request: Request) {
     events: picked,
     sources: [...near.map((s) => ({ id: s.id, name: s.attribution, licence: s.licence })), ...(tm ? [{ id: "ticketmaster", name: "Ticketmaster Discovery", licence: "Ticketmaster terms" }] : [])],
   };
-  memo.set(key, { at: Date.now(), body });
-  return NextResponse.json(body, { headers: { "Cache-Control": "public, max-age=1800, stale-while-revalidate=10800" } });
+  memo.set(key, body);
+  return NextResponse.json(body, { headers: { ...CACHE, "X-Events": "live" } });
 }

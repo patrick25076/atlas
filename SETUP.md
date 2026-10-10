@@ -38,12 +38,51 @@ https://atlas-kappa-wheat.vercel.app.
 
 ## 3. GitHub repository and Vercel project (done 2026-10-09)
 
-- Repo: https://github.com/patrick25076/atlas (private).
+- Repo: https://github.com/patrick25076/atlas (**public** since 2026-10-10, so GitHub
+  Actions minutes are unlimited and the boards job runs every night again). Secrets held
+  by the repo: `BLOB_READ_WRITE_TOKEN`, `LITEAPI_KEY`, `DATABASE_URL`.
 - Vercel project `atlas` in scope `patrick25076s-projects`, connected to the repo: every
   push to `main` deploys production, branches get previews.
 - Production: https://atlas-kappa-wheat.vercel.app
 - `vercel link` wrote a `VERCEL_OIDC_TOKEN` into `.env.local`; leave it, add your own keys
   below it.
+
+## 4. Postgres (Supabase, free tier): the shared fare memory, hotel price history, saved trips
+
+Atlas remembers every fare any search ever saw (with its timestamp) so the next person gets
+history for free, keeps the nightly hotel price snapshots (the hotel deals compare against
+them), keeps saved trips, and logs searches. It needs one connection string, `DATABASE_URL`.
+Without it every database function is a quiet no-op; the moment the variable appears, the
+tables (`fares`, `trips`, `searches`, `hotel_prices`) are created on first use.
+
+**The project exists** (2026-10-10): Supabase project ref `<project-ref>`, region
+`eu-west-1` (Ireland). Three things to know about connecting to it:
+
+1. **Use the pooler, not the direct host.** `db.<project-ref>.supabase.co` is IPv6
+   only and cannot be reached from Vercel, GitHub Actions or this laptop. The pooler host is
+   `aws-1-eu-west-1.pooler.supabase.com` and the user is `postgres.<project-ref>`
+   (the project ref after a dot; a plain `postgres` user is rejected by the pooler).
+2. **Transaction mode, port 6543**, is the right one for Vercel functions and the nightly
+   jobs (short-lived connections, many instances). The exact string:
+   ```
+   postgresql://postgres.<project-ref>:<PASSWORD>@aws-1-eu-west-1.pooler.supabase.com:6543/postgres
+   ```
+   Transaction mode forbids prepared statements; `lib/db.ts` sets `prepare: false` and
+   `ssl: require` itself. Session mode (port 5432, same host and user) is only for a long
+   interactive session such as psql.
+3. **The password that was pasted in chat must be reset** before this is considered live:
+   Supabase → Project Settings → Database → Reset database password. Then put the new
+   string in three places: `.env.local`, Vercel → Settings → Environment Variables →
+   Production (`DATABASE_URL`), and the GitHub secret
+   (`gh secret set DATABASE_URL -R patrick25076/atlas`, paste the value at the prompt).
+
+Status on 2026-10-10 afternoon: `.env.local` carries a pooler string on port 6543 that
+works (the hotel snapshot test wrote three rows into `hotel_prices`), the GitHub secret
+`DATABASE_URL` was set at 11:54 UTC, Vercel is **not verified** from here: check it in the
+dashboard, then open `/api/hotel-deals` on the live site after the next nightly run.
+
+Neon works the same way if you ever move: https://neon.tech → New project, region
+Frankfurt → the pooled connection string as `DATABASE_URL`.
 
 ## 5. LiteAPI (hotels: live prices, booking, you set the margin)
 
@@ -56,6 +95,18 @@ https://atlas-kappa-wheat.vercel.app.
    (b) matching their hotel ids to Overture place ids are allowed under their ToS. Their
    terms forbid "creating databases" and "mapping data to third-party sources"; a yes in
    writing is the only safe basis. Paste the answer into `docs/liteapi-permission.md`.
+4. **Done 2026-10-10:** production key in `.env.local`, on Vercel and as the GitHub secret
+   `LITEAPI_KEY`; `LITEAPI_ENV=production`. The nightly `hotels` job
+   (`scripts/ingest/hotels.ts`) keeps one price per city per night, the cheapest decent
+   hotel for a standard weekend, 80 cities, 160 calls a night: a price sample, not a hotel
+   database. LiteAPI is the only source of hotel prices here; nothing is scraped from
+   Booking, Google, Yelp or Tripadvisor. Point 3 still applies: ask them in writing.
+5. **Test runs never touch the real snapshot.** `HOTELS_LIMIT=3` or `HOTELS_CITIES=BKK,LIS`
+   or a sandbox key writes `hotels/test-<date>.json` only, no `latest.json`, no Postgres;
+   `HOTELS_WRITE=1` overrides that when a short run is meant for real. The deals ignore any
+   day with fewer than 40 cities and any snapshot marked sandbox, so the three-city test of
+   2026-10-10 is out of every median; delete its rows (`delete from hotel_prices where
+   seen_at::date = '2026-10-10'`) and `hotels/snapshot-2026-10-10.json` when convenient.
 
 ## 6. Viator Partner API, Basic access (tours and activities, 8%)
 
@@ -90,13 +141,14 @@ https://atlas-kappa-wheat.vercel.app.
 2. Save the zip as `data/raw/gtfs/at-oebb.zip` (the folder is gitignored).
 3. Tell me; I'll add a local-file entry to `scripts/ingest/feeds.ts` and rerun `pnpm ingest:gtfs`.
 
-## 11. Swiss timetables (opentransportdata.swiss, free key)
-
-Switzerland's full GTFS (trains, buses, boats) is open but needs a key.
-
-1. https://opentransportdata.swiss → register → API keys → "GTFS static" (or the open
-   data download page). Copy the key into `.env.local` as `OTD_SWISS_KEY`.
-2. Tell me; I add the feed to `scripts/ingest/feeds.ts` with the key and rebuild the graph.
+**Also under this heading, the Flix US feed.** The ground graph includes FlixBus and
+Greyhound's United States network from Flix's own developer feed
+(`https://gtfs.gis.flix.tech/gtfs_generic_us.zip`, entry `flix-us` in
+`scripts/ingest/feeds.ts`). The file is published for developers with no licence text next
+to it (the European twin is ODbL on transport.data.gouv.fr). Email open-data@flixbus.com and
+ask whether using the US feed for estimated coach connections on a travel map, with
+attribution, is fine; paste the answer into `docs/data-inventory.md`, where the feed is
+marked "permission pending" until then.
 
 ## 10. Ticketmaster Discovery API (events, free key)
 
@@ -107,21 +159,13 @@ Concerts, sport and theatre in about 30 countries, 5,000 calls a day for free.
 2. Tell me; events for the selected place (next 30 days) go on the card, with the
    affiliate link once you join their programme on Impact.
 
-## 4. A Postgres database (Supabase or Neon, free tier): the shared fare memory, saved trips, fare watches
+## 11. Swiss timetables (opentransportdata.swiss, free key)
 
-Atlas remembers every fare any search ever saw (with its timestamp) so the next person gets
-history for free, keeps saved trips, and logs searches. It needs one connection string.
-Either works:
-- **Supabase**: https://supabase.com → New project, region **Frankfurt** → Project Settings → Database →
-  Connection string (URI, "Transaction" pooler on port 6543). Paste it as `DATABASE_URL`.
-- **Neon**: as below.
-Tables are created automatically on first use.
+Switzerland's full GTFS (trains, buses, boats) is open but needs a key.
 
-
-Needed only once the agent, accounts or watches land. Not yet.
-
-1. https://neon.tech → New project, region **Frankfurt (eu-central-1)**.
-2. Copy the pooled connection string into `.env.local` as `DATABASE_URL`, and into Vercel.
+1. https://opentransportdata.swiss → register → API keys → "GTFS static" (or the open
+   data download page). Copy the key into `.env.local` as `OTD_SWISS_KEY`.
+2. Tell me; I add the feed to `scripts/ingest/feeds.ts` with the key and rebuild the graph.
 
 ## 12. Vercel Blob store for the price boards (done, nothing to do)
 
@@ -155,3 +199,15 @@ live search over many reviews, not a fixed database. Brave Search API
 (https://tavily.com/, free developer tier) give the planner a search tool. Name:
 `BRAVE_SEARCH_KEY` or `TAVILY_API_KEY`. Until one exists, the planner labels its restaurant
 picks "verify" and leans on the Wikivoyage Eat listings.
+
+## 15. A shared token for forced rebuilds (`ATLAS_FRESH_TOKEN`), optional
+
+`/api/board`, `/api/wild` and `/api/plan` used to rebuild on `fresh=1`, which let anyone
+reload a public URL into 35 to 300 Kiwi searches a time. Now `fresh=<token>` only works
+when it matches `ATLAS_FRESH_TOKEN`; without the variable the parameter is ignored and the
+stored answer is served. Only needed if you want to force a rebuild from the browser.
+
+1. Make a long random string (for example `openssl rand -hex 24`).
+2. Vercel → Settings → Environment Variables → Production: `ATLAS_FRESH_TOKEN` = that string.
+   Put the same line in `.env.local` for local use. Never paste it in chat.
+3. Force a rebuild with `.../api/board?from=OTP&fresh=<the string>`.

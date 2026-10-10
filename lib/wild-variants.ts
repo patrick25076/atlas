@@ -22,7 +22,10 @@ export async function buildWildVariants(p: Omit<WildParams, "tradeoff" | "noHubs
   const gw = mainGateway(p.gateways);
   const results = await Promise.all(
     chosen.map(async (v) => {
-      const custom = customKey(p.countries, p.prefer, p.maxStops, p.nightsPerStop, v.tradeoff, v.noHubs);
+      // The departure window is part of the key: a dated build (from, to) must never read or
+      // overwrite the undated variant files, or December trips would answer other dates.
+      // The been list is part of the key too (a token), so an excluded build never reads a plain one.
+      const custom = customKey(p.countries, p.prefer, p.maxStops, p.nightsPerStop, v.tradeoff, v.noHubs, p.from, p.to, p.exclude);
       const path = wildPath(gw, p.region, p.month, p.nights, p.style, p.budget, custom);
       const stored = await readJson<WildTrip>(path);
       if (stored && stored.ageHours < 24) return { v, trip: stored.body };

@@ -1,4 +1,179 @@
-# Update, Friday 10 October, daytime
+# Update, Saturday 10 October, last: "Been", and famous namesakes
+
+_Two more things landed after the fixer round, then everything was committed and deployed._
+
+1. **Been.** A pill in the top bar where you mark the countries you have visited. Off by
+   default. With "Only new countries" on, no search (deals, custom search, wild loops, long
+   stays, group, purpose events, short loops, the price calendar, the chat) proposes a
+   destination or an overnight stop in those countries; a layover through them is always
+   fine. With "Revisits are fine" the list is a record: cards get a "been" tag and the chat
+   says when a place is new to you. Stored in your browser only. Details in
+   `docs/plans/been-feature.md`.
+2. **Fame data fixed.** Small towns were borrowing a famous namesake's Wikipedia views
+   (Glasgow, Montana had Glasgow's 858,000; Birmingham, Alabama had the English one's).
+   The ingest now checks every article against the city's coordinates and falls back to
+   "Name, State" titles, so long stays and wild loops rank places by their own fame.
+   2,758 cities resolved (was 2,549).
+
+---
+
+# Update, Saturday 10 October, late: the fixer round after the second review
+
+_A reviewer read round two and found eight things; the first fixer attempt was killed with
+the rest (the 5 GB of node and python you ended). Nothing of it had landed, so this round
+did all eight. What changed, in plain words._
+
+1. **A dead database costs one call, not every call.** With an unreachable `DATABASE_URL`
+   (the direct Supabase host, or a pooler behind a stale password) every fare-memory call
+   used to wait 21 seconds. Now the first waits 11 seconds, then the database is remembered
+   as down for a minute and every call answers at once; after the minute it tries again.
+   Measured: call 1 11.1 s, calls 2 and 3 0.0 s.
+2. **Hotel history reads Postgres and Blob both.** A night whose Postgres insert failed (the
+   GitHub secret still holding the old password after the reset) is picked up from its Blob
+   snapshot; the Blob reads are skipped only when Postgres already holds a real night for
+   this weekend.
+3. **A short nightly run is named for what it is.** If LiteAPI prices fewer than 40 of the
+   80 cities on a full run, the strip says "tonight's snapshot priced only N of 80 cities",
+   not "a test run".
+4. **Throttled searches no longer burn the budget.** Searches queued behind the gate when a
+   403 opens the breaker are counted as held back, not as sent and failed.
+5. **A Kiwi request that never answers times out after 30 seconds** and is retried like a
+   503, so a hung connection cannot hold a search slot for the life of the function.
+6. **`maxHours=-5` or `0.4` in the custom search** means no limit and "up to an hour", not
+   "one hour" clamped and memoised empty.
+7. **Group windows with impossible dates** (31 February) are refused instead of silently
+   searched as 3 March.
+8. The weekday in the headers below: 10 October is a Saturday.
+
+---
+
+# Update, Saturday 10 October, night: round two, finished after the restart
+
+_The first attempt at this round filled the laptop's memory (a GTFS ingest and the dev
+server together) and you ended the processes; the tree held half-done edits. Every stream
+read its files again and finished. What changed for you, in plain words._
+
+1. **Hotel deals compare like with like.** A city's price is now only measured against
+   earlier nights that priced the **same weekend**. The nightly job prices the Friday at
+   least four weeks out, and that Friday moves to the next one every Saturday, so each
+   week the Saturday and Sunday snapshots say "warming up" and the deals show Monday to
+   Friday. First deals: 13 October. The Deals tab has the strip now and the chat has the
+   `hotel_deals` tool, so the URL has readers.
+2. **Kiwi is left alone when it says stop.** The first 403 or 429 opens a five-minute
+   breaker: nothing leaves the server, stored answers still work, the chat says "live
+   prices are rate-limited right now". Hammering a throttled address was lengthening the
+   block; this laptop's address was blocked that way this afternoon.
+3. **Wild trips with a fixed departure window get the ranked versions too**, and a window
+   wider than ten days is clipped instead of refused; "Plan the days" finds every
+   customised trip because the Globe now sends the full key.
+4. **"No limit" on flight hours works** in the custom search (`maxHours=0` used to mean
+   one hour).
+5. **A usage log.** Every finder, wild, scan, long stay, group and live board search writes
+   one row (what kind, which parameters, how many results, how long) to Postgres, without
+   slowing anything. No names, no coordinates. Nothing reads it yet; it is there for when
+   you want numbers.
+6. **Dates come out as dates.** The fare memory returned JS Date objects, which printed as
+   "Tue Dec 15 2026 ..." in the chat; every date is now `2026-12-15`.
+7. **`SETUP.md` is in order 1 to 15** and the Supabase project ref is a placeholder: the
+   repository is public.
+8. **The other streams**: the chat gained the price calendar, long stay, group, best months,
+   price insight and stopover programmes as tools with a per-question search budget; the
+   ground graph queued Amtrak, Malaysia and Thailand (in the graph after Monday's weekly
+   run); the fame ingest stopped handing Glasgow, Montana the fame of Glasgow.
+
+**What I need from you:** the Supabase password reset (still open), the LiteAPI email
+(still open), one new email to open-data@flixbus.com about the US coach feed (SETUP §9,
+the wording is there), and one deletion: `C:\dev\atlas\.tmp` holds 1.8 GB of DuckDB spill
+files from the killed run; delete the folder.
+
+---
+
+# Update, Saturday 10 October, evening: the review fixes
+
+_Two adversarial reviewers went over the afternoon's work; the infrastructure fixer applied
+every high and medium finding in its files. What changed for you, in plain words._
+
+1. **Nobody can run up Kiwi's bill from a URL any more.** Reloading a wild trip or a board
+   with `fresh=1` did a full live rebuild every time (up to 300 searches a click with four
+   ranked versions of a 90-night trip). Now `fresh` only works with a shared token you set
+   on Vercel (`ATLAS_FRESH_TOKEN`, SETUP §15), ranked versions are capped at three (two past
+   28 nights), and each server instance refuses live searches after 1,500 a day with a plain
+   "live prices are rate-limited today" instead of taking the address into Kiwi's throttle
+   for everyone.
+2. **"Plan my days" works on every trip.** It answered "build the trip first" for exactly
+   the trips you customise (a departure window, price first, three versions) because the
+   plan looked under the plain key. The route now takes the same parameters as the trip; the
+   Globe still has to send them (handed to the visual stream).
+3. **A throttled minute no longer becomes "no deals" for half an hour.** Finder, events and
+   combos answer with a note and search again next time.
+4. **The nightly boards survive the evening.** A stored board was treated as stale from
+   mid-afternoon, so the first evening visitor rebuilt it live, thinner, and overwrote the
+   night's version. Boards are fresh for 26 hours now and a thinner live board never replaces
+   a richer stored one.
+5. **A Blob hiccup no longer triggers a wave of rebuilds**: the last good copy is served.
+6. **The hotel snapshot cannot be polluted by a test**: a limited or sandbox run writes a
+   test file only, and the history ignores any day with fewer than 40 cities, so my three-city
+   test of 10 October is out of every median without you deleting anything.
+7. **Honest status on hotel deals**: `/api/hotel-deals` has no consumer yet (no chat tool, no
+   strip in the Deals tab); it is listed under "next", not "shipped".
+8. **The chat rewrite** (brain stream): the chat acts first, asks one widget question at
+   most, shows a price calendar, keeps threads and takes voice; `lib/chat-widgets.ts` is the
+   shared widget contract.
+
+**What I need from you:** the two items from the afternoon still stand (reset the Supabase
+password and confirm `DATABASE_URL` on Vercel; email LiteAPI about the nightly sample), plus
+one optional new one: set `ATLAS_FRESH_TOKEN` on Vercel if you want to force rebuilds from
+the browser (SETUP §15).
+
+---
+
+# Update, Saturday 10 October, afternoon: four streams at once
+
+_Four agents built in parallel this afternoon, each on its own files. The short version._
+
+**Open it:** https://atlas-kappa-wheat.vercel.app
+
+1. **Cheapest whenever.** Ask "when is San Francisco cheapest from my airports" and the
+   price calendar answers per month (one Kiwi search a month, the fare memory first, open-jaw
+   when you let the flight home leave from anywhere in the country). `/api/scan`.
+2. **Long stays.** "Two months in Southeast Asia from January, mid budget": the eight best
+   bases by worth for money, the flight in and out, what a month costs (rent, food, total),
+   side trips by train or bus, the climate for those months, the visa. `/api/longstay`.
+3. **Group trips.** Three friends in three cities, each with their free dates: the windows
+   everyone can make, then the cheapest city for all of you with a price per person.
+   `/api/group`.
+4. **Best months and "is this a good price".** Climate normals for 1,496 cities so far (NASA
+   POWER; the monthly job fills the rest) give the three best months for any place; the fare
+   memory says whether a fare is great, good, typical or high for that route and month.
+5. **The chat does it all**, with widgets inside the conversation: pick dates, a month, nights,
+   a region or a place on the globe, add the people of a group. The chat asks the globe, the
+   globe answers.
+6. **One Trips tab** for every kind of trip, drawn the same way: the loop as a strip of
+   photos, the stops as cards, every leg a row with its booking link. Wild trips now run up
+   to 90 nights (a 60-night trip is five to seven bases of 8 to 12 nights).
+7. **Hotel deals.** Every night the job records the cheapest decent hotel in 80 cities for the
+   same weekend four weeks out (LiteAPI, the legal source; nothing scraped). When a city's
+   price is 25% under its own typical price it becomes a hotel deal (`/api/hotel-deals`).
+   It needs three nights of history, so the first deals appear from 13 October.
+8. **Built to take traffic.** One gate to Kiwi (six searches at a time, every search
+   remembered a day, a counter that warns before Kiwi throttles), every memo bounded, boards
+   read from Blob once per ten minutes instead of per visit, every parameter checked with a
+   plain error, streams never silent more than 15 seconds, the long routes allowed the time
+   they need. Nothing changed shape.
+9. **Jobs.** The repo is public, so the boards run every night again (01:00 UTC, eight
+   runners), the hotel snapshot right after, climate in the monthly set.
+10. **Docs for whoever is next:** `docs/architecture.md` (how it fits together, storage,
+    jobs, costs, what scales), `docs/data-inventory.md` (every layer with coverage per
+    region, what is missing where, ten sources worth adding, ranked), `README.md`.
+
+**What I need from you:** reset the Supabase password that was pasted in chat and put the
+new pooler string in `.env.local`, Vercel and the GitHub secret (SETUP §4 has the exact
+string shape). The one in `.env.local` works today; it just should not be the pasted one.
+Then confirm `DATABASE_URL` is on Vercel.
+
+---
+
+# Update, Saturday 10 October, daytime
 
 _You asked for: the whole world, not Romania; events from city sites; combos like fly to
 Warsaw, train to Gdańsk, fly home; hidden gems; an impeccable globe. Here is what changed._
