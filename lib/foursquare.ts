@@ -74,7 +74,7 @@ export async function goodValueEats(lat: number, lon: number): Promise<EatsResul
 }
 
 export async function sweetsNear(lat: number, lon: number): Promise<EatsResult> {
-  const r = await eatsNear(lat, lon, "ice cream dessert pastry", { radius: 3000, limit: 30 });
+  const r = await eatsNear(lat, lon, "ice cream gelato dessert bakery", { radius: 3000, limit: 40 });
   if (r.status !== "ok") return r;
-  return { ...r, places: r.places.filter((p) => (p.rating ?? 0) >= 8).slice(0, 4) };
+  return { ...r, places: r.places.filter((p) => (p.rating ?? 0) >= 7.5 && /ice cream|gelato|dessert|bakery|pastry|pâtisserie|sweet|chocolate|café/i.test(p.category ?? "")).slice(0, 4) };
 }

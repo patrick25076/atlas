@@ -11,7 +11,7 @@ _Kept by the agent; updated every session. Plain language._
 | Bedrock (GPT-6 Astra) | done | Ask agent, trip judge, day planner | nothing; `ASK_MODEL` switches models |
 | Travelpayouts | done: Drive script, marker 583720, API token (2026-10-10) | Kiwi clicks earn commission; cached one-way fares (Explore, Trips) with marker links | join more programs inside Travelpayouts (Airalo, Omio, Hostelworld, Klook) for more earning links |
 | Tavily search | key saved 2026-10-10, wired in | live review research for the planner and Ask | nothing (free tier ~1,000 searches a month; a plan uses about 10) |
-| Foursquare Places | key saved 2026-10-10, wired in | restaurant ratings, price tiers, tips | **enable billing on https://foursquare.com/developers/orgs** (the API answers "no credits" until the org has a payment method; the free allowance then applies); reset the OAuth client secret you pasted (not used) |
+| Foursquare Places | done 2026-10-10: card on file, auto-recharge $20, 500 free Pro calls | restaurant ratings, price tiers, tips on deal pages, in plans and in Ask | watch the Transactions table after a few days to see credits per call; we cache every city a day (two calls per city per day at most). Reset the OAuth client secret you pasted (not used) |
 | LiteAPI | sandbox key saved 2026-10-10, wired in | hotel prices on deal pages | **production key** (sandbox prices are test data, so the site hides them until `LITEAPI_ENV=production`) |
 | Ticketmaster | skipped for now | concerts and shows outside the 20 city feeds | a free key, when you want it |
 | DiscoverCars | skipped for now | car hire commission | an affiliate id, when you want it |
