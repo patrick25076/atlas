@@ -9,7 +9,8 @@ import { recordManifest } from "./manifest";
 
 const UA = "atlas travel globe (https://github.com/patrick25076/atlas)";
 const OUT = "public/data/fame.json";
-const CONCURRENCY = 4;
+// Two at a time: Wikivoyage answers 429 to anything hungrier, and the run is monthly anyway.
+const CONCURRENCY = 2;
 
 const cities = JSON.parse(await readFile("public/data/cities.json", "utf8")) as Record<string, City>;
 const airports = JSON.parse(await readFile("public/data/airports.json", "utf8")) as { iata: string; size: string }[];
