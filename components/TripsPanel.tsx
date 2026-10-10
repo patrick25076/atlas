@@ -1,22 +1,23 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, type Ref } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode, type Ref } from "react";
 import type { Trip, TripsResult } from "@/lib/trips";
 import type { WildLeg, WildStop, WildTrip } from "@/lib/wild";
 import type { Plan } from "@/lib/plan";
-import type { PurposeTrip } from "@/lib/purpose";
 import type { Airport, City, CountryInfo, Gateway, Holiday } from "@/lib/types";
 import { formatDuration } from "@/lib/geo";
 import { addDays, countryName, dateRange, daysBetween, euro, hoursLabel, localIso, monthLabel, monthOptions, shortDate, todayIso } from "@/lib/format";
 import { climateScore, MONTH_LETTERS, newId, TRIP_MODES, WILD_BUDGETS, WILD_REGIONS, WILD_STYLES, type GroupForm, type GroupMemberForm, type GroupQuery, type GroupState, type LongStayBase, type LongStayForm, type LongStayState, type Period, type TripMode } from "@/lib/ui-types";
 import { HeroNumbers, LegRows, RouteStrip, StopCards, StopPhoto } from "./RouteStrip";
-import RouteFinder, { type RouteFinderProps } from "./RouteFinder";
+import { skeletonFromGroup, skeletonFromLongStay, skeletonFromTrip, skeletonFromWild, type ItinPlace, type Skeleton } from "@/lib/itinerary";
 import { searchAirports } from "./TopBar";
 
-// The Trips tab: one place for every kind of trip, with a mode row. Short loops and wild
-// loops share the route components; long stay and group have their own forms and cards;
-// purpose lists the events worth flying for. All state lives in Globe.tsx and arrives as
-// props, so the globe can draw the same trip the panel describes.
+// The Trips tab: the trip builders, with a mode row. Short loops and wild loops share the
+// route components; long stay and group have their own forms and cards. "A to B" and the
+// events worth flying for are not modes: they are capabilities of the whole app (the command
+// line, the route card on the map, the Events layer). All state lives in Globe.tsx and
+// arrives as props, so the globe can draw the same trip the panel describes. Every result
+// can become an itinerary (onItinerary), which the globe opens in the panel.
 
 export type PlanState = { status: "idle" | "loading" | "ok" | "error"; plan?: Plan; note?: string };
 /** The query a wild trip was built with, kept so "Plan the days" asks for the same stored trip even after the form changed. */
@@ -28,12 +29,9 @@ export const WILD_MAX_NIGHTS = 90;
 /** The wishes text the engines keep (/api/wild and /api/longstay cut at 300); the box stops there so nothing is lost without a word. */
 export const WISHES_MAX = 300;
 
-/**
- * "A to B" is a mode of this panel but not (yet) of lib/ui-types.TripMode, which another
- * stream owns; the panel's own mode type is the wider one until "ab" lands there.
- */
-export type PanelMode = TripMode | "ab";
-export const PANEL_MODES: { key: PanelMode; label: string; hint: string }[] = [...TRIP_MODES, { key: "ab", label: "A to B", hint: "the cheapest way from one place to another, by air, rail, coach and ferry" }];
+/** The panel's modes are the trip builders of lib/ui-types; the aliases keep older imports compiling. */
+export type PanelMode = TripMode;
+export const PANEL_MODES: { key: PanelMode; label: string; hint: string }[] = TRIP_MODES;
 
 /** The free-form extras of every Trips mode: nothing here constrains the visitor to the chips. They live in Globe state like the forms, so a tab switch keeps them. */
 export type WildForm = {
@@ -56,14 +54,12 @@ export type TripsExtra = {
   short: ShortForm;
   longStay: { wishes: string; cities: string[] };
   group: { budgetPerPerson: number };
-  purpose: { kindsText: string };
 };
 export const EMPTY_TRIPS_EXTRA: TripsExtra = {
   wild: { countries: [], mustInclude: [], maxHours: 0, startFrom: [], wishes: "", stopNights: null },
   short: { cities: 3, mustInclude: [], countries: [], maxGroundHours: 5 },
   longStay: { wishes: "", cities: [] },
   group: { budgetPerPerson: 0 },
-  purpose: { kindsText: "" },
 };
 /** The group query plus the budget a person, which lib/ui-types.GroupQuery (another stream's) does not carry yet. */
 export type GroupSearch = GroupQuery & { budgetPerPerson?: number };
@@ -71,9 +67,7 @@ export type GroupSearch = GroupQuery & { budgetPerPerson?: number };
 export const SHORT_DAYS = [3, 5, 7, 10, 14, 21];
 /** The engine searches at most this many departure days of a window; the form clips before asking. */
 export const WILD_WINDOW_DAYS = 10;
-export type PurposeState = { status: "idle" | "loading" | "ok" | "error"; trips: PurposeTrip[]; note?: string };
 export type LongStayQuery = { months: number; startMonth?: string; budget: string; countries?: string[]; cities?: string[]; wishes?: string };
-export const PURPOSE_KINDS = ["festival", "sport", "culture", "season", "music", "food"];
 
 /** A free window two to six weeks out, the usual case for a meet-up; the visitor edits it. */
 function defaultWindow(): { id: string; from: string; to: string } {
@@ -143,6 +137,19 @@ export function resolveCountries(text: string, index: Map<string, string>, known
   return { codes, unresolved };
 }
 
+/** Country names and codes to ISO2, for resolveCountries: the data file's names and the browser's own English names, both plain. Shared with the command line. */
+export function countryIndexOf(countries: Record<string, CountryInfo>): { index: Map<string, string>; known: Set<string> } {
+  const index = new Map<string, string>();
+  const known = new Set<string>();
+  for (const [code, info] of Object.entries(countries)) {
+    known.add(code);
+    if (info.name) index.set(plain(info.name), code);
+    const intl = countryName(code);
+    if (intl && intl !== code) index.set(plain(intl), code);
+  }
+  return { index, known };
+}
+
 export type TripsPanelProps = {
   mode: PanelMode;
   onMode: (m: PanelMode) => void;
@@ -156,9 +163,13 @@ export type TripsPanelProps = {
   /** The free-form extras of every mode (see TripsExtra). */
   extra: TripsExtra;
   onExtra: (e: TripsExtra) => void;
-  /** The A to B mode, whole: its form, state and callbacks. */
-  ab: RouteFinderProps;
   homeLabel: string;
+  /** Where the traveller starts, as an itinerary place: the converters put it first and last. */
+  originPlace?: ItinPlace;
+  /** Turn a result into an itinerary: the globe opens the itinerary view with this skeleton. */
+  onItinerary: (s: Skeleton) => void;
+  /** Shown above the mode row: the visitor's saved itineraries, when there are any. */
+  top?: ReactNode;
   airlines: Record<string, string>;
   // the camera along the route
   playing: number | null;
@@ -208,12 +219,6 @@ export type TripsPanelProps = {
   onGroup: (q: GroupSearch) => void;
   selectedOption: number | null;
   onOption: (i: number | null) => void;
-  // purpose
-  purpose: PurposeState;
-  purposeKinds: string[];
-  onPurposeKinds: (k: string[]) => void;
-  onPurpose: () => void;
-  onDeal: (key: string) => void;
   /** How many countries the Been filter excludes (0 when off): the forms show a one-line note. */
   excludedCount: number;
 };
@@ -307,7 +312,7 @@ function ClimateStrip({ climate }: { climate: NonNullable<LongStayBase["climate"
   );
 }
 
-function BaseCard({ b, active, onClick }: { b: LongStayBase; active: boolean; onClick: () => void }) {
+function BaseCard({ b, active, onClick, onItinerary, itinLabel }: { b: LongStayBase; active: boolean; onClick: () => void; onItinerary: () => void; itinLabel?: string }) {
   return (
     <div className={`basecard${active ? " active" : ""}`} onClick={onClick}>
       <StopPhoto name={b.name} country={b.country} className="base" />
@@ -366,6 +371,11 @@ function BaseCard({ b, active, onClick }: { b: LongStayBase; active: boolean; on
           <div className="sidetrips">
             <span className="muted">Side trips: </span>
             {b.sideTrips.slice(0, 5).map((s) => `${s.name} ${formatDuration(s.minutes)} ${s.mode === "plane" ? "flight" : s.mode}`).join(" · ")}
+          </div>
+        )}
+        {active && (
+          <div className="chips">
+            <ItineraryButton onClick={onItinerary} label={itinLabel} />
           </div>
         )}
       </div>
@@ -655,6 +665,45 @@ function GroupEditor({ airports, defaults, form, onForm, state, onSearch, budget
   );
 }
 
+/** The one action every result shares: turn it into a day-by-day itinerary. stopPropagation keeps a card's own click (select or close) out of it. */
+/** The longest trip one plan holds: the planner (lib/itinerary-server.ts MAX_DAYS) writes at most 60 days, so 59 nights. */
+export const PLAN_MAX_NIGHTS = 59;
+/** Whether a trip is longer than one plan holds (a long stay of two months or more, a long wild loop). */
+export function overPlanLimit(sk: Skeleton): boolean {
+  return !!sk.start && !!sk.end && daysBetween(sk.start, sk.end) > PLAN_MAX_NIGHTS;
+}
+/**
+ * A trip too long for one plan, cut to its first four weeks so the planner can write it:
+ * the stops that begin inside them (the last one shortened), the legs dated inside them,
+ * and a title that says so. Anything that fits is returned as it is.
+ */
+export function firstWeeks(sk: Skeleton): Skeleton {
+  if (!overPlanLimit(sk)) return sk;
+  const end = addDays(sk.start, 28);
+  const stops = sk.stops.filter((st) => st.arrive < end).map((st) => (st.leave > end ? { ...st, leave: end, nights: daysBetween(st.arrive, end) } : st));
+  const legs = sk.legs.filter((l) => (l.date || sk.start) < end);
+  return { ...sk, title: `${sk.title}: the first four weeks`, end, nights: daysBetween(sk.start, end), stops, legs };
+}
+/** The button's words for a trip: a long one says it plans the first four weeks. */
+function itinLabel(sk: Skeleton): string | undefined {
+  return overPlanLimit(sk) ? "Plan the first four weeks" : undefined;
+}
+
+export function ItineraryButton({ onClick, label }: { onClick: () => void; label?: string }) {
+  return (
+    <button
+      className="chip itinbtn"
+      onClick={(e) => {
+        e.stopPropagation();
+        onClick();
+      }}
+      title="A day-by-day plan: what to see, where to eat, what it costs; save it, share it, put it in your calendar"
+    >
+      <span aria-hidden="true">✦</span> {label ?? "Make an itinerary"}
+    </button>
+  );
+}
+
 function PlayButton({ playing, onPlay, onStop }: { playing: number | null; onPlay: () => void; onStop: () => void }) {
   return playing == null ? (
     <button className="chip on play" onClick={onPlay} title="Fly the camera from home through every stop">
@@ -674,17 +723,7 @@ export default function TripsPanel(p: TripsPanelProps) {
   const setLs = (patch: Partial<LongStayForm>) => p.onLongStayForm({ ...ls, ...patch });
   // Country names to codes: the data file's names and the browser's own English names, both
   // plain (lower case, no accents), so "Türkiye", "Turkey" and "turkiye" all resolve to TR.
-  const countryIndex = useMemo(() => {
-    const index = new Map<string, string>();
-    const known = new Set<string>();
-    for (const [code, info] of Object.entries(p.countries)) {
-      known.add(code);
-      if (info.name) index.set(plain(info.name), code);
-      const intl = countryName(code);
-      if (intl && intl !== code) index.set(plain(intl), code);
-    }
-    return { index, known };
-  }, [p.countries]);
+  const countryIndex = useMemo(() => countryIndexOf(p.countries), [p.countries]);
   const lsCountries = useMemo(() => resolveCountries(ls.countries, countryIndex.index, countryIndex.known), [ls.countries, countryIndex]);
   // Typed something, recognised nothing: the box says so and the search waits.
   const lsBlocked = ls.countries.trim().length > 0 && lsCountries.codes.length === 0;
@@ -703,8 +742,9 @@ export default function TripsPanel(p: TripsPanelProps) {
 
   return (
     <>
+      {p.top}
       <div className="modes" role="tablist">
-        {PANEL_MODES.map((m) => (
+        {TRIP_MODES.map((m) => (
           <button key={m.key} role="tab" aria-selected={p.mode === m.key} className={`mode${p.mode === m.key ? " on" : ""}`} onClick={() => p.onMode(m.key)} title={m.hint}>
             {m.label}
           </button>
@@ -761,6 +801,7 @@ export default function TripsPanel(p: TripsPanelProps) {
               <RouteStrip stops={shortRoute.stops} legs={shortRoute.legs} homeLabel={p.homeLabel} activeIndex={p.playing} onStop={p.onFocusStop} />
               <div className="chips">
                 <PlayButton playing={p.playing} onPlay={p.onPlay} onStop={p.onStopPlay} />
+                <ItineraryButton onClick={() => p.onItinerary(skeletonFromTrip(shortTrip, p.originPlace))} />
                 <button className="chip ghost" onClick={() => p.onTrip(null)}>
                   Close
                 </button>
@@ -913,6 +954,7 @@ export default function TripsPanel(p: TripsPanelProps) {
               {p.wild.status === "loading" ? "Building…" : p.wild.status === "ok" ? "Build again" : "Build the loop"}
             </button>
             {p.wild.status === "ok" && wt && <PlayButton playing={p.playing} onPlay={p.onPlay} onStop={p.onStopPlay} />}
+            {p.wild.status === "ok" && wt && <ItineraryButton onClick={() => p.onItinerary(skeletonFromWild(wt))} label={itinLabel(skeletonFromWild(wt))} />}
           </div>
           {p.wild.status === "loading" && (
             <div className="answer">
@@ -1140,9 +1182,11 @@ export default function TripsPanel(p: TripsPanelProps) {
                   {p.longStay.result.failed} live search{p.longStay.result.failed === 1 ? " was" : "es were"} refused (prices rate-limited right now), so a base may be missing a flight. Try again in a few minutes.
                 </div>
               )}
-              {p.longStay.result.bases.map((b) => (
-                <BaseCard key={b.code} b={b} active={p.selectedBase === b.code} onClick={() => p.onBase(p.selectedBase === b.code ? null : b.code)} />
-              ))}
+              {p.longStay.result.bases.map((b) => {
+                // A stay over 59 nights is planned for its first four weeks (the globe cuts it the same way on open).
+                const sk = skeletonFromLongStay(b, p.originPlace);
+                return <BaseCard key={b.code} b={b} active={p.selectedBase === b.code} onClick={() => p.onBase(p.selectedBase === b.code ? null : b.code)} onItinerary={() => p.onItinerary(sk)} itinLabel={itinLabel(sk)} />;
+              })}
               {p.longStay.result.skipped && p.longStay.result.skipped.length > 0 && (
                 <div className="status muted">Left out: {p.longStay.result.skipped.map((s) => `${countryName(s.country)} (${s.reason})`).join(" · ")}.</div>
               )}
@@ -1237,6 +1281,12 @@ export default function TripsPanel(p: TripsPanelProps) {
                         ),
                       )}
                     </div>
+                    {p.selectedOption === i && (
+                      <div className="chips">
+                        {/* The first member is the visitor ("You" by default): the itinerary follows their fare. */}
+                        <ItineraryButton onClick={() => p.onItinerary(skeletonFromGroup(o, 0))} />
+                      </div>
+                    )}
                   </div>
                 </div>
               ))}
@@ -1246,66 +1296,6 @@ export default function TripsPanel(p: TripsPanelProps) {
         </div>
       )}
 
-      {p.mode === "purpose" && (
-        <div className="scroll fade" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-          <div className="status">Carnivals, fire festivals, marathons, lantern nights, cherry blossom, northern lights: the next two months (or the month you picked), each with the cheapest way there from your airports.</div>
-          {beenNote}
-          <div className="chips">
-            <button className={`chip${p.purposeKinds.length === 0 && !ex.purpose.kindsText.trim() ? " on" : ""}`} onClick={() => { p.onPurposeKinds([]); p.onExtra({ ...ex, purpose: { kindsText: "" } }); }}>
-              Everything
-            </button>
-            {PURPOSE_KINDS.map((k) => (
-              <button key={k} className={`chip ghost${p.purposeKinds.includes(k) ? " on" : ""}`} onClick={() => p.onPurposeKinds(p.purposeKinds.includes(k) ? p.purposeKinds.filter((x) => x !== k) : [...p.purposeKinds, k])}>
-                {k}
-              </button>
-            ))}
-          </div>
-          <input className="search" placeholder="or in your words: jazz, surfing, a tango week, wine harvest" value={ex.purpose.kindsText} onChange={(e) => p.onExtra({ ...ex, purpose: { kindsText: e.target.value.slice(0, 120) } })} aria-label="What kind of event" />
-          <div className="chips">
-            <button className="chip on" onClick={p.onPurpose} disabled={p.purpose.status === "loading"}>
-              {p.purpose.status === "loading" ? "Pricing events…" : p.purpose.status === "ok" ? "Refresh" : "Find events worth flying for"}
-            </button>
-          </div>
-          {p.purpose.status === "error" && <div className="status">{p.purpose.note}</div>}
-          {/* The route's note (live prices refused) takes the empty state's place; with results it sits above them. */}
-          {p.purpose.status === "ok" && p.purpose.trips.length === 0 && <div className="status">{p.purpose.note ?? "Nothing of that kind in the window. Try everything, or another month."}</div>}
-          {p.purpose.status === "ok" && p.purpose.trips.length > 0 && p.purpose.note && <div className="status">{p.purpose.note}</div>}
-          {p.purpose.status === "ok" &&
-            p.purpose.trips
-              .filter((t) => !p.purposeKinds.length || p.purposeKinds.includes(t.event.kind))
-              .slice(0, 14)
-              .map((t) => (
-                <div key={t.event.name + t.event.start} className="eventcard" onClick={() => t.deal && p.onDeal(`${t.deal.gw}|${t.deal.dst}|${t.deal.out}`)} style={{ cursor: t.deal ? "pointer" : "default" }}>
-                  <StopPhoto name={t.event.city} country={t.event.country} img={t.deal?.img} className="event" />
-                  <div className="basebody">
-                    <div className="cardtop">
-                      <span className="cardtitle">
-                        {t.event.name}
-                        <span className="sub">
-                          {t.event.city}, {countryName(t.event.country)}
-                        </span>
-                      </span>
-                      <span className="price">{t.deal ? euro(t.deal.price) : "?"}</span>
-                    </div>
-                    <div className="sub">
-                      {dateRange(t.event.start, t.event.end)}
-                      {t.deal ? ` · fly ${dateRange(t.deal.out, t.deal.back)} from ${t.deal.gw}${t.deal.stops ? "" : ", direct"}` : " · no fare found yet"}
-                    </div>
-                    <div className="badges">
-                      <span className="badge warm">{t.event.kind}</span>
-                      {t.event.note && <span className="badge">{t.event.note}</span>}
-                    </div>
-                  </div>
-                </div>
-              ))}
-        </div>
-      )}
-
-      {p.mode === "ab" && (
-        <div className="scroll fade" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-          <RouteFinder {...p.ab} />
-        </div>
-      )}
     </>
   );
 }

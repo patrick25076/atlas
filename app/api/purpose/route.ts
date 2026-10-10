@@ -1,8 +1,8 @@
 import { NextResponse } from "next/server";
 import { parseExclude } from "@/lib/been";
-import { purposeTrips, type PurposeTrips } from "@/lib/purpose";
+import { eventMatches, placeEvents, purposeTrips, type PurposeTrips } from "@/lib/purpose";
 import { InFlight, TtlLru } from "@/lib/memo";
-import { bad, iataList, intIn, isoDay } from "@/lib/params";
+import { bad, iataList, intIn, isoDay, latLon } from "@/lib/params";
 
 // GET /api/purpose?g=OTP,SBZ&from=2026-10-15&to=2026-12-15[&kinds=festival,sport][&live=4][&exclude=RO,HU]
 // kinds is free text, comma separated: a kind (festival, sport, culture, season, music, food),
@@ -15,12 +15,20 @@ import { bad, iataList, intIn, isoDay } from "@/lib/params";
 // once with a note and not kept, so the next visitor searches again. The body carries
 // `searched` and `failed` (this run's live searches and how many Kiwi refused) so the chat
 // can budget on exact numbers; a memo hit repeats the counts of the run that produced it.
+//
+// GET /api/purpose?city=LIS&from=2027-01-15&to=2027-03-15[&km=150][&kinds=][&exclude=]
+// GET /api/purpose?near=45.44,12.32&from=...&to=...[&km=150]
+// The place mode, for place and deal pages: the curated events at that city (a code or a
+// name) or within km of the point, dated for the window: { place, events: PlaceEvent[],
+// searched: 0 }. No gateways, no board lookup, zero Kiwi searches.
 export const maxDuration = 90;
 const memo = new TtlLru<PurposeTrips>(500, 3_600_000);
 const inflight = new InFlight<PurposeTrips>();
 const CACHE = { "Cache-Control": "public, max-age=900, stale-while-revalidate=3600" };
 /** A kind, a word of a name, a city: letters, digits, spaces, hyphens and apostrophes, 2 to 40 long. */
 const KIND = /^[\p{L}\p{N}' -]{2,40}$/u;
+/** A city code or a name ("Cluj-Napoca", "Saint-Tropez", "Xi'an"): letters, spaces, hyphens, dots and apostrophes. */
+const CITY = /^[\p{L}\p{N}' .,-]{2,60}$/u;
 
 export async function GET(request: Request) {
   const p = new URL(request.url).searchParams;
@@ -30,6 +38,23 @@ export async function GET(request: Request) {
   const kinds = (p.get("kinds") ?? "").split(",").map((k) => k.trim().toLowerCase()).filter((k) => KIND.test(k)).slice(0, 8);
   const live = intIn(p.get("live"), 0, 8, 4);
   const exclude = parseExclude(p.get("exclude"));
+  const city = p.get("city");
+  const near = p.get("near");
+  // The place mode: what is on at a city or near a point. No gateways, no search.
+  if (city != null || near != null) {
+    if (!from || !to) return bad("from and to must be real dates, YYYY-MM-DD");
+    if (to < from) return bad("to must not be before from");
+    if ((Date.parse(to) - Date.parse(from)) / 86_400_000 > 400) return bad("the window must be 400 days or less");
+    if (city != null && !CITY.test(city.trim())) return bad("city must be a city code or name");
+    const point = near != null ? latLon(...(near.split(",") as [string, string])) : null;
+    if (near != null && !point) return bad("near must be lat,lon");
+    const kmRaw = p.get("km");
+    if (kmRaw && !Number.isFinite(Number(kmRaw))) return bad("km must be a number");
+    const km = intIn(kmRaw, 1, 2000, 150);
+    const r = placeEvents({ city: city?.trim() || undefined, lat: point?.lat, lon: point?.lon, km }, from, to, exclude);
+    const events = kinds.length ? r.events.filter((e) => eventMatches({ name: e.name, city: e.cityName, code: e.city, country: e.country, lat: e.lat, lon: e.lon, month: 1, kind: e.kind, note: e.why }, kinds)) : r.events;
+    return NextResponse.json({ place: r.place, events, searched: 0 }, { headers: { "Cache-Control": "public, max-age=3600, stale-while-revalidate=86400", "X-Purpose": "place" } });
+  }
   if (!gateways.length) return bad("g must be a comma list of three-letter airport codes");
   if (!from || !to) return bad("from and to must be real dates, YYYY-MM-DD");
   if (to < from) return bad("to must not be before from");

@@ -13,14 +13,20 @@ import type { PlaceSummary } from "@/app/api/place/route";
 import { fetchBoard, readNdjson } from "@/lib/boards-client";
 import { greatCircle, latitudeLines, routePath, type RouteLeg } from "@/lib/arc";
 import { isGem, type FameFile } from "@/lib/gems";
-import { addDays, countryName, dateRange, localIso, todayIso } from "@/lib/format";
+import { addDays, countryName, dateRange, daysBetween, localIso, todayIso } from "@/lib/format";
 import { EMPTY_BEEN, countryAllowed, excludedCountries, excludeParam, filterByCountry, loadBeen, saveBeen, type BeenPrefs } from "@/lib/been";
-import { BANDS, dealKey, REGION_CENTROIDS, WILD_REGIONS, type AskState, type Band, type BoardState, type DealNights, type GroupForm, type GroupState, type LiveSearch, type LongStayForm, type LongStayResult, type LongStayState, type Origin, type Period, type PickMode, type PickedDetail, type Sheet, type View } from "@/lib/ui-types";
+import { BANDS, dealKey, REGION_CENTROIDS, TRIP_MODES, WILD_REGIONS, type AskState, type Band, type BoardState, type DealNights, type EventSpot, type EventsLayer, type GroupForm, type GroupState, type LiveSearch, type LongStayForm, type LongStayResult, type LongStayState, type Origin, type Period, type PickMode, type PickedDetail, type PlacePage, type Sheet, type TripMode, type View } from "@/lib/ui-types";
 import type { Airport, City, CityPlaces, CountryInfo, Deal, Destination, FaresResponse, Gateway, HeritageRow, Holiday, Manifest, ReachResponse, ReachStation, Route, VisaFile, WeatherCompact, WeatherFile } from "@/lib/types";
 import { expandWeather, visaFor } from "@/lib/types";
-import Panel, { MODE_LABEL, type CombosState, type PlanState, type WildState } from "./Panel";
-import { EMPTY_LONGSTAY_FORM, EMPTY_TRIPS_EXTRA, emptyGroupForm, PANEL_MODES, SHORT_DAYS, shortLoopRoute, WILD_WINDOW_DAYS, type GroupSearch, type LongStayQuery, type PanelMode, type PurposeState, type TripsExtra, type WildQuery } from "./TripsPanel";
-import { emptyRouteForm, ROUTE_BUDGET, ROUTE_BUDGET_HARDER, type RouteForm, type RouteLeg as AbLeg, type RouteOption, type RouteResult, type RouteState } from "./RouteFinder";
+import Panel, { MODE_LABEL, type Capabilities, type CombosState, type PlanState, type WildState } from "./Panel";
+import { countryIndexOf, EMPTY_LONGSTAY_FORM, EMPTY_TRIPS_EXTRA, emptyGroupForm, firstWeeks, resolveCountries, SHORT_DAYS, shortLoopRoute, WILD_WINDOW_DAYS, type GroupSearch, type LongStayQuery, type TripsExtra, type WildQuery } from "./TripsPanel";
+import RouteCard, { emptyRouteForm, EventsCard, eventsHere, optionKey, ROUTE_BUDGET, ROUTE_BUDGET_FREE, ROUTE_BUDGET_HARDER, routeParams, toEventSpot, type RawEvent, type RouteForm, type RouteLeg as AbLeg, type RouteOption, type RouteResult, type RouteState } from "./RouteFinder";
+import { eventsInWindow } from "@/lib/purpose-events";
+import { parseCommand, type Command } from "@/lib/command";
+import { skeletonFromDeal, skeletonFromEvent, skeletonFromGroup, skeletonFromLongStay, skeletonFromRoute, skeletonFromTrip, skeletonFromWild, type BudgetTier, type ItinLeg, type ItinPlace, type Itinerary as Itin, type Pace, type Skeleton } from "@/lib/itinerary";
+import { existingOwnerId } from "@/lib/owner";
+import Itinerary from "./Itinerary";
+import MyTrips from "./MyTrips";
 
 /**
  * The two ends of an A to B answer as points to frame, only the ones the engine could place:
@@ -46,7 +52,6 @@ function routeEndKnown(end: RouteResult["from"]): boolean {
 }
 import type { FinderQuery, FinderState } from "./FinderForm";
 import type { Plan } from "@/lib/plan";
-import type { PurposeTrip } from "@/lib/purpose";
 import type { EatsResponse } from "@/app/api/eats/route";
 import type { HotelsResult } from "@/lib/liteapi";
 import type { WildLeg, WildStop, WildTrip } from "@/lib/wild";
@@ -55,8 +60,36 @@ import TopBar from "./TopBar";
 import PriceLabels, { type LabelItem } from "./PriceLabels";
 import type { Intel } from "./PlaceIntel";
 
-// Every mode of the Trips tab, "ab" included (TripsPanel.PANEL_MODES is the list the panel draws).
-const PANEL_MODE_KEYS: PanelMode[] = PANEL_MODES.map((m) => m.key);
+// The modes of the Trips tab: the trip builders. "ab" and "purpose" in an old link open the
+// route card and the Events layer instead (see the first effect).
+const TRIP_MODE_KEYS: TripMode[] = TRIP_MODES.map((m) => m.key);
+/** What the itinerary view was opened with: a skeleton to generate, or an itinerary already written (a saved one). n keys the component, so a new open starts fresh. */
+type ItinOpen = { skeleton?: Skeleton; itinerary?: Itin; wishes?: string; pace?: Pace; budget?: BudgetTier; n: number };
+/** The curated event kinds (lib/purpose-events.ts): a command-line word naming one filters by kind. */
+const EVENT_KINDS = new Set(["festival", "sport", "culture", "season", "music", "food"]);
+/** "Brașov" and "brasov" are one key for a place typed on the command line. */
+function foldName(s: string): string {
+  return s.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
+}
+/** Region words a traveller types, to the Wild regions' keys; anything else is tried as a country. */
+const REGION_WORDS: Record<string, string> = {
+  "southeast asia": "sea", "south east asia": "sea", "se asia": "sea", asia: "sea", indochina: "sea",
+  "east asia": "east-asia", "south asia": "south-asia", "central asia": "central-asia", "silk road": "central-asia", stans: "central-asia",
+  caucasus: "caucasus", turkey: "caucasus", balkans: "balkans", "north africa": "north-africa", levant: "north-africa", "middle east": "gulf", gulf: "gulf",
+  "east africa": "east-africa", africa: "east-africa", "southern africa": "southern-africa", "north america": "americas", "central america": "americas", america: "americas", americas: "americas",
+  caribbean: "caribbean", "south america": "south-america", "latin america": "south-america", oceania: "oceania", australia: "oceania", pacific: "oceania",
+};
+/** Two itinerary places are the same spot: the same code, or the same name. */
+function sameSpot(a: ItinPlace, b: ItinPlace): boolean {
+  return (!!a.code && a.code === b.code) || foldName(a.name) === foldName(b.name);
+}
+function regionKey(word: string | undefined): string | null {
+  if (!word) return null;
+  const w = foldName(word);
+  if (WILD_REGIONS.some((r) => r.key === w)) return w;
+  const byLabel = WILD_REGIONS.find((r) => foldName(r.label) === w || foldName(r.label).startsWith(w));
+  return byLabel?.key ?? REGION_WORDS[w] ?? null;
+}
 const LAT_LINES = latitudeLines(15);
 const isPhone = () => typeof window !== "undefined" && window.innerWidth <= 720;
 
@@ -204,20 +237,44 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
   const [wildTradeoff, setWildTradeoff] = useState("balanced");
   const [wildVariants, setWildVariants] = useState(1);
   const [wildPeriod, setWildPeriod] = useState<Period>({ from: "", to: "" });
-  const [purpose, setPurpose] = useState<PurposeState>({ status: "idle", trips: [] });
-  const [purposeKinds, setPurposeKinds] = useState<string[]>([]);
   const [plan, setPlan] = useState<PlanState>({ status: "idle" });
-  const [tripMode, setTripMode] = useState<PanelMode>("short");
+  const [tripMode, setTripMode] = useState<TripMode>("short");
+  // The route card floating on the map: open from anywhere (the command line, atlas:route,
+  // a Get there block, the chat's atlas:route-result), it stays open across tabs; folded, the
+  // globe goes back to drawing what is under it.
+  const [routeCard, setRouteCard] = useState<{ open: boolean; collapsed: boolean }>({ open: false, collapsed: false });
+  // The Events layer: markers and tags at the cities of the events worth flying for, and the card for one of them.
+  const [evLayer, setEvLayer] = useState<EventsLayer>({ on: false, from: "", to: "", list: false });
+  const [eventSel, setEventSel] = useState<EventSpot | null>(null);
+  // A place page opened from anywhere (atlas:place, the command line, an event's city).
+  const [placePage, setPlacePage] = useState<PlacePage | null>(null);
+  // The itinerary view in the panel, and the shape it asked the globe to draw (onRoute).
+  const [itin, setItin] = useState<ItinOpen | null>(null);
+  const [itinShape, setItinShape] = useState<Skeleton | Itin | null>(null);
+  // Whether this browser has an owner id, i.e. has saved an itinerary: the Trips tab lists them then.
+  const [hasSaved, setHasSaved] = useState(false);
+  useEffect(() => {
+    setHasSaved(!!existingOwnerId());
+  }, []);
+  // A one-line note on the map (a command that could not run, a place not found); clears itself.
+  const [notice, setNotice] = useState<string | null>(null);
+  useEffect(() => {
+    if (!notice) return;
+    const t = window.setTimeout(() => setNotice(null), 6000);
+    return () => window.clearTimeout(t);
+  }, [notice]);
   // The free-form extras of every Trips mode (countries, must-include cities, wishes, ...): see TripsPanel.TripsExtra.
   const [tripsExtra, setTripsExtra] = useState<TripsExtra>(EMPTY_TRIPS_EXTRA);
   // A to B: the form, the streamed answer, the option drawn on the globe, and the request in flight.
   const [abForm, setAbForm] = useState<RouteForm>(emptyRouteForm);
-  // The current form for the atlas:route listener, which is registered once and would otherwise see the first, empty one.
+  // The current form for the event listeners, which are registered once and would otherwise see the first, empty one.
   const abFormRef = useRef(abForm);
   abFormRef.current = abForm;
   const [ab, setAb] = useState<RouteState>({ status: "idle", lines: [], options: [] });
   const [abSelected, setAbSelected] = useState<number | null>(null);
   const abCtrl = useRef<AbortController | null>(null);
+  // The getaway finder's running stream: a newer search (one keystroke on the command line) stops it.
+  const finderCtrl = useRef<AbortController | null>(null);
   const [longStay, setLongStay] = useState<LongStayState>({ status: "idle" });
   const [selectedBase, setSelectedBase] = useState<string | null>(null);
   const [group, setGroup] = useState<GroupState>({ status: "idle" });
@@ -306,15 +363,27 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
 
   // Keep the interesting part of the globe clear of the panel: right of it on desktop, above
   // the sheet on phones.
+  const cardOpenRef = useRef(false);
   const panelPadding = useCallback(() => {
     if (typeof window !== "undefined" && window.innerWidth <= 720) {
       const s = sheetRef.current;
       // A full sheet leaves no map to frame into (globals.css: 100vh minus the top bar); the
       // callers drop it to half through revealMap() first, so "full" pads like "half" here
       // rather than asking MapLibre for a padding larger than the viewport.
-      return { left: 16, right: 16, top: 70, bottom: (s === "peek" ? 150 : Math.round(window.innerHeight * 0.56)) + 24 };
+      return { left: 16, right: 16, top: 140, bottom: (s === "peek" ? 150 : Math.round(window.innerHeight * 0.56)) + 24 };
     }
-    return { left: 504, top: 84, right: 60, bottom: 60 };
+    // The route or event card floats over the right of the map: frame clear of it too. The
+    // panel's width and the top bar's height come from globals.css (narrower on tablets, where
+    // the command line takes a row of its own), and left plus right never eat the whole map:
+    // at least 240 px stay between them.
+    const w = window.innerWidth;
+    const css = getComputedStyle(document.documentElement);
+    const panelW = parseFloat(css.getPropertyValue("--panel-w")) || 468;
+    const topbar = parseFloat(css.getPropertyValue("--topbar")) || 64;
+    const left = panelW + 36;
+    const card = cardOpenRef.current ? Math.min(380, w - panelW - 48) + 40 : 60;
+    const right = Math.max(40, Math.min(card, w - left - 240));
+    return { left: Math.min(left, Math.max(40, w - right - 240)), top: topbar + 20, right, bottom: 60 };
   }, []);
 
   // Re-price one route on Kiwi for the dates the visitor picks.
@@ -440,8 +509,11 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
     const from = q.get("from")?.split(",");
     const v = q.get("view");
     if (v === "chat" || v === "deals" || v === "all" || v === "fly" || v === "ground" || v === "trips" || v === "wild") changeView(v);
-    const mode = q.get("mode") as PanelMode | null;
-    if (mode && PANEL_MODE_KEYS.includes(mode)) setTripMode(mode);
+    const mode = q.get("mode");
+    if (mode && TRIP_MODE_KEYS.includes(mode as TripMode)) setTripMode(mode as TripMode);
+    // A to B and Purpose were Trips modes; their old links open the capability that replaced them.
+    if (mode === "ab") setRouteCard({ open: true, collapsed: false });
+    if (mode === "purpose") setEvLayer((l) => ({ ...l, on: true, list: true }));
     if (from && from.length >= 2 && Number.isFinite(Number(from[0])) && Number.isFinite(Number(from[1]))) {
       setOrigin({ lat: Number(from[0]), lon: Number(from[1]), label: from.slice(2).join(",") || "shared location", source: "search" });
       const d = Number(q.get("days"));
@@ -633,16 +705,20 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
 
   // ---- deals ----
   // A custom search replaces tonight's boards until it is cleared.
-  const purposeDeals = useMemo(() => purpose.trips.map((t) => t.deal).filter((d): d is Deal => !!d), [purpose.trips]);
-  const purposeOpen = view === "trips" && tripMode === "purpose";
   // Stored boards never saw the Been list, so deals landing in an excluded country are dropped here too.
   // The chat's deals are left alone: its tools already filter, and the traveller can tell the
   // chat that a been country is fine this once, which must then show on the globe as well.
   const dealsAll = useMemo(
-    () => (view === "chat" && chatDeals.length ? chatDeals : filterByCountry(purposeOpen ? purposeDeals : finder.status === "idle" ? boardList.flatMap((b) => b.deals) : finder.deals, exclude)),
-    [boardList, finder, view, chatDeals, purposeOpen, purposeDeals, exclude],
+    () => (view === "chat" && chatDeals.length ? chatDeals : filterByCountry(finder.status === "idle" ? boardList.flatMap((b) => b.deals) : finder.deals, exclude)),
+    [boardList, finder, view, chatDeals, exclude],
   );
   async function runFinder(q: FinderQuery) {
+    // One finder search at a time: the older stream is stopped, so its deals never land in the
+    // newer list and it spends no more live Kiwi searches. Every await below checks it is still current.
+    finderCtrl.current?.abort();
+    const ctrl = new AbortController();
+    finderCtrl.current = ctrl;
+    const stale = () => finderCtrl.current !== ctrl;
     setFinder({ status: "loading", query: q, deals: [], lines: [] });
     setSelectedDeal(null);
     setAsk(null);
@@ -662,15 +738,16 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
     }
     if (excludeQ) params.set("exclude", excludeQ);
     try {
-      const r = await fetch(`/api/finder?${params}`);
+      const r = await fetch(`/api/finder?${params}`, { signal: ctrl.signal });
+      if (stale()) return;
       if (!r.ok) {
         const j = await r.json().catch(() => ({}));
-        setFinder({ status: "error", query: q, deals: [], lines: [], note: j.error ?? `failed (${r.status})` });
+        if (!stale()) setFinder({ status: "error", query: q, deals: [], lines: [], note: j.error ?? `failed (${r.status})` });
         return;
       }
       if (!r.headers.get("content-type")?.includes("ndjson")) {
         const j = (await r.json()) as { deals: Deal[]; searched: number };
-        setFinder({ status: "ok", query: q, deals: j.deals, lines: [], searched: j.searched });
+        if (!stale()) setFinder({ status: "ok", query: q, deals: j.deals, lines: [], searched: j.searched });
         return;
       }
       const reader = r.body!.getReader();
@@ -679,6 +756,10 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
       let finished = false;
       for (;;) {
         const { value, done } = await reader.read();
+        if (stale()) {
+          void reader.cancel().catch(() => {});
+          return;
+        }
         if (done) break;
         buf += dec.decode(value, { stream: true });
         let nl = buf.indexOf("\n");
@@ -701,7 +782,10 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
       }
       if (!finished) setFinder((f) => ({ ...f, status: f.deals.length ? "ok" : "error", note: f.deals.length ? undefined : "the search stopped early" }));
     } catch {
-      setFinder({ status: "error", query: q, deals: [], lines: [], note: "network" });
+      // An abort is a newer search (or a clear) taking over: it owns the state now.
+      if (!stale()) setFinder({ status: "error", query: q, deals: [], lines: [], note: "network" });
+    } finally {
+      if (finderCtrl.current === ctrl) finderCtrl.current = null;
     }
   }
   const dealCoord = useCallback(
@@ -767,8 +851,8 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
     const used = new Set(ask.used);
     return dealsAll.filter((d) => used.has(dealKey(d))).sort((a, b) => a.price - b.price);
   }, [dealsShown, dealsAll, ask, askOnly]);
-  // A deal opened from the chat or the purpose list may not be on tonight's boards.
-  const deal = selectedDeal ? (dealsAll.find((d) => dealKey(d) === selectedDeal) ?? chatDeals.find((d) => dealKey(d) === selectedDeal) ?? purposeDeals.find((d) => dealKey(d) === selectedDeal) ?? null) : null;
+  // A deal opened from the chat may not be on tonight's boards.
+  const deal = selectedDeal ? (dealsAll.find((d) => dealKey(d) === selectedDeal) ?? chatDeals.find((d) => dealKey(d) === selectedDeal) ?? null) : null;
   const dealOptions = useMemo(() => (deal ? dealsAll.filter((d) => d.dstCity === deal.dstCity).sort((a, b) => a.price - b.price).slice(0, 8) : []), [deal, dealsAll]);
 
   async function askAgent(question: string) {
@@ -844,6 +928,10 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
   // Everything we know about the selected city and country.
   const selected = selectedPlace ? places.find((x) => x.key === selectedPlace) : null;
   const target = useMemo(() => {
+    if (placePage) {
+      const c = placePage.code ? cities[placePage.code] : undefined;
+      return { code: placePage.code, name: placePage.name, lat: placePage.lat, lon: placePage.lon, country: placePage.country ?? c?.country, pop: c?.pop };
+    }
     if (selectedPlace === "here" && origin) {
       let code: string | null = null;
       let bestKm = 40;
@@ -867,7 +955,7 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
     }
     return null;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [view, deal, selected, cities, selectedPlace, origin]);
+  }, [view, deal, selected, cities, selectedPlace, origin, placePage]);
 
   const intel = useMemo<Intel | null>(() => {
     if (!target) return null;
@@ -930,7 +1018,7 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
     setSightsOnMap(false);
     setCombos({ status: "idle" });
     setSelectedCombo(null);
-    const name = deal?.city ?? (view !== "deals" ? target?.name : undefined);
+    const name = placePage?.name ?? deal?.city ?? (view !== "deals" ? target?.name : undefined);
     if (!name) return;
     const ctrl = new AbortController();
     fetch(`/api/sights?name=${encodeURIComponent(name)}`, { signal: ctrl.signal })
@@ -939,14 +1027,15 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
       .catch(() => {});
     return () => ctrl.abort();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [deal?.city, view !== "deals" ? target?.name : null]);
+  }, [placePage?.name, deal?.city, view !== "deals" ? target?.name : null]);
   // Rated places to eat and live hotel prices for the deal's city and dates.
   useEffect(() => {
     setEats(null);
     setHotels(null);
-    const c = deal ? dealCoord(deal) : view !== "deals" && target ? ([target.lon, target.lat] as [number, number]) : null;
+    const c = placePage ? ([placePage.lon, placePage.lat] as [number, number]) : deal ? dealCoord(deal) : view !== "deals" && target ? ([target.lon, target.lat] as [number, number]) : null;
     if (!c) return;
-    if (!deal) {
+    // A place page has no dates, so no hotel prices: eats only.
+    if (!deal || placePage) {
       const ctrl = new AbortController();
       fetch(`/api/eats?lat=${c[1].toFixed(4)}&lon=${c[0].toFixed(4)}`, { signal: ctrl.signal })
         .then((r) => (r.ok ? r.json() : null))
@@ -965,7 +1054,7 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
       .catch(() => {});
     return () => ctrl.abort();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [deal?.dstCity, deal?.out, deal?.back, view !== "deals" ? target?.code ?? target?.name : null]);
+  }, [placePage?.lat, placePage?.lon, deal?.dstCity, deal?.out, deal?.back, view !== "deals" ? target?.code ?? target?.name : null]);
   async function findCombosFor() {
     if (!deal) return;
     setCombos({ status: "loading" });
@@ -980,7 +1069,7 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
   }
   function showSights() {
     const map = mapRef.current;
-    const c = deal ? dealCoord(deal) : null;
+    const c = placePage ? ([placePage.lon, placePage.lat] as [number, number]) : deal ? dealCoord(deal) : target ? ([target.lon, target.lat] as [number, number]) : null;
     if (!map || !c) return;
     setSightsOnMap(true);
     map.flyTo({ center: c, zoom: 12.2, duration: 1800, padding: panelPadding() });
@@ -998,15 +1087,19 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
 
   // A wild trip: streamed progress, then the trip; stored ones come back whole.
   const wildCoord = useCallback((code: string): [number, number] | null => gwCoord(code) ?? (cities[code] ? [cities[code].lon, cities[code].lat] : null), [gwCoord, cities]);
-  async function buildWildTrip() {
+  // over: what the command line asked for ("/wild sea 21"), used at once rather than waiting
+  // for the state it also sets to land.
+  async function buildWildTrip(over?: { region?: string; countries?: string[]; nights?: number }) {
     if (!boardGateways.length || !gateways[0]) return;
     setWild({ status: "loading", lines: [] });
     setPlan({ status: "idle" });
     // The trip's identity (what /api/plan needs to find the same stored trip) and the extras
     // (where the visitor is) are kept apart: the plan is asked with the identity only.
-    const wf = tripsExtra.wild;
+    const wf = over?.countries ? { ...tripsExtra.wild, countries: over.countries } : tripsExtra.wild;
+    const region = over?.region ?? wildRegion;
+    const nights = over?.nights ?? wildNights;
     // Chosen countries replace the region ("custom"); the rest of the free-form fields ride along under the names the engine reads.
-    const query: WildQuery = { g: boardGateways.map((g) => g.iata).join(","), home: gateways[0].airport.country, region: wf.countries.length ? "custom" : wildRegion, nights: String(wildNights), style: wildStyle, budget: wildBudget, tradeoff: wildTradeoff, variants: String(wildVariants) };
+    const query: WildQuery = { g: boardGateways.map((g) => g.iata).join(","), home: gateways[0].airport.country, region: wf.countries.length ? "custom" : region, nights: String(nights), style: wildStyle, budget: wildBudget, tradeoff: wildTradeoff, variants: String(wildVariants) };
     if (wf.countries.length) query.countries = wf.countries.join(",");
     if (wf.mustInclude.length) query.mustInclude = wf.mustInclude.join(",");
     if (wf.maxHours) query.maxFlightHours = String(wf.maxHours);
@@ -1106,37 +1199,12 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
     setPlan({ status: "idle" });
     frameWild(next);
   }
-  // Events worth flying for in the next two months (or the picked month).
-  async function findPurpose() {
-    if (!boardGateways.length) return;
-    setPurpose({ status: "loading", trips: [] });
-    // Local days, so an evening visitor west of Greenwich is not asked for a window that starts tomorrow.
-    const from = month ? `${month}-01` : localIso(new Date(Date.now() + 3 * 86_400_000));
-    const to = month ? new Date(Date.UTC(Number(month.slice(0, 4)), Number(month.slice(5, 7)), 0)).toISOString().slice(0, 10) : localIso(new Date(Date.now() + 62 * 86_400_000));
-    // The chips and the visitor's own words go together: kinds=festival,jazz,surfing.
-    // A kind is one token to the route (letters and hyphens): "tango week" travels as "tango-week".
-    const typed = tripsExtra.purpose.kindsText.split(/[,;]+/).map((k) => k.trim().toLowerCase().replace(/[^a-z-]+/g, "-").replace(/^-+|-+$/g, "")).filter((k) => k.length >= 2);
-    const allKinds = [...new Set([...purposeKinds, ...typed])];
-    const kinds = allKinds.length ? `&kinds=${encodeURIComponent(allKinds.join(","))}` : "";
-    try {
-      const r = await fetch(`/api/purpose?g=${boardGateways.map((g) => g.iata).join(",")}&from=${from}&to=${to}&live=4${kinds}${excludeQ ? `&exclude=${excludeQ}` : ""}`);
-      const j = (await r.json()) as { trips?: PurposeTrip[]; note?: string; error?: string };
-      if (!r.ok || j.error) setPurpose({ status: "error", trips: [], note: j.error ?? `failed (${r.status})` });
-      else {
-        // The route's note says when live prices were refused, so unpriced events are explained.
-        setPurpose({ status: "ok", trips: j.trips ?? [], note: j.note });
-        frameDeals((j.trips ?? []).map((t) => t.deal).filter((d): d is Deal => !!d));
-      }
-    } catch {
-      setPurpose({ status: "error", trips: [], note: "network" });
-    }
-  }
   // The cheapest base for a month or more in the chosen region: GET /api/longstay.
-  async function findLongStay(q: LongStayQuery) {
+  async function findLongStay(q: LongStayQuery, region?: string) {
     if (!boardGateways.length || !gateways[0]) return;
     setLongStay({ status: "loading" });
     setSelectedBase(null);
-    const params = new URLSearchParams({ g: boardGateways.map((g) => g.iata).join(","), home: gateways[0].airport.country, region: wildRegion, months: String(q.months), budget: q.budget });
+    const params = new URLSearchParams({ g: boardGateways.map((g) => g.iata).join(","), home: gateways[0].airport.country, region: region ?? wildRegion, months: String(q.months), budget: q.budget });
     if (q.startMonth) params.set("startMonth", q.startMonth);
     if (q.countries?.length) params.set("countries", q.countries.join(","));
     // The route reads the "only these cities" pick as mustInclude (those become the only bases).
@@ -1256,50 +1324,68 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
     map.flyTo({ center: [lon, lat], zoom, duration: 1600, padding: panelPadding(), essential: true });
   }
 
-  // ---- A to B: GET /api/route streams {progress}, {option} lines and a final {done}.
-  const abOpen = view === "trips" && tripMode === "ab";
+  // ---- A to B: the route card. GET /api/route streams {progress}, {option} lines and a final {done}.
+  // The itinerary view and the open route card each take the globe for themselves: what is
+  // drawn underneath (deals, loops, bases) comes back when they close or fold.
+  const itinShowing = !!itin && !!itinShape;
+  const cardShown = routeCard.open && !routeCard.collapsed;
+  const abShowing = cardShown && !itinShowing;
+  const covered = itinShowing || abShowing;
+  function openRouteCard() {
+    // Read at once by panelPadding: the card covers the right of the map from this frame on.
+    if (!isPhone()) cardOpenRef.current = true;
+    // On a phone the card sits above the sheet: the sheet drops to a peek so card and route both show.
+    else if (sheetRef.current !== "peek") {
+      sheetRef.current = "peek";
+      setSheet("peek");
+    }
+    setRouteCard({ open: true, collapsed: false });
+  }
   function cancelRoute() {
     abCtrl.current?.abort();
     abCtrl.current = null;
     setAb((a) => (a.status === "loading" ? { ...a, status: a.options.length ? "ok" : "error", note: a.options.length ? undefined : "stopped" } : a));
   }
-  async function runRoute(form: RouteForm) {
+  const cheapestIndex = (r: RouteResult): number => Math.max(0, r.options.findIndex((o) => o === r.cheapest || (!!r.cheapest && optionKey(o) === optionKey(r.cheapest))));
+  /**
+   * One search at a budget (0: the fare memory and the timetables, no live search). A bigger
+   * budget on the question on show keeps its options in view while the extra searches run.
+   * Resolves to the result, or null when it failed or a newer search replaced it.
+   */
+  async function runRoute(form: RouteForm, budget: number): Promise<RouteResult | null> {
     abCtrl.current?.abort();
     const ctrl = new AbortController();
     abCtrl.current = ctrl;
-    setAb({ status: "loading", lines: [], options: [], query: form });
-    setAbSelected(null);
-    const params = new URLSearchParams({ from: form.from.trim(), to: form.to.trim(), depart: form.depart, flex: String(form.flex) });
-    if (form.oneWay) params.set("oneWay", "1");
-    else params.set("nights", String(form.nights));
-    if (form.maxHours) params.set("maxHours", String(form.maxHours));
-    if (excludeQ) params.set("exclude", excludeQ);
-    // A gentle budget by default: two clicks stay under Kiwi's burst throttle, which would shut every live tool for five minutes.
-    params.set("budget", String(form.harder ? ROUTE_BUDGET_HARDER : ROUTE_BUDGET));
+    const same = (a?: RouteForm) => !!a && a.from === form.from && a.to === form.to && a.depart === form.depart && a.nights === form.nights && a.oneWay === form.oneWay && a.flex === form.flex;
+    setAb((a) => ({ status: "loading", lines: [], options: budget > 0 && same(a.query) ? a.options : [], query: form, budget }));
+    if (!(budget > 0 && same(ab.query))) setAbSelected(null);
+    let out: RouteResult | null = null;
     const finish = (r: RouteResult) => {
-      setAb((a) => ({ ...a, status: "ok", lines: [], options: r.options.length ? r.options : a.options, result: r }));
+      out = r;
+      setAb((a) => ({ ...a, status: "ok", lines: [], options: r.options.length ? r.options : a.options, result: r, budget }));
       // The cheapest option is drawn at once; the visitor taps another to see it instead.
-      setAbSelected(r.options.length ? Math.max(0, r.options.findIndex((o) => o === r.cheapest || (r.cheapest && o.title === r.cheapest.title && o.total === r.cheapest.total))) : null);
+      setAbSelected(r.options.length ? cheapestIndex(r) : null);
       // A side the engine could not place has null coordinates; frame only the known ends, never null island.
       framePoints(routeEnds(r), 6);
     };
     try {
-      const r = await fetch(`/api/route?${params}`, { signal: ctrl.signal });
+      const r = await fetch(`/api/route?${routeParams({ from: form.from, to: form.to, depart: form.depart, flex: form.flex, nights: form.nights, oneWay: form.oneWay, maxHours: form.maxHours, exclude: excludeQ, budget })}`, { signal: ctrl.signal });
       if (!r.ok) {
         const j = await r.json().catch(() => ({}));
-        setAb({ status: "error", lines: [], options: [], note: j.error ?? `the route search failed (${r.status})`, query: form });
-        return;
+        setAb({ status: "error", lines: [], options: [], note: j.error ?? `the route search failed (${r.status})`, query: form, budget });
+        return null;
       }
       if (!r.headers.get("content-type")?.includes("ndjson")) {
         finish((await r.json()) as RouteResult);
-        return;
+        return out;
       }
       let finished = false;
       const ended = await readNdjson<{ progress?: string; option?: RouteOption; done?: RouteResult; error?: string }>(
         r,
         (msg) => {
           if (msg.progress) setAb((a) => ({ ...a, lines: [...a.lines, msg.progress!] }));
-          if (msg.option) setAb((a) => ({ ...a, options: [...a.options, msg.option!] }));
+          // An option already on show (a bigger budget re-streams the stored ones) is not listed twice.
+          if (msg.option) setAb((a) => (a.options.some((o) => optionKey(o) === optionKey(msg.option!)) ? a : { ...a, options: [...a.options, msg.option!] }));
           if (msg.done) {
             finished = true;
             finish(msg.done);
@@ -1313,42 +1399,80 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
       );
       if (ended && !finished) setAb((a) => ({ ...a, status: a.options.length ? "ok" : "error", note: a.options.length ? undefined : "the search stopped early; try again" }));
     } catch (err) {
-      if ((err as Error | undefined)?.name === "AbortError") return;
-      setAb({ status: "error", lines: [], options: [], note: "network", query: form });
+      if ((err as Error | undefined)?.name === "AbortError") return null;
+      setAb({ status: "error", lines: [], options: [], note: "network", query: form, budget });
     } finally {
       if (abCtrl.current === ctrl) abCtrl.current = null;
     }
+    return out;
   }
-  const runRouteRef = useRef(runRoute);
-  runRouteRef.current = runRoute;
+  /**
+   * A question for the card: the free answer first (about a second, no live search), the
+   * live search only when the visitor asks or when the free answer found nothing between two
+   * places the engine could place. budget given: exactly that.
+   */
+  async function searchRoute(form: RouteForm, budget?: number) {
+    openRouteCard();
+    setAbForm(form);
+    const b = budget ?? (form.harder ? ROUTE_BUDGET_HARDER : ROUTE_BUDGET_FREE);
+    const r = await runRoute(form, b);
+    if (budget === undefined && b === ROUTE_BUDGET_FREE && r && r.options.length === 0 && routeEndKnown(r.from) && routeEndKnown(r.to)) await runRoute(form, ROUTE_BUDGET);
+  }
+  /** An answer computed elsewhere (the chat, a Get there block), shown without a search. */
+  function showRouteResult(r: RouteResult, option?: number, q?: { from?: string; to?: string; depart?: string; nights?: number; oneWay?: boolean }) {
+    abCtrl.current?.abort();
+    const base = emptyRouteForm();
+    const firstDate = r.options.flatMap((o) => o.legs).find((l) => l.date)?.date?.slice(0, 10);
+    const form: RouteForm = { ...base, from: q?.from ?? r.from.label, to: q?.to ?? r.to.label, depart: q?.depart ?? firstDate ?? base.depart, nights: q?.nights ?? base.nights, oneWay: q?.oneWay ?? !r.options.some((o) => o.back?.length) };
+    setAbForm(form);
+    // A result with live searches behind it offers "Search harder" next; a free one "Search live".
+    setAb({ status: "ok", lines: [], options: r.options, result: r, query: form, budget: r.searched > 0 ? ROUTE_BUDGET : ROUTE_BUDGET_FREE });
+    setAbSelected(r.options.length ? (option != null && r.options[option] ? option : cheapestIndex(r)) : null);
+    openRouteCard();
+    framePoints(routeEnds(r), 6);
+  }
+  const searchRouteRef = useRef(searchRoute);
+  searchRouteRef.current = searchRoute;
+  const showRouteResultRef = useRef(showRouteResult);
+  showRouteResultRef.current = showRouteResult;
   // The traveller's place is the default "from", filled once the origin is known and the box is still empty.
   useEffect(() => {
     if (!origin || abForm.from) return;
     setAbForm((f) => (f.from ? f : { ...f, from: originAsPlace(origin) }));
   }, [origin, abForm.from]);
-  // The chat opens this mode with its own from, to and dates: window.dispatchEvent(new CustomEvent("atlas:route", { detail })).
+  // atlas:route asks the card to search (detail: from, to, depart, nights, flex, oneWay);
+  // atlas:route-result hands it an answer already computed (the chat), drawn without a fetch.
   useEffect(() => {
     const onRoute = (e: Event) => {
-      const d = (e as CustomEvent<{ from?: string; to?: string; depart?: string; nights?: number; oneWay?: boolean }>).detail ?? {};
+      const d = (e as CustomEvent<{ from?: string; to?: string; depart?: string; nights?: number; flex?: number; oneWay?: boolean }>).detail ?? {};
       if (!d.to) return;
       const base = emptyRouteForm();
       // The form as it is now (the ref), then the origin as a place the engine can resolve: "your location" is not one, its coordinates are.
       const o = originRef.current;
       const current = abFormRef.current;
-      const form: RouteForm = { ...current, from: d.from || current.from || (o ? originAsPlace(o) : ""), to: d.to, depart: d.depart && /^\d{4}-\d{2}-\d{2}$/.test(d.depart) ? d.depart : base.depart, nights: d.nights && d.nights > 0 ? d.nights : base.nights, oneWay: d.oneWay === true || d.nights === 0 };
-      setView("trips");
-      setTripMode("ab");
-      setAbForm(form);
-      if (form.from) void runRouteRef.current(form);
+      const form: RouteForm = { ...current, harder: false, from: d.from || current.from || (o ? originAsPlace(o) : ""), to: d.to, depart: d.depart && /^\d{4}-\d{2}-\d{2}$/.test(d.depart) ? d.depart : base.depart, nights: d.nights && d.nights > 0 ? d.nights : base.nights, flex: d.flex != null && d.flex >= 0 && d.flex <= 3 ? d.flex : base.flex, oneWay: d.oneWay === true || d.nights === 0 };
+      if (form.from) void searchRouteRef.current(form);
+      else {
+        setAbForm(form);
+        setRouteCard({ open: true, collapsed: false });
+      }
+    };
+    const onRouteResult = (e: Event) => {
+      const d = (e as CustomEvent<{ result?: RouteResult; option?: number }>).detail;
+      if (d?.result && Array.isArray(d.result.options)) showRouteResultRef.current(d.result, d.option);
     };
     window.addEventListener("atlas:route", onRoute);
-    return () => window.removeEventListener("atlas:route", onRoute);
+    window.addEventListener("atlas:route-result", onRouteResult);
+    return () => {
+      window.removeEventListener("atlas:route", onRoute);
+      window.removeEventListener("atlas:route-result", onRouteResult);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   // The option on show, as legs with coordinates: an airport by code, a city by code, the two
   // ends by the engine's own coordinates, a station by the coordinates the engine may attach;
   // a leg whose end is unknown continues from the last known point so the line never breaks.
-  const abOption: RouteOption | null = abOpen && abSelected != null ? (ab.options[abSelected] ?? null) : null;
+  const abOption: RouteOption | null = abShowing && abSelected != null ? (ab.options[abSelected] ?? null) : null;
   const abLegs = useMemo<RouteLeg[]>(() => {
     if (!abOption) return [];
     const r = ab.result;
@@ -1384,6 +1508,506 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
     }
     return pts;
   }, [abLegs]);
+
+  /** A point for an itinerary place: its own coordinates, else its code on the map (the converters leave 0,0 for the server to fill). */
+  const placeCoord = useCallback(
+    (pl: ItinPlace): [number, number] | null => {
+      if (Number.isFinite(pl.lat) && Number.isFinite(pl.lon) && !(pl.lat === 0 && pl.lon === 0)) return [pl.lon, pl.lat];
+      return pl.code ? wildCoord(pl.code) : null;
+    },
+    [wildCoord],
+  );
+  // ---- The itinerary on the globe: its stops numbered, flights as arcs, ground as lines.
+  // Every point goes through placeCoord: a place the converters left at 0,0 is found by its
+  // code, and one nobody can place is left out rather than drawn at null island (the server's
+  // normalised skeleton replaces the shape when it arrives; a refused plan never does).
+  const itinRoute = useMemo<{ stops: WildStop[]; legs: RouteLeg[]; home: [number, number] | null } | null>(() => {
+    if (!itinShowing || !itinShape) return null;
+    const stops: WildStop[] = [];
+    for (const st of itinShape.stops) {
+      const c = placeCoord(st);
+      if (c) stops.push({ code: st.code ?? st.name, name: st.name, country: st.country ?? "", lat: c[1], lon: c[0], arrive: st.arrive, depart: st.leave, nights: st.nights, perDay: 0 });
+    }
+    const legs: RouteLeg[] = [];
+    for (const l of itinShape.legs as ItinLeg[]) {
+      const from = placeCoord(l.from);
+      const to = placeCoord(l.to);
+      if (from && to) legs.push({ from, to, kind: l.kind === "fly" ? "fly" : "ground" });
+    }
+    return { stops, legs, home: itinShape.origin ? placeCoord(itinShape.origin) : null };
+  }, [itinShowing, itinShape, placeCoord]);
+  const itinPoints = useMemo<[number, number][]>(() => (itinRoute ? itinRoute.stops.map((st) => [st.lon, st.lat] as [number, number]) : []), [itinRoute]);
+  // The legs and points the overlay layers draw: the itinerary's, else the route card's.
+  const overlayLegs = itinRoute ? itinRoute.legs : abLegs;
+  const overlayPoints = itinRoute ? itinPoints : abPoints;
+
+  // ---- Where the traveller is, as the capabilities need it: a place /api/route resolves
+  // (a city name when one is close, else the coordinates) and an itinerary's origin.
+  const homeCity = useMemo<{ code: string; city: City } | null>(() => {
+    if (!origin) return null;
+    let best: { code: string; city: City } | null = null;
+    let bestKm = 30;
+    for (const [code, c] of Object.entries(cities)) {
+      if (Math.abs(c.lat - origin.lat) > 0.5) continue;
+      const km = haversineKm(origin.lat, origin.lon, c.lat, c.lon);
+      if (km < bestKm) {
+        bestKm = km;
+        best = { code, city: c };
+      }
+    }
+    return best;
+  }, [origin, cities]);
+  const fromPlace = origin ? (homeCity ? homeCity.city.name : originAsPlace(origin)) : "";
+  const originPlace = useMemo<ItinPlace | undefined>(() => (origin ? { name: homeCity?.city.name ?? origin.label, ...(homeCity ? { code: homeCity.code, country: homeCity.city.country } : {}), lat: origin.lat, lon: origin.lon } : undefined), [origin, homeCity]);
+
+  // ---- What reaching each event costs: one /api/purpose call per gateway set with live=0 (the
+  // stored boards only, zero Kiwi searches), so the Events list, the event card, "Worth flying
+  // for here" and event itineraries carry a fare wherever one is known.
+  const yearOut = useMemo(() => localIso(new Date(Date.now() + 365 * 86_400_000)), []);
+  const fareGateways = boardGateways.map((g) => g.iata).slice(0, 4).join(",");
+  const [eventFares, setEventFares] = useState<Map<string, { start: string; end: string; deal: Deal }[]>>(() => new Map());
+  useEffect(() => {
+    if (!fareGateways) return;
+    const ctrl = new AbortController();
+    const q = new URLSearchParams({ g: fareGateways, from: todayIso(), to: yearOut, live: "0" });
+    if (excludeQ) q.set("exclude", excludeQ);
+    fetch(`/api/purpose?${q}`, { signal: ctrl.signal })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j: { trips?: { event: { name: string; start: string; end: string }; deal: Deal | null }[] } | null) => {
+        const m = new Map<string, { start: string; end: string; deal: Deal }[]>();
+        for (const t of j?.trips ?? []) if (t.deal) m.set(t.event.name, [...(m.get(t.event.name) ?? []), { start: t.event.start, end: t.event.end, deal: t.deal }]);
+        setEventFares(m);
+      })
+      .catch(() => {});
+    return () => ctrl.abort();
+  }, [fareGateways, excludeQ, yearOut]);
+  /** The event with its stored fare: the same edition first, else a fare whose dates overlap it; never a fare already gone. */
+  const withFare = useCallback(
+    (e: EventSpot): EventSpot => {
+      const tomorrow = localIso(new Date(Date.now() + 86_400_000));
+      const list = (eventFares.get(e.name) ?? []).filter((x) => x.deal.out >= tomorrow);
+      const hit = list.find((x) => x.start === e.start) ?? list.find((x) => x.deal.out <= e.end && x.deal.back >= e.start);
+      return hit ? { ...e, deal: hit.deal } : e;
+    },
+    [eventFares],
+  );
+  // The stored boards rarely reach months ahead, so most events start unpriced. "Price the
+  // nearest live" on the list spends up to four Kiwi searches (the old Purpose mode's budget)
+  // on the nearest events in the window without a fare, and merges what it finds.
+  const [faresLive, setFaresLive] = useState<{ status: "idle" | "loading" | "done"; searched?: number; note?: string }>({ status: "idle" });
+
+  // ---- Events worth flying for, as a layer: the When window (or the next four months), the
+  // Been rules applied, optional words ("jazz") and a country from the command line.
+  const evWindow = useMemo(() => {
+    if (evLayer.from && evLayer.to) return { from: evLayer.from, to: evLayer.to };
+    if (month) return { from: `${month}-01`, to: new Date(Date.UTC(Number(month.slice(0, 4)), Number(month.slice(5, 7)), 0)).toISOString().slice(0, 10) };
+    return { from: todayIso(), to: localIso(new Date(Date.now() + 120 * 86_400_000)) };
+  }, [evLayer.from, evLayer.to, month]);
+  const eventSpots = useMemo<EventSpot[]>(() => {
+    if (!evLayer.on) return [];
+    // Every word must match (AND): "jazz festivals" is a jazz festival, not every festival.
+    // A kind word ("festivals", "music") matches the event's kind or its name; any other word
+    // matches its name, city, kind or why. Each word is tried as typed and without a plural s.
+    const words = (evLayer.words ?? []).map(foldName).filter((w) => w.length >= 2).map((w) => [w, w.replace(/s$/, "")]);
+    const isKind = (ws: string[]) => ws.some((w) => EVENT_KINDS.has(w));
+    const matches = (e: EventSpot, ws: string[]) => {
+      const fields = isKind(ws) ? [e.name, e.kind] : [e.name, e.cityName, e.kind, e.why ?? ""];
+      return ws.some((w) => fields.some((f) => foldName(f).includes(w)));
+    };
+    const seen = new Set<string>();
+    return (eventsInWindow(evWindow.from, evWindow.to) as unknown as RawEvent[])
+      .map((e) => toEventSpot(e, cities))
+      .filter((e): e is EventSpot => !!e && countryAllowed(e.country, exclude) && (!evLayer.country || e.country === evLayer.country))
+      .filter((e) => words.every((ws) => matches(e, ws)))
+      .filter((e) => (seen.has(e.key) ? false : (seen.add(e.key), true)))
+      .map(withFare)
+      .sort((a, b) => a.start.localeCompare(b.start));
+  }, [evLayer.on, evLayer.words, evLayer.country, evWindow, cities, exclude, withFare]);
+  useEffect(() => setFaresLive({ status: "idle" }), [evWindow.from, evWindow.to, fareGateways]);
+  async function priceEventsLive() {
+    if (!fareGateways || faresLive.status === "loading") return;
+    setFaresLive({ status: "loading" });
+    const q = new URLSearchParams({ g: fareGateways, from: evWindow.from, to: evWindow.to, live: "4" });
+    if (evLayer.words?.length) q.set("kinds", evLayer.words.join(","));
+    if (excludeQ) q.set("exclude", excludeQ);
+    try {
+      const r = await fetch(`/api/purpose?${q}`);
+      const j = (await r.json().catch(() => ({}))) as { trips?: { event: { name: string; start: string; end: string }; deal: Deal | null }[]; searched?: number; note?: string; error?: string };
+      if (!r.ok) {
+        setFaresLive({ status: "done", note: j.error ?? `the pricing failed (${r.status})` });
+        return;
+      }
+      setEventFares((m) => {
+        const next = new Map(m);
+        for (const t of j.trips ?? []) {
+          if (!t.deal) continue;
+          const list = next.get(t.event.name) ?? [];
+          if (!list.some((x) => x.start === t.event.start)) next.set(t.event.name, [...list, { start: t.event.start, end: t.event.end, deal: t.deal }]);
+        }
+        return next;
+      });
+      setFaresLive({ status: "done", searched: j.searched ?? 0, note: j.note });
+    } catch {
+      setFaresLive({ status: "done", note: "Could not reach the event pricing." });
+    }
+  }
+  function selectEvent(e: EventSpot) {
+    setEventSel(e);
+    if (!isPhone()) cardOpenRef.current = true;
+    else {
+      if (sheetRef.current !== "peek") {
+        sheetRef.current = "peek";
+        setSheet("peek");
+      }
+      setRouteCard((c) => (c.open ? { open: true, collapsed: true } : c));
+    }
+    spinRef.current = false;
+    revealMap();
+    mapRef.current?.flyTo({ center: [e.lon, e.lat], zoom: Math.max(4.2, Math.min(5.5, mapRef.current.getZoom() + 1)), duration: 1400, padding: panelPadding() });
+  }
+  function toggleEvents() {
+    if (evLayer.on) {
+      setEvLayer({ on: false, from: "", to: "", list: false });
+      setEventSel(null);
+      return;
+    }
+    setEvLayer({ on: true, from: "", to: "", list: true });
+    // A phone has room for one card above the sheet: the route card folds while the events show.
+    if (isPhone()) {
+      if (routeCard.open) setRouteCard({ open: true, collapsed: true });
+      // The markers are the point: the sheet drops to a peek so the globe shows.
+      sheetRef.current = "peek";
+      setSheet("peek");
+    }
+    spinRef.current = false;
+    mapRef.current?.flyTo({ center: [origin?.lon ?? 20, Math.max(-20, Math.min(45, origin?.lat ?? 30))], zoom: isPhone() ? 1.1 : 1.5, duration: 1500, essential: true });
+  }
+  // A deal's badge and a place's list read the curated table in the browser: no fetch.
+  const eventCache = useMemo(() => new Map<string, EventSpot | null>(), [exclude, cities]); // eslint-disable-line react-hooks/exhaustive-deps
+  const eventOf = useCallback(
+    (d: Deal): EventSpot | null => {
+      const k = `${d.dstCity}|${d.out}|${d.back}`;
+      if (!eventCache.has(k)) eventCache.set(k, d.out && d.back ? (eventsHere({ code: d.dstCity }, d.out, d.back, exclude, cities)[0] ?? null) : null);
+      return eventCache.get(k) ?? null;
+    },
+    [eventCache, exclude, cities],
+  );
+  const eventsAtPlace = useCallback((q: { code?: string; country?: string; lat: number; lon: number }) => eventsHere({ code: q.code, country: q.country, lat: q.lat || undefined, lon: q.lon || undefined, km: 60 }, todayIso(), yearOut, exclude, cities).map(withFare), [yearOut, exclude, cities, withFare]);
+
+  // ---- Place pages from anywhere: atlas:place {name?, code?}, the command line, an event's city.
+  function openPlace(q: { name?: string; code?: string }) {
+    const code = q.code?.trim().toUpperCase();
+    let hit: { code?: string; name: string; country?: string; lat: number; lon: number } | null = null;
+    if (code && cities[code]) hit = { code, ...cities[code] };
+    if (!hit && q.name) {
+      const n = foldName(q.name);
+      let bestPop = -1;
+      for (const [k, c] of Object.entries(cities)) {
+        const f = foldName(c.name);
+        const score = f === n ? 2 : f.startsWith(n) && n.length >= 3 ? 1 : 0;
+        if (!score) continue;
+        const rank = score * 1e9 + (c.pop ?? 0);
+        if (rank > bestPop) {
+          bestPop = rank;
+          hit = { code: k, ...c };
+        }
+      }
+    }
+    if (!hit) {
+      const a = code ? byIata.get(code) : q.name ? airports.find((x) => foldName(x.city ?? "") === foldName(q.name!)) : undefined;
+      if (a) hit = { code: cityOf.get(a.iata), name: a.city ?? a.name, country: a.country, lat: a.lat, lon: a.lon };
+    }
+    if (!hit) {
+      setNotice(`No place called "${q.name ?? q.code}" on the map yet. Try the nearest city.`);
+      return;
+    }
+    setPlacePage({ name: hit.name, code: hit.code, country: hit.country, lat: hit.lat, lon: hit.lon });
+    setSightsOnMap(false);
+    if (isPhone() && sheetRef.current === "peek") setSheet("half");
+    spinRef.current = false;
+    revealMap();
+    mapRef.current?.flyTo({ center: [hit.lon, hit.lat], zoom: 5.5, duration: 1500, padding: panelPadding() });
+  }
+  const openPlaceRef = useRef(openPlace);
+  openPlaceRef.current = openPlace;
+
+  // ---- Itineraries: every result can become one; the view sits in front of the panel.
+  function frameShape(sh: Skeleton | Itin) {
+    const pts = sh.stops.map(placeCoord).filter((c): c is [number, number] => !!c);
+    const home = placeCoord(sh.origin);
+    if (home && pts.length && sh.stops.length < 6) pts.push(home);
+    framePoints(pts, 6);
+  }
+  function openItinerary(o0: Omit<ItinOpen, "n">) {
+    // The planner writes at most 60 days: a longer stay or loop is planned for its first four
+    // weeks (the title says so) rather than sent and refused.
+    const o = o0.skeleton && !o0.itinerary ? { ...o0, skeleton: firstWeeks(o0.skeleton) } : o0;
+    const sh = o.itinerary ?? o.skeleton;
+    if (!sh) return;
+    stopPlay();
+    setItin({ ...o, n: Date.now() });
+    setItinShape(sh);
+    if (isPhone()) setSheet("half");
+    frameShape(sh);
+  }
+  function closeItinerary() {
+    stopPlay();
+    setItin(null);
+    setItinShape(null);
+  }
+  const openItineraryRef = useRef(openItinerary);
+  openItineraryRef.current = openItinerary;
+  /**
+   * A route answer as an itinerary: ground-only legs carry no dates, so a skeleton built from
+   * one can come back undated; the question's own day and nights fill it in.
+   */
+  function routeSkeleton(r: RouteResult, k: number): Skeleton {
+    const sk = skeletonFromRoute(r, k);
+    const q = ab.query ?? abForm;
+    if (/^\d{4}-\d{2}-\d{2}$/.test(sk.start) || !sk.stops.length || !q.depart) return sk;
+    const leave = q.oneWay ? q.depart : addDays(q.depart, q.nights);
+    const nights = q.oneWay ? 0 : q.nights;
+    const stops = sk.stops.map((st, i) => (i === 0 ? { ...st, arrive: q.depart, leave, nights } : st));
+    // Dated by position: every leg before the first one leaving the stop is the way out (a
+    // train then a coach both run on the first day); that leg and the rest are the way back.
+    const dest = sk.stops[0];
+    const firstBack = sk.legs.findIndex((l) => sameSpot(l.from, dest));
+    const legs = sk.legs.map((l, i) => (l.date ? l : { ...l, date: firstBack < 0 || i < firstBack ? q.depart : leave }));
+    return { ...sk, start: q.depart, end: leave, nights, stops, legs };
+  }
+  function eventSkeleton(e: EventSpot): Skeleton {
+    // An event already running is planned from tomorrow, never from its first day (gone by
+    // now): the converter arrives the day before a short event and on the first day of a long
+    // one, so `from` is set to make that arrival tomorrow. The stored fare goes along only
+    // when it leaves after today.
+    const tomorrow = localIso(new Date(Date.now() + 86_400_000));
+    const from = e.start >= tomorrow ? e.start : daysBetween(tomorrow, e.end) > 5 ? tomorrow : addDays(tomorrow, 1);
+    const to = e.end < from ? from : e.end;
+    const deal = e.deal && e.deal.out >= tomorrow ? e.deal : null;
+    return skeletonFromEvent({ name: e.name, city: e.cityName, country: e.country, lat: e.lat, lon: e.lon, from, to, deal }, originPlace);
+  }
+  /** A few nights at a place page's city, two weeks out (or the start of the When month, when that is later). */
+  function placeSkeleton(pl: { name: string; code?: string; country?: string; lat: number; lon: number }, nights = 3): Skeleton | null {
+    const home = originPlace;
+    if (!home) return null;
+    const soon = localIso(new Date(Date.now() + 14 * 86_400_000));
+    const start = month && `${month}-01` > soon ? `${month}-01` : soon;
+    const here: ItinPlace = { name: pl.name, ...(pl.code ? { code: pl.code } : {}), ...(pl.country ? { country: pl.country } : {}), lat: pl.lat, lon: pl.lon };
+    return chainSkeleton(home, [{ pl: here, nights }], start);
+  }
+  /** The skeleton of whatever result is on show, for "/itinerary": the open place page, event, route, deal or trip. */
+  function shownSkeleton(): Skeleton | null {
+    // The place page sits in front of everything else in the panel, so it is what the traveller is looking at.
+    if (placePage) return placeSkeleton(placePage);
+    if (eventSel) return eventSkeleton(eventSel);
+    if (cardShown && ab.result && abSelected != null) {
+      const o = ab.options[abSelected];
+      const k = o ? ab.result.options.findIndex((x) => optionKey(x) === optionKey(o)) : -1;
+      if (k >= 0) return routeSkeleton(ab.result, k);
+    }
+    if (view === "deals" && deal) return skeletonFromDeal(deal, originPlace);
+    if (view === "trips") {
+      if (tripMode === "short" && trip) return skeletonFromTrip(trip, originPlace);
+      if (tripMode === "wild" && wild.trip) return skeletonFromWild(wild.trip);
+      const base = tripMode === "longstay" && selectedBase ? longStay.result?.bases.find((b) => b.code === selectedBase) : undefined;
+      if (base) return skeletonFromLongStay(base, originPlace);
+      const opt = tripMode === "group" && selectedOption != null ? group.result?.options[selectedOption] : undefined;
+      if (opt) return skeletonFromGroup(opt, 0);
+    }
+    if (view === "chat" && chatTrip) return skeletonFromWild(chatTrip);
+    return null;
+  }
+  /** "itinerary Lisbon 3 nights, Porto 2 nights from 14 Nov": the stops placed through the city table, legs unpriced (the itinerary prices what it can). */
+  function customSkeleton(stops: { place: string; nights: number }[], start?: string, from?: string): Skeleton | null {
+    const find = (name: string): ItinPlace | null => {
+      const n = foldName(name);
+      let best: ItinPlace | null = null;
+      let pop = -1;
+      for (const [code, c] of Object.entries(cities)) {
+        if (foldName(c.name) !== n) continue;
+        if ((c.pop ?? 0) > pop) {
+          pop = c.pop ?? 0;
+          best = { name: c.name, code, country: c.country, lat: c.lat, lon: c.lon };
+        }
+      }
+      return best;
+    };
+    const home = (from ? find(from) : null) ?? originPlace;
+    if (!home) return null;
+    const found = stops.map((st) => ({ pl: find(st.place), nights: st.nights })).filter((x): x is { pl: ItinPlace; nights: number } => !!x.pl);
+    return chainSkeleton(home, found, start && /^\d{4}-\d{2}-\d{2}$/.test(start) ? start : localIso(new Date(Date.now() + 14 * 86_400_000)));
+  }
+  /** Placed stops in order from home and back, legs unpriced: a flight past 600 km, else a train. */
+  function chainSkeleton(home: ItinPlace, stops: { pl: ItinPlace; nights: number }[], start: string): Skeleton | null {
+    let day = start;
+    const placed: Skeleton["stops"] = [];
+    for (const st of stops) {
+      const leave = addDays(day, Math.max(1, st.nights));
+      placed.push({ ...st.pl, arrive: day, leave, nights: Math.max(1, st.nights) });
+      day = leave;
+    }
+    if (!placed.length) return null;
+    const chain: ItinPlace[] = [home, ...placed, home];
+    const legs: ItinLeg[] = chain.slice(1).map((to, i) => {
+      const from = chain[i];
+      const km = haversineKm(from.lat, from.lon, to.lat, to.lon);
+      return { kind: km > 600 ? "fly" : "train", from, to, date: i === 0 ? placed[0].arrive : placed[Math.min(i, placed.length) - 1].leave, price: null, note: "not priced yet" };
+    });
+    const nights = placed.reduce((t, x) => t + x.nights, 0);
+    return { title: placed.map((x) => x.name).join(", "), subtitle: `${nights} nights from ${home.name}`, origin: home, start: placed[0].arrive, end: placed[placed.length - 1].leave, nights, stops: placed, legs, source: "custom" };
+  }
+  // Anyone may open the itinerary view: window.dispatchEvent(new CustomEvent("atlas:itinerary", { detail: { skeleton } })).
+  useEffect(() => {
+    const onItin = (e: Event) => {
+      const d = (e as CustomEvent<Omit<ItinOpen, "n">>).detail;
+      if (d && (d.skeleton || d.itinerary)) openItineraryRef.current(d);
+    };
+    const onPlaceEv = (e: Event) => {
+      const d = (e as CustomEvent<{ name?: string; code?: string }>).detail;
+      if (d && (d.name || d.code)) openPlaceRef.current(d);
+    };
+    window.addEventListener("atlas:itinerary", onItin);
+    window.addEventListener("atlas:place", onPlaceEv);
+    return () => {
+      window.removeEventListener("atlas:itinerary", onItin);
+      window.removeEventListener("atlas:place", onPlaceEv);
+    };
+  }, []);
+
+  // ---- The command line: every command lands here, from the top bar or an atlas:command event.
+  const countryIdx = useMemo(() => countryIndexOf(countries), [countries]);
+  /** Country words or codes to ISO2, through the same index the Trips forms use. */
+  const countryCodes = (words: string[]): string[] => resolveCountries(words.join(","), countryIdx.index, countryIdx.known).codes;
+  /** Close what sits in front of the tabs, so a command that runs in a tab shows its result. */
+  function clearFront() {
+    if (itin) closeItinerary();
+    setPlacePage(null);
+  }
+  function runCommand(c: Command) {
+    switch (c.kind) {
+      case "route": {
+        const base = emptyRouteForm();
+        const o = originRef.current;
+        const form: RouteForm = { ...base, from: c.from?.trim() || fromPlace || (o ? originAsPlace(o) : abFormRef.current.from), to: (c.to ?? "").trim(), depart: c.depart && /^\d{4}-\d{2}-\d{2}$/.test(c.depart) ? c.depart : base.depart, nights: c.nights && c.nights > 0 ? c.nights : base.nights, oneWay: !!c.oneWay, flex: c.flex != null && c.flex >= 0 && c.flex <= 3 ? c.flex : base.flex };
+        // "/route" alone names no destination: open the card on its empty form (idle shows the
+        // edit row) instead of sending a search the route API refuses.
+        if (!form.to) {
+          abCtrl.current?.abort();
+          abCtrl.current = null;
+          setAb({ status: "idle", lines: [], options: [] });
+          setAbSelected(null);
+          setAbForm(form);
+          openRouteCard();
+          return;
+        }
+        void searchRoute(form);
+        return;
+      }
+      case "events": {
+        const where = c.where?.trim();
+        const country = where ? countryCodes([where])[0] : undefined;
+        const words = [...(c.words ?? []), ...(where && !country ? [where] : [])];
+        setEvLayer({ on: true, from: c.from ?? "", to: c.to ?? (c.from ? localIso(new Date(Date.parse(c.from) + 30 * 86_400_000)) : ""), words: words.length ? words : undefined, country, list: true });
+        setEventSel(null);
+        if (!isPhone()) cardOpenRef.current = true;
+        spinRef.current = false;
+        mapRef.current?.flyTo({ center: [origin?.lon ?? 20, Math.max(-20, Math.min(45, origin?.lat ?? 30))], zoom: isPhone() ? 1.1 : 1.5, duration: 1500, essential: true });
+        return;
+      }
+      case "getaways": {
+        clearFront();
+        setView("deals");
+        const from = c.from ?? localIso(new Date(Date.now() + 86_400_000));
+        // The finder's window holds the whole trip (out and back inside it). A window of three
+        // days or less is a weekend: it may come back on the Monday, one to three nights.
+        // Any other window caps the nights at its length, so a trip never runs past it.
+        const short = !!c.to && daysBetween(from, c.to) <= 2;
+        const to = c.to ? (short ? addDays(c.to, 1) : c.to) : addDays(from, 21);
+        const span = Math.max(1, daysBetween(from, to));
+        const maxNights = Math.max(1, Math.min(span, c.maxNights ?? (short ? 3 : 5)));
+        const minNights = Math.max(1, Math.min(maxNights, c.minNights ?? (short ? 1 : 2)));
+        void runFinder({ origins: boardGateways.map((g) => g.iata), from, to, minNights, maxNights, direct: false, maxHours: c.maxHours, where: c.where?.trim() || "anywhere", returnTo: [], tricks: false });
+        return;
+      }
+      case "wild": {
+        clearFront();
+        setView("trips");
+        setTripMode("wild");
+        const rk = regionKey(c.region);
+        const codes = c.countries?.length ? countryCodes(c.countries) : c.region && !rk ? countryCodes([c.region]) : [];
+        const nights = c.nights ? Math.max(5, Math.min(90, c.nights)) : undefined;
+        if (rk) setWildRegion(rk);
+        if (nights) setWildNights(nights);
+        setTripsExtra((x) => ({ ...x, wild: { ...x.wild, countries: codes } }));
+        if (rk || codes.length) void buildWildTrip({ region: rk ?? undefined, countries: codes, nights });
+        else setNotice("Pick a region on the globe, or name the countries, then build the loop.");
+        return;
+      }
+      case "longstay": {
+        clearFront();
+        setView("trips");
+        setTripMode("longstay");
+        const rk = regionKey(c.region);
+        const codes = c.countries?.length ? countryCodes(c.countries) : c.region && !rk ? countryCodes([c.region]) : [];
+        const months = c.months ? Math.max(1, Math.min(6, Math.round(c.months))) : longStayForm.months;
+        if (rk) setWildRegion(rk);
+        setLongStayForm((f) => ({ ...f, months, countries: codes.join(", ") }));
+        if (rk || codes.length) void findLongStay({ months, budget: longStayForm.budget, countries: codes, startMonth: (longStayForm.start ?? month) || undefined }, rk ?? undefined);
+        else setNotice("Pick a region on the globe, or name the countries, then find the base.");
+        return;
+      }
+      case "place":
+        if (itin) closeItinerary();
+        openPlace({ name: c.name });
+        return;
+      case "itinerary": {
+        const sk = c.stops?.length ? customSkeleton(c.stops, c.start, c.from) : shownSkeleton();
+        if (sk) openItinerary({ skeleton: sk });
+        else setNotice(c.stops?.length ? "None of those places is on the map; try the city names." : "Nothing on show to plan yet: open a deal, a route, a loop or an event first, or type the stops (itinerary Lisbon 3 nights).");
+        return;
+      }
+      case "ask":
+        clearFront();
+        setView("chat");
+        setChatSeed(c.text);
+        return;
+    }
+  }
+  const runCommandRef = useRef(runCommand);
+  runCommandRef.current = runCommand;
+  // Anyone may run a command line: window.dispatchEvent(new CustomEvent("atlas:command", { detail: { text } })).
+  useEffect(() => {
+    const onCommand = (e: Event) => {
+      const text = (e as CustomEvent<{ text?: string }>).detail?.text?.trim();
+      if (!text) return;
+      const best = parseCommand(text, todayIso())[0];
+      if (best) runCommandRef.current(best);
+    };
+    window.addEventListener("atlas:command", onCommand);
+    return () => window.removeEventListener("atlas:command", onCommand);
+  }, []);
+
+  // The capabilities the panel places on its pages (Get there, events, Make an itinerary).
+  const caps: Capabilities = {
+    fromPlace,
+    excludeQ,
+    originPlace,
+    onOpenRoute: (q, r) => {
+      if (r && r.options.length) showRouteResult(r, undefined, q);
+      else {
+        const base = emptyRouteForm();
+        void searchRoute({ ...base, from: q.from, to: q.to, depart: q.depart ?? base.depart, nights: q.nights ?? base.nights, oneWay: !!q.oneWay }, ROUTE_BUDGET_FREE);
+      }
+    },
+    onEvent: (e) => {
+      setEvLayer((l) => ({ ...l, on: true }));
+      selectEvent(e);
+    },
+    onItinerary: (sk) => openItinerary({ skeleton: sk }),
+    placeSkeleton: (pl) => placeSkeleton(pl),
+    eventOf,
+    eventsAtPlace,
+  };
 
   const homeHolidays = useMemo(() => {
     const home = gateways[0]?.airport.country;
@@ -1431,6 +2055,10 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
   // The trip the globe draws and plays: the wild loop, the chat's loop or the short loop, as
   // stops and legs in one shape, plus the home point its route leaves from and returns to.
   const route = useMemo<{ stops: WildStop[]; legs: WildLeg[]; home: [number, number] | null } | null>(() => {
+    // The itinerary on show is the route (its legs are drawn from coordinates, routeLegs below);
+    // the open route card hides the trips underneath until it is folded or closed.
+    if (itinRoute) return { stops: itinRoute.stops, legs: [], home: itinRoute.home };
+    if (covered) return null;
     const wt = wildOpen ? wild.trip : view === "chat" && chatTrip && !chatDeals.length ? chatTrip : null;
     if (wt) return { stops: wt.stops, legs: wt.legs, home: wildCoord(wt.home) };
     if (trip) {
@@ -1439,13 +2067,14 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
       return { ...r, home: first?.kind === "fly" ? wildCoord(first.from) : origin ? [origin.lon, origin.lat] : null };
     }
     return null;
-  }, [wildOpen, wild.trip, view, chatTrip, chatDeals.length, trip, wildCoord, homeLabel, origin]);
+  }, [itinRoute, covered, wildOpen, wild.trip, view, chatTrip, chatDeals.length, trip, wildCoord, homeLabel, origin]);
   // Legs on the globe, coordinates resolved: a leg to the front door ends at the visitor.
   const routeLegs = useMemo<RouteLeg[]>(() => {
+    if (itinRoute) return itinRoute.legs;
     if (!route) return [];
     const at = (code: string): [number, number] | null => wildCoord(code) ?? (origin && code === origin.label ? [origin.lon, origin.lat] : null);
     return route.legs.map((l) => ({ from: at(l.from), to: at(l.to), kind: l.kind })).filter((x): x is RouteLeg => !!x.from && !!x.to);
-  }, [route, wildCoord, origin]);
+  }, [itinRoute, route, wildCoord, origin]);
 
   // Play the route: the camera flies home, then to each stop in turn, then home, 2.5 s a hop;
   // any touch of the globe stops it.
@@ -1558,9 +2187,11 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
     if (view === "chat") setSheet("full");
     else if ((wildOpen && wild.status === "ok") || (shortOpen && selectedTrip)) setSheet("half");
   }, [view, wildOpen, wild.status, shortOpen, selectedTrip]);
-  useEffect(() => stopPlay, [view, tripMode, selectedTrip, wild.trip]); // eslint-disable-line react-hooks/exhaustive-deps
+  // The cards on the map cover its right edge on desktop: framing keeps clear of them.
+  cardOpenRef.current = !isPhone() && (cardShown || !!eventSel || (evLayer.on && evLayer.list));
+  useEffect(() => stopPlay, [view, tripMode, selectedTrip, wild.trip, itin?.n]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const busy = searching || asking || wild.status === "loading" || ab.status === "loading" || finder.status === "loading" || longStay.status === "loading" || group.status === "loading" || purpose.status === "loading" || plan.status === "loading" || liveSearch?.status === "loading" || combos.status === "loading" || (shortOpen && !trips);
+  const busy = searching || asking || wild.status === "loading" || ab.status === "loading" || finder.status === "loading" || longStay.status === "loading" || group.status === "loading" || plan.status === "loading" || liveSearch?.status === "loading" || combos.status === "loading" || (shortOpen && !trips);
 
   const pathForSelected = useMemo<[number, number][]>(() => {
     if (!reach || selectedStation == null) return [];
@@ -1585,7 +2216,7 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
     // Region tags: while choosing where a loop or a long stay goes, or when the chat asks.
     // They come after the stops and bases so a result always wins the space.
     const regions: LabelItem[] = [];
-    const picking = (view === "trips" && (tripMode === "wild" || tripMode === "longstay")) || pick === "region";
+    const picking = (!covered && view === "trips" && (tripMode === "wild" || tripMode === "longstay")) || pick === "region";
     const showingResult = !!route || (view === "trips" && tripMode === "longstay" && longStay.status === "ok");
     if (picking) {
       for (const r of WILD_REGIONS) {
@@ -1593,18 +2224,25 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
         regions.push({ key: `region:${r.key}`, lon: c[1], lat: c[0], text: r.label, kind: "region", hot: r.key === wildRegion && !showingResult });
       }
     }
-    if (abOpen && ab.result) {
+    // The events layer's tags come right after a route's own tags, before everything else.
+    const evs: LabelItem[] = eventSpots.map((e) => ({ key: `event:${e.key}`, lon: e.lon, lat: e.lat, text: e.name, sub: dateRange(e.start, e.end), kind: "event" as const, hot: eventSel?.key === e.key }));
+    // The place page's city gets its own tag, so the page and the globe point at the same spot.
+    if (placePage && !itinShowing) evs.unshift({ key: "place:open", lon: placePage.lon, lat: placePage.lat, text: placePage.name, kind: "base", hot: true });
+    if (eventSel && !eventSpots.some((e) => e.key === eventSel.key)) evs.unshift({ key: `event:${eventSel.key}`, lon: eventSel.lon, lat: eventSel.lat, text: eventSel.name, sub: dateRange(eventSel.start, eventSel.end), kind: "event", hot: true });
+    if (abShowing && ab.result) {
       // A side the engine could not place (placed: false, borrowed or null coordinates) gets no tag: it would sit on the other city or on null island.
       const { from, to } = ab.result;
       if (routeEndKnown(from)) out.push({ key: "ab:from", lon: from.lon, lat: from.lat, text: from.label, kind: "stop", hot: true });
       if (routeEndKnown(to)) out.push({ key: "ab:to", lon: to.lon, lat: to.lat, text: `${to.label}${abOption ? ` · ${abOption.total ? `€${Math.round(abOption.total)}` : ""}` : ""}`, kind: "stop", hot: true });
-      return out;
+      return [...out, ...evs];
     }
     if (route) {
       // Numbered stops of the trip on the globe; the one the camera is on is lit.
       out.push(...route.stops.map((st, i) => ({ key: `stop:${i}`, lon: st.lon, lat: st.lat, text: `${i + 1} · ${st.name} · ${st.nights}n`, kind: "stop" as const, hot: playing === i })));
-      return [...out, ...regions];
+      return [...out, ...evs, ...regions];
     }
+    out.push(...evs);
+    if (covered) return out;
     if (view === "trips" && tripMode === "longstay" && longStay.status === "ok" && longStay.result) {
       for (const b of longStay.result.bases) out.push({ key: `base:${b.code}`, lon: b.lon, lat: b.lat, text: b.name, sub: `€${b.perDay} a day`, kind: "base", hot: b.code === selectedBase });
       return [...out, ...regions];
@@ -1617,7 +2255,7 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
       });
       return out;
     }
-    if (view !== "deals" && view !== "chat" && !purposeOpen) return out;
+    if (view !== "deals" && view !== "chat") return out;
     for (const d of dealsList.slice(0, 80)) {
       const c = dealCoord(d);
       if (!c) continue;
@@ -1630,9 +2268,14 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
     }
     out.sort((a, b) => (a.hot === b.hot ? 0 : a.hot ? -1 : 1));
     return out;
-  }, [view, tripMode, pick, wildRegion, route, playing, longStay, selectedBase, group, selectedOption, wildCoord, purposeOpen, dealsList, deal, selectedDeal, hoveredDeal, dealCoord, abOpen, ab.result, abOption]);
+  }, [view, tripMode, pick, wildRegion, route, playing, longStay, selectedBase, group, selectedOption, wildCoord, dealsList, deal, selectedDeal, hoveredDeal, dealCoord, abShowing, ab.result, abOption, covered, eventSpots, eventSel, placePage, itinShowing]);
   function pickLabel(key: string) {
-    if (key.startsWith("ab:")) return;
+    if (key.startsWith("ab:") || key.startsWith("place:")) return;
+    if (key.startsWith("event:")) {
+      const e = eventSpots.find((x) => `event:${x.key}` === key) ?? (eventSel && `event:${eventSel.key}` === key ? eventSel : null);
+      if (e) selectEvent(e);
+      return;
+    }
     if (key.startsWith("region:")) return selectRegion(key.slice(7));
     if (key.startsWith("stop:")) return focusStop(Number(key.slice(5)));
     if (key.startsWith("base:")) {
@@ -1857,7 +2500,7 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
   }
 
   function focusDeal(key: string | null) {
-    const d = key ? (dealsAll.find((x) => dealKey(x) === key) ?? chatDeals.find((x) => dealKey(x) === key) ?? purposeDeals.find((x) => dealKey(x) === key)) : null;
+    const d = key ? (dealsAll.find((x) => dealKey(x) === key) ?? chatDeals.find((x) => dealKey(x) === key)) : null;
     // A pin tapped while the chat waits for a place answers the chat and stays on the Ask tab:
     // switching to Deals would unmount the chat and lose the reply it is about to stream.
     const answering = !!d && pickRef.current === "place";
@@ -1893,7 +2536,7 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
   // The trail: the great circle of the open deal, or the whole route of the trip on show
   // (great circles for flights, straight lines for ground hops), run end to end.
   useEffect(() => {
-    if (deal && (view === "deals" || view === "chat")) {
+    if (deal && !covered && (view === "deals" || view === "chat")) {
       const g = gwCoord(deal.gw);
       const c = dealCoord(deal);
       if (!g || !c) {
@@ -1905,7 +2548,7 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
       return;
     }
     trailRef.current = routeLegs.length ? routePath(routeLegs) : abLegs.length ? routePath(abLegs) : null;
-  }, [deal, view, gwCoord, dealCoord, routeLegs, abLegs]);
+  }, [deal, view, gwCoord, dealCoord, routeLegs, abLegs, covered]);
 
   // deck.gl layers follow the state. Globe needs back-face culling off or arcs disappear.
   useEffect(() => {
@@ -1915,12 +2558,13 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
     const ground = view === "ground";
     const all = view === "all";
     const fly = view === "fly";
-    const tripView = shortOpen;
-    const dealView = view === "deals" || (view === "chat" && chatDeals.length > 0) || purposeOpen;
-    const wildView = wildOpen || (view === "chat" && !!chatTrip && chatDeals.length === 0);
+    // The itinerary and the open route card hold the globe: the layers of the tab underneath wait.
+    const tripView = shortOpen && !covered;
+    const dealView = !covered && (view === "deals" || (view === "chat" && chatDeals.length > 0));
+    const wildView = !covered && (wildOpen || (view === "chat" && !!chatTrip && chatDeals.length === 0));
     const wildTrip = wildOpen ? wild.trip : view === "chat" ? (chatTrip ?? undefined) : undefined;
-    const bases = view === "trips" && tripMode === "longstay" && longStay.status === "ok" ? (longStay.result?.bases ?? []) : [];
-    const groupOptions = view === "trips" && tripMode === "group" && group.status === "ok" ? (group.result?.options ?? []) : [];
+    const bases = !covered && view === "trips" && tripMode === "longstay" && longStay.status === "ok" ? (longStay.result?.bases ?? []) : [];
+    const groupOptions = !covered && view === "trips" && tripMode === "group" && group.status === "ok" ? (group.result?.options ?? []) : [];
     const flownPlaces = placesShown.filter((p) => p.mode === "plane" && p.air && p.key === selectedPlace);
     const dealDots: DealDot[] = dealView ? dealsList.map((d) => ({ d, t: dealCoord(d) })).filter((x): x is DealDot => !!x.t) : [];
     if (dealView && deal && !dealDots.some((x) => dealKey(x.d) === selectedDeal)) {
@@ -2087,7 +2731,7 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
             getLineColor: [255, 255, 255, 230],
           })
         : null,
-      dealView && sightsOnMap && sights
+      sightsOnMap && sights && !itinShowing
         ? new ScatterplotLayer<Sight>({
             id: "sights",
             data: [...sights.see, ...sights.do].filter((x) => x.lat != null && x.lon != null),
@@ -2146,10 +2790,10 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
             getLineColor: [5, 7, 14, 230],
           })
         : null,
-      abLegs.length
+      overlayLegs.length
         ? new ArcLayer<RouteLeg>({
             id: "ab-arcs",
-            data: abLegs.filter((l) => l.kind === "fly"),
+            data: overlayLegs.filter((l) => l.kind === "fly"),
             getSourcePosition: (x) => x.from,
             getTargetPosition: (x) => x.to,
             getSourceColor: [111, 240, 196, 230],
@@ -2159,10 +2803,10 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
             parameters: { cullMode: "none" },
           })
         : null,
-      abLegs.length
+      overlayLegs.length
         ? new PathLayer<RouteLeg>({
             id: "ab-ground",
-            data: abLegs.filter((l) => l.kind === "ground"),
+            data: overlayLegs.filter((l) => l.kind === "ground"),
             getPath: (l) => [l.from, l.to],
             getColor: [255, 180, 84, 240],
             getWidth: 3.5,
@@ -2170,10 +2814,10 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
             parameters: { cullMode: "none" },
           })
         : null,
-      abPoints.length
+      overlayPoints.length
         ? new ScatterplotLayer<{ p: [number, number] }>({
             id: "ab-points",
-            data: abPoints.map((p) => ({ p })),
+            data: overlayPoints.map((p) => ({ p })),
             getPosition: (x) => x.p,
             radiusUnits: "pixels",
             getRadius: 5.5,
@@ -2232,6 +2876,26 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
             getLineWidth: 2,
             getLineColor: [255, 180, 84, 255],
             pickable: true,
+          })
+        : null,
+      eventSpots.length
+        ? new ScatterplotLayer<EventSpot>({
+            id: "event-dots",
+            data: eventSpots,
+            getPosition: (e) => [e.lon, e.lat],
+            radiusUnits: "pixels",
+            getRadius: (e) => (e.key === eventSel?.key ? 9 : 6),
+            getFillColor: (e) => (e.key === eventSel?.key ? [255, 107, 138, 255] : [255, 107, 138, 210]),
+            stroked: true,
+            lineWidthUnits: "pixels",
+            getLineWidth: 2,
+            getLineColor: [255, 255, 255, 230],
+            pickable: true,
+            updateTriggers: { getRadius: [eventSel?.key], getFillColor: [eventSel?.key] },
+            onClick: (info) => {
+              const e = info.object as EventSpot | undefined;
+              if (e) selectEvent(e);
+            },
           })
         : null,
       new ScatterplotLayer<Airport>({
@@ -2332,7 +2996,7 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
             onClick: (info) => focusDestination((info.object as Destination | undefined)?.airport.iata ?? null),
           })
         : null,
-      ground || tripView || dealView || wildView
+      ground || tripView || dealView || wildView || covered
         ? null
         : new ScatterplotLayer<Gateway>({
             id: "gateways",
@@ -2372,12 +3036,51 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
     render();
     // focus* helpers only read refs and state setters; listing them would re-run this on every render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [airports, shown, gateways, gatewayIata, origin, selectedDest, live, view, reachBand, selectedStation, pathForSelected, placesShown, selectedPlace, tripsShown, trip, warmOnly, weather, dealsList, selectedDeal, hoveredDeal, deal, render, selectedCombo, combos, sightsOnMap, sights, wild.trip, wildCoord, chatTrip, chatDeals, shortOpen, wildOpen, purposeOpen, tripMode, longStay, selectedBase, group, selectedOption, lowZoom, abLegs, abPoints]);
+  }, [airports, shown, gateways, gatewayIata, origin, selectedDest, live, view, reachBand, selectedStation, pathForSelected, placesShown, selectedPlace, tripsShown, trip, warmOnly, weather, dealsList, selectedDeal, hoveredDeal, deal, render, selectedCombo, combos, sightsOnMap, sights, wild.trip, wildCoord, chatTrip, chatDeals, shortOpen, wildOpen, tripMode, longStay, selectedBase, group, selectedOption, lowZoom, overlayLegs, overlayPoints, covered, itinShowing, eventSpots, eventSel]);
 
   const groundFeeds = reach ? reach.feeds.map((f) => f.attribution.split(" via ")[0].split(" (")[0]).join(", ") : "";
 
+  // Where "Back" returns to from the itinerary: the tab (or page) that was in front.
+  const backTo = placePage ? placePage.name : view === "chat" ? "the chat" : view === "deals" ? (deal ? deal.city : "Deals") : view === "trips" ? "Trips" : "Explore";
+  const itineraryView = itin ? (
+    <div className="itinview">
+      <div className="itinbar">
+        <button className="linkbtn" onClick={closeItinerary}>
+          ← Back to {backTo}
+        </button>
+        <span className="sub">Itinerary</span>
+      </div>
+      <div className="scroll itinscroll">
+        <Itinerary
+          key={itin.n}
+          skeleton={itin.skeleton}
+          itinerary={itin.itinerary}
+          wishes={itin.wishes}
+          pace={itin.pace}
+          budget={itin.budget}
+          onFocus={(f) => {
+            const map = mapRef.current;
+            if (!map || !Number.isFinite(f.lat) || !Number.isFinite(f.lon) || (f.lat === 0 && f.lon === 0)) return;
+            stopPlay();
+            spinRef.current = false;
+            revealMap();
+            map.flyTo({ center: [f.lon, f.lat], zoom: f.zoom ?? 8, duration: 1300, padding: panelPadding(), essential: true });
+          }}
+          onRoute={(it) => {
+            setItinShape(it);
+            frameShape(it);
+          }}
+          onPlay={playRoute}
+          onClose={closeItinerary}
+          onSaved={() => setHasSaved(true)}
+        />
+      </div>
+    </div>
+  ) : null;
+  const eventsCardOpen = !!eventSel || (evLayer.on && evLayer.list);
+
   return (
-    <div className="app">
+    <div className={`app sheet-${sheet}`}>
       <div className="space" />
       <div ref={mapEl} className="map" />
       <div className="vignette" aria-hidden="true" />
@@ -2399,20 +3102,114 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
           setSelectedDeal(null);
         }}
         searching={searching}
-        asking={asking}
-        onAsk={(q) => {
-          setView("chat");
-          setChatSeed(q);
-        }}
+        busy={busy}
+        onCommand={runCommand}
         onShare={share}
         copied={copied}
         been={been}
         onBeen={setBeen}
         countries={countries}
       />
+      {/* The layers and cards that belong to the map, not to a tab: they stay while the tabs change. */}
+      <div className="mapchips">
+        <button className={`mapchip${evLayer.on ? " on" : ""}`} onClick={toggleEvents} title="Events worth flying for, on the globe, for the When window or the next four months">
+          <span aria-hidden="true">✺</span> Events
+          {evLayer.on && eventSpots.length > 0 ? <small>{eventSpots.length}</small> : null}
+        </button>
+        <button
+          className={`mapchip${routeCard.open ? " on" : ""}`}
+          onClick={() => (routeCard.open ? setRouteCard({ open: false, collapsed: false }) : openRouteCard())}
+          title="The cheapest way from one place to another, by air, rail, coach and ferry"
+        >
+          <span aria-hidden="true">⇄</span> A to B
+        </button>
+      </div>
+      <div className="mapcards">
+        {notice && (
+          <div className="mapnotice" role="status">
+            {notice}
+            <button className="iconbtn" onClick={() => setNotice(null)} aria-label="Dismiss">
+              ×
+            </button>
+          </div>
+        )}
+        {eventsCardOpen && (
+          <EventsCard
+            events={eventSpots}
+            from={evWindow.from}
+            to={evWindow.to}
+            selected={eventSel}
+            onSelect={(e) => (e ? selectEvent(e) : setEventSel(null))}
+            onClose={() => {
+              if (eventSel && evLayer.list) setEventSel(null);
+              else {
+                setEventSel(null);
+                setEvLayer((l) => ({ ...l, list: false }));
+              }
+            }}
+            fromPlace={fromPlace}
+            exclude={excludeQ}
+            onOpenRoute={caps.onOpenRoute}
+            onItinerary={(e) => openItinerary({ skeleton: eventSkeleton(e) })}
+            pricing={faresLive}
+            onPriceLive={() => void priceEventsLive()}
+            onPlace={(e) => openPlace({ code: e.city, name: e.cityName })}
+            startCollapsed={isPhone()}
+          />
+        )}
+        {routeCard.open && (
+          <RouteCard
+            form={abForm}
+            onForm={setAbForm}
+            state={ab}
+            onSearch={(f, b) => void searchRoute(f, b)}
+            onCancel={cancelRoute}
+            selected={abSelected}
+            onSelect={(i) => {
+              setAbSelected(i);
+              if (i != null && ab.result) framePoints(routeEnds(ab.result), 6);
+            }}
+            onItinerary={(i) => {
+              const o = ab.options[i];
+              const k = o && ab.result ? ab.result.options.findIndex((x) => optionKey(x) === optionKey(o)) : -1;
+              if (ab.result && k >= 0) openItinerary({ skeleton: routeSkeleton(ab.result, k) });
+              else setNotice("Wait for the search to finish, then make the itinerary.");
+            }}
+            collapsed={routeCard.collapsed}
+            onCollapse={(c) => setRouteCard({ open: true, collapsed: c })}
+            onClose={() => {
+              cancelRoute();
+              if (pick === "place") cancelPick();
+              setRouteCard({ open: false, collapsed: false });
+            }}
+            // "Pick on the globe": the same place pick the chat uses; the tap answers through atlas:picked.
+            onTapGlobe={() => {
+              if (pick === "place") {
+                cancelPick();
+                return;
+              }
+              setPick("place");
+              if (isPhone()) setSheet("peek");
+            }}
+            tapping={pick === "place" && routeCard.open}
+            airports={airports}
+            cities={cities}
+            gateways={gateways}
+            homeLabel={homeLabel}
+            excludedCount={exclude.length}
+          />
+        )}
+      </div>
       <Panel
+        caps={caps}
+        front={itineraryView}
+        placePage={placePage}
+        onClosePlace={() => setPlacePage(null)}
         view={view}
         onView={(v) => {
+          // A tab chosen closes the place page and the itinerary in front of the tabs.
+          setPlacePage(null);
+          if (itin) closeItinerary();
           changeView(v);
           setSelectedDest(null);
           setSelectedStation(null);
@@ -2472,6 +3269,8 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
         finder={finder}
         onFinder={runFinder}
         onFinderClear={() => {
+          finderCtrl.current?.abort();
+          finderCtrl.current = null;
           setFinder({ status: "idle", deals: [], lines: [] });
           setSelectedDeal(null);
         }}
@@ -2495,34 +3294,9 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
           cities,
           extra: tripsExtra,
           onExtra: setTripsExtra,
-          ab: {
-            form: abForm,
-            onForm: setAbForm,
-            state: ab,
-            onSearch: runRoute,
-            onCancel: cancelRoute,
-            selected: abSelected,
-            onSelect: (i) => {
-              setAbSelected(i);
-              const o = i != null ? ab.options[i] : null;
-              if (o && ab.result) framePoints(routeEnds(ab.result), 6);
-            },
-            // "Tap the globe": the same place pick the chat uses; the tap answers through atlas:picked.
-            onTapGlobe: () => {
-              if (pick === "place") {
-                cancelPick();
-                return;
-              }
-              setPick("place");
-              if (isPhone()) setSheet("peek");
-            },
-            tapping: pick === "place" && abOpen,
-            airports,
-            cities,
-            gateways,
-            homeLabel,
-            excludedCount: exclude.length,
-          },
+          originPlace,
+          onItinerary: (sk) => openItinerary({ skeleton: sk }),
+          top: hasSaved ? <MyTrips onOpen={(it) => openItinerary({ itinerary: it })} /> : null,
           homeLabel,
           airlines,
           playing,
@@ -2572,11 +3346,6 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
           onGroup: findGroup,
           selectedOption,
           onOption: setSelectedOption,
-          purpose,
-          purposeKinds,
-          onPurposeKinds: setPurposeKinds,
-          onPurpose: findPurpose,
-          onDeal: focusDeal,
           excludedCount: exclude.length,
         }}
         onHere={showHere}

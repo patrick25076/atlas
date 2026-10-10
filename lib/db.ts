@@ -259,7 +259,8 @@ export async function hotelPriceHistory(days = 45): Promise<HotelPriceRow[]> {
   }
 }
 
-export type SavedTrip = { id: string; owner: string; kind: "wild" | "short" | "custom" | "imported"; title: string; body: unknown; createdAt: string; updatedAt: string };
+/** `itinerary`: a generated day-by-day plan (lib/itinerary.ts), saved from the itinerary view. */
+export type SavedTrip = { id: string; owner: string; kind: "wild" | "short" | "custom" | "imported" | "itinerary"; title: string; body: unknown; createdAt: string; updatedAt: string };
 
 export async function saveTrip(t: { id: string; owner: string; kind: SavedTrip["kind"]; title: string; body: unknown }): Promise<boolean> {
   const db = client();
@@ -285,12 +286,26 @@ export async function listTrips(owner: string): Promise<SavedTrip[]> {
   }
 }
 
+/** One saved trip by id, whoever owns it (a shared link), or null. */
+export async function getTrip(id: string): Promise<SavedTrip | null> {
+  const db = client();
+  if (!db || !(await ensureSchema())) return null;
+  try {
+    const rows = await db<{ id: string; owner: string; kind: SavedTrip["kind"]; title: string; body: unknown; created_at: string | Date; updated_at: string | Date }[]>`select * from trips where id = ${id} limit 1`;
+    const r = rows[0];
+    return r ? { id: r.id, owner: r.owner, kind: r.kind, title: r.title, body: r.body, createdAt: isoStamp(r.created_at), updatedAt: isoStamp(r.updated_at) } : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Deletes only the owner's own row; true when a row went. */
 export async function deleteTrip(owner: string, id: string): Promise<boolean> {
   const db = client();
   if (!db || !(await ensureSchema())) return false;
   try {
-    await db`delete from trips where owner = ${owner} and id = ${id}`;
-    return true;
+    const gone = await db`delete from trips where owner = ${owner} and id = ${id} returning id`;
+    return gone.length > 0;
   } catch {
     return false;
   }

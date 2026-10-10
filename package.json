@@ -32,7 +32,8 @@
     "ingest:fame": "tsx scripts/ingest/fame.ts",
     "ingest:costs": "tsx scripts/ingest/costs.ts",
     "check:tp": "tsx scripts/check-travelpayouts.ts",
-    "check:tools": "node --env-file=.env.local node_modules/tsx/dist/cli.mjs scripts/check-tools.ts"
+    "check:tools": "node --env-file=.env.local node_modules/tsx/dist/cli.mjs scripts/check-tools.ts",
+    "atlas": "node --env-file=.env.local node_modules/tsx/dist/cli.mjs scripts/atlas.ts"
   },
   "dependencies": {
     "@ai-sdk/amazon-bedrock": "^5.0.113",

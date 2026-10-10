@@ -21,6 +21,8 @@ export function shortDate(iso: string): string {
 }
 
 export function dateRange(a: string, b: string): string {
+  // A one-day span (a marathon, a parade) reads as its day, not "11 to 11 Oct".
+  if (a === b) return shortDate(a);
   const da = new Date(a);
   const db = new Date(b);
   if (Number.isNaN(da.getTime()) || Number.isNaN(db.getTime())) return `${a} to ${b}`;

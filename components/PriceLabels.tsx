@@ -7,8 +7,9 @@ import { haversineKm } from "@/lib/geo";
 // Tags on the globe, as real HTML pinned to map points: crisp at any zoom, styled with CSS,
 // and placed greedily (hot ones first, then in list order) so that tags never overlap. They
 // follow the map on every frame through the map's own events, without touching React state.
-// Kinds: a price on a deal city, a numbered stop of a trip, a region to pick, a long-stay base.
-export type LabelKind = "price" | "stop" | "region" | "base";
+// Kinds: a price on a deal city, a numbered stop of a trip, a region to pick, a long-stay base,
+// an event worth flying for (the Events layer).
+export type LabelKind = "price" | "stop" | "region" | "base" | "event";
 export type LabelItem = { key: string; lon: number; lat: number; text: string; hot?: boolean; cheap?: boolean; kind?: LabelKind; sub?: string };
 
 type Props = {
@@ -43,6 +44,13 @@ export default function PriceLabels({ map, items, onPick, onHover }: Props) {
       const left = width > 720 ? 500 : 20;
       const sheetTop = width <= 720 ? (el.parentElement?.querySelector(".panel")?.getBoundingClientRect().top ?? height) : height;
       const bottom = Math.min(height - 10, sheetTop - 6);
+      // The cards floating on the map (the route card, the event card), its chips and, on a
+      // phone, the command row are glass too: a tag under one would show through, so the
+      // points they cover are skipped like the panel's. The app is fixed at the viewport's
+      // origin, so client rectangles are the tags' own coordinates.
+      const covers: DOMRect[] = [];
+      el.parentElement?.querySelectorAll(".mapcard, .mapnotice, .mapchips, .cmdbar, .cmdlist").forEach((n) => covers.push(n.getBoundingClientRect()));
+      const underGlass = (x: number, y: number) => covers.some((r) => x > r.left - 8 && x < r.right + 8 && y > r.top - 8 && y < r.bottom + 30);
       for (let i = 0; i < list.length; i++) {
         const it = list[i];
         const node = nodes[i];
@@ -57,7 +65,7 @@ export default function PriceLabels({ map, items, onPick, onHover }: Props) {
           const p = map.project([it.lon, it.lat]);
           x = p.x;
           y = p.y - (it.kind === "region" ? 0 : 14);
-          ok = x > left && x < width - 20 && y > 60 && y < bottom;
+          ok = x > left && x < width - 20 && y > 60 && y < bottom && !underGlass(x, y);
         }
         if (ok && !it.hot) {
           for (const q of placed) {

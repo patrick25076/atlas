@@ -708,3 +708,80 @@
     box-shadow: 0 0 0 6px rgba(111, 240, 196, 0);
   }
 }
+
+/* actions under a result: route options, deals, events, loops */
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+.mini {
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--ink-2);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.mini:hover {
+  color: var(--ink);
+  border-color: rgba(111, 240, 196, 0.5);
+}
+.dealRow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px;
+  align-items: center;
+}
+@media (max-width: 420px) {
+  .dealRow {
+    grid-template-columns: 1fr;
+  }
+  .dealRow .mini {
+    justify-self: start;
+  }
+}
+
+/* a written itinerary: a timeline of its days */
+.itin {
+  border-color: rgba(111, 240, 196, 0.28);
+  background: linear-gradient(180deg, rgba(111, 240, 196, 0.06), rgba(255, 255, 255, 0.03));
+}
+.days {
+  list-style: none;
+  margin: 10px 0 0 4px;
+  padding: 0 0 0 14px;
+  border-left: 1px solid var(--line-2);
+}
+.days li {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 0 0 10px 6px;
+  animation: rise 0.3s ease-out both;
+}
+.days li::before {
+  content: "";
+  position: absolute;
+  left: -19px;
+  top: 4px;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--mint);
+  box-shadow: 0 0 0 3px rgba(111, 240, 196, 0.15);
+}
+.dayHead {
+  font-size: 11.5px;
+  color: var(--ink-3);
+  letter-spacing: 0.02em;
+}
+.dayTitle {
+  font-size: 14px;
+  font-weight: 600;
+}

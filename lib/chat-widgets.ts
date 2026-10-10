@@ -2,6 +2,12 @@
 // a prose question, the short message a widget answer becomes, the labels and progress
 // lines of each tool, and the follow-up chips per tool. No server imports: the browser
 // bundles this file too.
+//
+// Also the UI event bus as the chat uses it: the detail of each `atlas:*` event the chat
+// dispatches (a computed route, an itinerary to open, a command line to run, a route to
+// search), built by plain functions so scripts/check-tools.ts can check their shapes.
+import type { RouteResult } from "./route-finder";
+import type { BudgetTier, Itinerary, Pace, Skeleton } from "./itinerary";
 
 export type WidgetKind = "dates" | "month" | "nights" | "region" | "choices" | "people" | "map-region" | "map-place";
 
@@ -113,11 +119,12 @@ export const TOOL_LABEL: Record<string, string> = {
   best_months: "Reading the climate",
   price_insight: "Checking the fare memory",
   cheapest_way: "Finding the cheapest way",
+  make_itinerary: "Writing the itinerary",
   ask: "One question",
 };
 
 /** The tools that can take a while: their chip shows the seconds elapsed while they run. */
-export const LONG_TOOLS = new Set(["wild_trip", "long_stay", "group_trip", "plan_days", "find_getaways", "scan_cheapest", "cheapest_way", "two_city_combos", "events_worth_travelling_for"]);
+export const LONG_TOOLS = new Set(["wild_trip", "long_stay", "group_trip", "plan_days", "find_getaways", "scan_cheapest", "cheapest_way", "two_city_combos", "events_worth_travelling_for", "make_itinerary"]);
 
 /** A short word for each kind of route option, for the badge on its card. */
 export const ROUTE_KIND_LABEL: Record<string, string> = {
@@ -168,6 +175,11 @@ export function toolProgress(name: string, input: unknown): string {
         return `Pricing two-city versions around ${a.city ?? a.dst ?? "the city"}`;
       case "plan_days":
         return "Planning the days (about a minute)";
+      case "make_itinerary": {
+        const stops = Array.isArray(a.stops) ? (a.stops as { place?: unknown; nights?: unknown }[]).map((x) => `${String(x?.place ?? "")}${x?.nights ? ` ${x.nights}n` : ""}`).filter(Boolean).join(", ") : "";
+        const what = stops || ({ last_route: "the route", last_deal: "the deal", last_wild: "the loop" } as Record<string, string>)[String(a.from ?? "")] || "the trip";
+        return `Writing the days of ${what}${a.pace ? `, ${a.pace} pace` : ""} (about a minute)`;
+      }
       default:
         return TOOL_LABEL[name] ?? name;
     }
@@ -179,10 +191,10 @@ export function toolProgress(name: string, input: unknown): string {
 /** Follow-up chips, chosen from the last tool the agent used. */
 export const FOLLOWUPS: Record<string, string[]> = {
   scan_cheapest: ["Show the best month in detail", "Direct or one stop only", "Try my other airports", "Fewer nights", "Is this a good price?"],
-  find_getaways: ["Direct flights only", "Try my other airports too", "Two-city version", "What do I eat there?", "Hotels for those dates"],
+  find_getaways: ["Make the first one an itinerary", "Direct flights only", "Try my other airports too", "Two-city version", "Hotels for those dates"],
   cheapest_deals: ["Warm places only", "Hidden gems", "Direct flights only", "Next month instead", "Two-city version"],
   reprice_route: ["A day earlier or later", "Make it a week", "Is this a good price?", "Hotels for those dates"],
-  wild_trip: ["Plan the days", "Cheaper version", "Fewer stops, longer stays", "Skip the hub", "Show two variants"],
+  wild_trip: ["Make it an itinerary", "Cheaper version", "Fewer stops, longer stays", "Skip the hub", "Show two variants"],
   long_stay: ["Cheaper bases", "Nearer the beach", "What would a month cost there?", "Flights for the first base"],
   group_trip: ["Only windows where everyone can", "Direct flights only", "Try a warmer place", "What do we do there?"],
   plan_days: ["Make it cheaper", "More food, fewer museums", "Hotels for the first stop"],
@@ -190,6 +202,91 @@ export const FOLLOWUPS: Record<string, string[]> = {
   best_months: ["Scan prices for the best month", "Cheaper month instead"],
   price_insight: ["Show the cheapest month", "Try a nearby airport"],
   hotel_deals: ["Flights to the first one", "Only in Europe", "What do I do there?"],
-  cheapest_way: ["Show the route on the globe", "Fastest instead", "A week later", "One way only", "Is this a good price?"],
+  cheapest_way: ["Make it an itinerary", "Fastest instead", "A week later", "One way only", "Is this a good price?"],
+  make_itinerary: ["Slower pace", "More food, fewer museums", "Make it cheaper", "Hotels for the first stop"],
+  events_worth_travelling_for: ["Get to the first one", "Only in Europe", "Make the first one an itinerary", "Next month instead"],
   default: ["Direct flights only", "Try my other airports too", "Two-city version", "What do I eat there?", "Hotels for those dates"],
 };
+
+// ---------------------------------------------------------------------------------------
+// The UI event bus, as the chat speaks it (the globe and the shell listen).
+
+/** `atlas:route`: search the cheapest way and draw it. */
+export type RouteDetail = { from?: string; to: string; depart?: string; nights?: number; flex?: number; oneWay?: boolean };
+/** `atlas:route-result`: draw a result already computed (no search). */
+export type RouteResultDetail = { result: RouteResult; option?: number };
+/** `atlas:itinerary`: open the itinerary view; with only a skeleton it generates. */
+export type ItineraryDetail = { skeleton?: Skeleton; itinerary?: Itinerary; wishes?: string; pace?: Pace; budget?: BudgetTier };
+/** `atlas:command`: run a line through the command bar (lib/command.ts). */
+export type CommandDetail = { text: string };
+/** `atlas:place`: open a place page. */
+export type PlaceDetail = { name?: string; code?: string };
+
+export type AtlasEventMap = {
+  "atlas:route": RouteDetail;
+  "atlas:route-result": RouteResultDetail;
+  "atlas:itinerary": ItineraryDetail;
+  "atlas:command": CommandDetail;
+  "atlas:place": PlaceDetail;
+};
+
+/** Sends one event on the window bus; a no-op on the server. */
+export function dispatchAtlas<K extends keyof AtlasEventMap>(name: K, detail: AtlasEventMap[K]): void {
+  if (typeof window === "undefined") return;
+  window.dispatchEvent(new CustomEvent(name, { detail }));
+}
+
+/** The detail that draws a computed cheapest_way result; `option` is the card's index when one card asked. */
+export function routeResultDetail(result: RouteResult, option?: number): RouteResultDetail {
+  return option != null && option >= 0 && option < result.options.length ? { result, option } : { result };
+}
+
+/** The detail that searches a route again (a restored thread has no computed result to draw). */
+export function routeDetail(out: { from?: string; to: string; depart?: string; flex?: number; nights?: number | null }): RouteDetail {
+  return { ...(out.from ? { from: out.from } : {}), to: out.to, ...(out.depart ? { depart: out.depart } : {}), ...(out.flex != null ? { flex: out.flex } : {}), ...(out.nights != null ? { nights: out.nights } : {}), oneWay: out.nights == null };
+}
+
+/** One event as events_worth_travelling_for compacts it. */
+export type ChatEvent = { event: string; city: string; code?: string; country?: string; start?: string; end?: string; dates?: string; lat?: number; lon?: number; url?: string };
+
+/** The event's first and last day, from its fields or its "a to b" dates line. */
+export function eventDays(e: ChatEvent): { start: string; end: string } | null {
+  const [a, b] = String(e.dates ?? "").split(" to ");
+  const start = e.start ?? a;
+  const end = e.end ?? b ?? start;
+  return start && ISO_DAY_RE.test(start) ? { start, end: end && ISO_DAY_RE.test(end) ? end : start } : null;
+}
+
+/** "Show on the map": the command line that lists this event's place and days on the globe. */
+export function eventCommand(e: ChatEvent): CommandDetail {
+  const days = eventDays(e);
+  return { text: `/events ${e.city}${days ? ` ${days.start} to ${days.end}` : ""}` };
+}
+
+/**
+ * The days a trip to the event can use: an event already under way (or starting today) is
+ * joined from tomorrow, the earliest day anyone can still fly, so neither "Get there" nor
+ * "Make an itinerary" starts in the past. The card still shows the event's own dates.
+ * `today` is the visitor's calendar day (LOCAL_DAY in the browser).
+ */
+export function eventTripDays(e: ChatEvent, today: string = LOCAL_DAY(new Date())): { start: string; end: string } | null {
+  const days = eventDays(e);
+  if (!days) return null;
+  const earliest = addDays(ISO_DAY_RE.test(today) ? today : LOCAL_DAY(new Date()), 1);
+  const start = days.start < earliest ? earliest : days.start;
+  return { start, end: days.end < start ? start : days.end };
+}
+
+/**
+ * "Get there": the cheapest way to the event's city, arriving on its first day (or tomorrow,
+ * when it is already on) and staying to its last, two nights at least. A season or a run of
+ * more than five days (Christmas markets, the northern lights) gets four nights, the same
+ * stay skeletonFromEvent plans, so the fare and the itinerary describe one trip.
+ */
+export function eventRoute(e: ChatEvent, today?: string): RouteDetail {
+  const days = eventTripDays(e, today);
+  if (!days) return { to: e.city };
+  const span = Math.round((Date.parse(days.end) - Date.parse(days.start)) / 86_400_000) || 0;
+  const nights = span > 5 ? 4 : Math.max(2, span);
+  return { to: e.city, depart: days.start, nights, flex: 1 };
+}

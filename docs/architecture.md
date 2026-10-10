@@ -482,3 +482,131 @@ never proposed, a connection or layover through one is always fine. Each engine 
   the sorted list (`excludeToken`, appended after the 60-character cut so it is never lost);
   `wild-variants.ts`, `/api/wild` and `/api/plan` build the same key, so an excluded build
   never collides with a plain one and a plain key is unchanged.
+
+## Itineraries: any result becomes a day-by-day trip (`lib/itinerary.ts`, `/api/itinerary`)
+
+Every engine's answer can become one shape: a **Skeleton** (the places with their dates and
+nights, the legs with prices and booking links, the traveller's origin, a plain title) and,
+once written, an **Itinerary** (the skeleton plus the days, hour by hour, the food of each
+stop, the events during the stay, the costs and the sources).
+
+**The skeleton, in the browser.** `lib/itinerary.ts` is client-safe (type imports only) and
+holds the types and seven converters: `skeletonFromDeal` (one stop from the day out to the
+day back; a one-way deal is a pass-through; the ticket price sits on the outbound leg, the
+way back says "on the same ticket"), `skeletonFromRoute(result, optionIndex, asked?)` (the
+destination for the nights between out and back, or a pass-through for a one-way answer; the
+traveller's two points open and close it; an answer with no dated leg takes `asked.depart`,
+else three weeks out, and `asked.nights`, default 4), `skeletonFromTrip` (a short loop,
+nights split evenly, the earlier cities taking the odd night), `skeletonFromWild`,
+`skeletonFromLongStay` (one base between the flight in and the flight out),
+`skeletonFromGroup(option, member)` and `skeletonFromEvent` (the event's place from a day
+before to a day after, four nights for a season longer than five days, or the deal's dates
+and city when a fare is given, the venue named in the stop's `why`). Flights always keep
+their real airports (the deal's `gw`, the loop's first and last airport, the long stay's
+flights): when the traveller's origin is another city, a ground leg marked `ACCESS_NOTE`
+joins it to the airport each way. A place the input does not locate (a Deal knows a city
+code, not its coordinates; a hub airport on a leg) gets lat 0, lon 0 and its code, and the
+server places it. `itineraryCanon(skeleton, {wishes, pace, budget})` is every field of the
+skeleton (titles, notes, photos, leg times, carriers and links) plus the options, in a fixed
+order; `itineraryKey` is its eleven-character hash, used as the cache key and the
+itinerary's `id`.
+
+**The engine, on the server.** `lib/itinerary-server.ts`:
+
+- `normaliseSkeleton` checks everything a browser sends: at most 12 stops, 40 legs and a
+  span of 220 days (a six-month long stay with its flights), real dates, stops in date order
+  (an overlapping stay is clipped to end the day the next begins, so nights are never counted
+  twice), finite coordinates (0,0 or none means "place me by my code": cities first, then
+  airports), strings capped and stripped of control characters, urls only http(s); nights,
+  start and end are recomputed. An `ACCESS_NOTE` leg shorter than 40 km (Bucharest to OTP)
+  is dropped; a longer one is timed by distance (road a third longer than the straight line,
+  70 km/h, plus half an hour). Idempotent.
+- `skeletonFromStops({ origin, start, stops: [{ place, nights }] })` resolves names through
+  `cities.json` (accents folded, the bigger city wins a shared name, a capitalised code works)
+  and throws "we do not know a place called X"; the legs between are guesses (a flight past
+  700 km, else a train), unpriced and marked as estimates.
+- `generateItinerary(skeleton, { wishes, pace, budget }, onDay, onProgress)`: per stop, in
+  parallel and each with its own timeout, the Wikivoyage listings and the country guide,
+  Foursquare rated eats and sweets (first eight stops with a night), two Tavily searches
+  (first six), the curated events within 60 km of the stop on its dates (`eventsAt` by point
+  only, so an event filed under a city for its flights but held elsewhere is not planned
+  there) and the city's open event feeds. `calendarOf(skeleton)` lays out the entries from
+  the skeleton alone: a day before the first stop's arrival, between one stop's leave and the
+  next one's arrival, or after the last stop is a **transit** day (title "Travel to X" or
+  "Travel home to Y", travel blocks only, the origin's weather), never a day at the
+  destination; a day at a stop carries fences around its travel (nothing before the landing
+  time, nothing after the departure; an untimed leg counts as the afternoon). A trip of more
+  than 60 entries keeps the first days at each stop (14, then fewer until it fits) and every
+  day with travel day by day, and puts the rest of each stay **a week to an entry** (title
+  "Days 15 to 21 in Chiang Mai", unplanned on purpose, with ideas from the guide), so long
+  stays and 90-night wild loops become plans. Days are written by the model (the same
+  Bedrock model as `lib/plan.ts`) a stop at a time, at most a week per call, stops side by
+  side, three calls at once. The model answers in **JSON Lines as streamed text** (a day per
+  line, then the food): on Bedrock a schema-bound answer (`generateObject`, `streamObject`,
+  `streamText` with an output) arrives in one piece at the end, while text streams, so each
+  finished line is handed to `onDay` at once (measured: four Porto days at 15, 19, 23 and 24 s
+  instead of all at about 30 s). A model that ignores the format is parsed as one JSON
+  object at the end. Entries reach `onDay` strictly in order. **Travel blocks are never the
+  model's**: they are built from the legs (times, carrier, price, link), and the model plans
+  around them; its blocks outside the day's free slots are dropped, and a block with a time
+  sits in that time's slot.
+  Every model field is checked: kinds and slots from fixed lists, costs 0 to 3,000, a url
+  kept only when it appears in the research (the model cannot invent links), blocks pinned
+  to coordinates when they name a listing or a rated place. Pace sets the blocks per full
+  day (slow 2 to 3, balanced 3 to 4, packed 5 to 6; a short day is topped up from the
+  guide). A day the model does not write (failure, timeout, the 180 s deadline, no Bedrock
+  key) is built from the research (a sight in the morning, a "do" in the afternoon, a rated
+  dinner, each only in a slot left free by the day's travel), and the itinerary is
+  `status: "partial"` with a line in `sources`. No call starts after the deadline and each
+  is cut off 40 s past it, so a plan always ends inside the route's 300 s with its `{done}`.
+  Dishes come from the model only (the country guide's eat section is prose, not dishes).
+- Costs, per person: flights and ground from the legs as priced; the room (half of
+  `perDayFor` per night) and food (three tenths per day) by country and budget tier, from
+  the World Bank price levels, food counted per calendar day, a week entry for its days);
+  activities from the costed blocks that are not food or travel. `estimated` is always true, since room and food are estimates. Weather per day:
+  the seven-day forecast when the date is in it, else the climate normal for the month.
+- `itineraryIcs`: RFC 5545 with CRLF, escaped text, lines folded at 75 octets, a UID per
+  stop and per leg, `DTSTART;VALUE=DATE` for stays, legs with a time converted to UTC with
+  the departure city's time zone (so no VTIMEZONE is needed), all-day otherwise.
+
+**The routes.** `POST /api/itinerary` `{ skeleton, wishes?, pace?, budget?, fresh? }` streams
+NDJSON: `{skeleton}` (normalised: draw this one), `{progress}`, a `{day}` per day in order,
+`{done: Itinerary}`; `keepAlive`, `maxDuration` 300, a 400 `{error}` for a bad skeleton. A
+finished plan is kept in Blob at `itin/plan/<key>.json` for seven days and in a `TtlLru`
+for six hours beside a SHA-256 of `itineraryCanon` (`recallPlan`, `rememberPlan`), and
+served as `{skeleton}` plus `{done}` only to a request with the same fingerprint: a request
+that changes any link, carrier, note or title gets its own key and its own plan, so nobody
+can serve their links on someone else's trip or overwrite a shared entry. `fresh` skips the
+cache. Partial plans are never kept. Identical requests in flight (same fingerprint) share
+one build; at most four builds run per instance, a fifth gets `{error, busy: true}`. Per
+address (`x-forwarded-for`), counted only when a plan is written: 20 plans an hour, 6 of
+them regenerations, and 3 regenerations of one plan an hour from everyone; past that a 429
+`{error, busy: true}`. Logged as `itinerary` in `searches` (counts only). Zero Kiwi
+searches. Other server code that writes a plan (the chat's make_itinerary) can call
+`rememberPlan(it)` so the browser's "Open the itinerary" is an instant hit.
+`POST /api/itinerary/save` (header `x-atlas-owner`, the browser's random id, 8 to 64 letters,
+digits or hyphens) stores the checked itinerary (`normaliseItinerary`) under an 8-character
+id from `crypto.randomBytes`: Blob `itin/saved/<id>.json` with a SHA-256 of the owner (the
+store is public read; the owner id is what deletes), the owner's list at
+`itin/owner/<hash>.json`, and the `trips` table (kind `itinerary`) when `DATABASE_URL` is
+set. `GET /api/itinerary` (same header) lists them, from the database first; each item
+carries `place`, the first stop's name, for a cover without a photo.
+`GET /api/itinerary/<id>` is public (a share link; an 11-character plan key works too),
+`DELETE` only for the owner (403 otherwise), `GET /api/itinerary/<id>/ics` the calendar.
+A saved itinerary is always read through to the store (`loadItinerary` drops the instance's
+copy first), so a delete takes the link and the `/i` page down at once on every instance.
+
+**Events for places.** `lib/purpose-events.ts` stays client-safe. Each curated event has
+`code` and `city` (where you fly to) and `lat`, `lon` (where it happens), plus `venue` when
+that is elsewhere (Up Helly Aa: Edinburgh for the flight, Lerwick for the event; Glastonbury
+at Pilton; La Tomatina at Buñol). Events that move with the moon, Easter or a weekday (Holi,
+Diwali, Tet, the Lantern Festival, the carnivals, Mardi Gras, Oktoberfest, the marathons,
+Burning Man) carry `dates` per year and are only dated in a year listed there: 2026 and
+2027 where known, and an unknown edition is left out rather than projected (Loy Krathong
+2027, the Monaco Grand Prix 2027). `eventsAt({ city, country, lat, lon, km }, from, to)`
+answers "what is on here": by the fly-to city code or the city or venue name, by country,
+or within `km` (default 150) of the venue, each edition once, nearest date first;
+`cityName` is the venue when there is one and `flyTo` the city. `GET /api/purpose?city=LIS&from=&to=` or
+`?near=lat,lon&km=150` answers `{ place, events, searched: 0 }` from it: no gateways, no
+board, no Kiwi. `lib/plan.ts` and `GET /api/plan` are unchanged and still serve the Wild
+"Plan the days".

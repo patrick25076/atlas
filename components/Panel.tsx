@@ -1,15 +1,18 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useRef, useState, type ReactNode } from "react";
 import FinderForm, { type FinderQuery, type FinderState } from "./FinderForm";
 import ChatPanel, { type ChatContext } from "./ChatPanel";
-import TripsPanel, { PeriodPicker, type TripsPanelProps } from "./TripsPanel";
+import TripsPanel, { ItineraryButton, PeriodPicker, type TripsPanelProps } from "./TripsPanel";
+import { GetThere, WorthFlyingFor, eventGlyph } from "./RouteFinder";
+import type { RouteResult } from "@/lib/route-finder";
+import { skeletonFromDeal, type ItinPlace, type Skeleton } from "@/lib/itinerary";
 import HotelDeals from "./HotelDeals";
 import { flightMinutes, formatDuration } from "@/lib/geo";
 import type { Place, PlaceMode } from "@/lib/places";
 import type { PlaceSummary } from "@/app/api/place/route";
 import type { Deal, Destination, FaresResponse, Gateway, ReachResponse, ReachStation } from "@/lib/types";
-import { BANDS, dealKey, type AskState, type Band, type BoardState, type DealNights, type LiveSearch, type Origin, type Period, type PickMode, type PickedDetail, type Sheet, type View } from "@/lib/ui-types";
+import { BANDS, dealKey, type AskState, type Band, type BoardState, type DealNights, type EventSpot, type LiveSearch, type Origin, type Period, type PickMode, type PickedDetail, type PlacePage, type Sheet, type View } from "@/lib/ui-types";
 import { changes, countryName, dateRange, kiwiPhoto, monthLabel, shortDate, stops, todayIso } from "@/lib/format";
 import PlaceIntel, { type Intel } from "./PlaceIntel";
 import type { Sights } from "@/app/api/sights/route";
@@ -22,6 +25,41 @@ import type { HotelsResult } from "@/lib/liteapi";
 export type { PlanState, WildState } from "./TripsPanel";
 
 export type CombosState = { status: "idle" | "loading" | "ok" | "error"; result?: CombosResult; note?: string };
+
+/**
+ * The capabilities every page offers, wherever it is: the way there from the traveller's
+ * place (Get there), the events worth flying for, and turning a result into an itinerary.
+ * The globe owns them; the panel only places them on its pages.
+ */
+export type Capabilities = {
+  /** The traveller's place as /api/route reads it: a city name, or "lat,lon". */
+  fromPlace: string;
+  /** The Been list as a query value ("RO,HU"), or nothing when off. */
+  excludeQ?: string;
+  originPlace?: ItinPlace;
+  onOpenRoute: (q: { from: string; to: string; depart?: string; nights?: number; oneWay?: boolean }, r: RouteResult | null) => void;
+  onEvent: (e: EventSpot) => void;
+  onItinerary: (s: Skeleton) => void;
+  /** A few nights at a place, as a skeleton to plan; null when the traveller's place is not known yet. */
+  placeSkeleton: (pl: { name: string; code?: string; country?: string; lat: number; lon: number }) => Skeleton | null;
+  /** The event a deal's dates overlap at its destination, for the badge; null when none. */
+  eventOf: (d: Deal) => EventSpot | null;
+  /** The curated events at a place in the next year, Been rules applied. */
+  eventsAtPlace: (q: { code?: string; country?: string; lat: number; lon: number }) => EventSpot[];
+};
+
+/** "Plan a few nights here" on a place page: three nights two weeks out, from the traveller's place. */
+function PlaceItinerary({ caps, place }: { caps: Capabilities; place: { name: string; code?: string; country?: string; lat: number; lon: number } }) {
+  if (!caps.originPlace) return null;
+  return (
+    <div className="chips">
+      <ItineraryButton label="Plan a few nights here" onClick={() => {
+        const sk = caps.placeSkeleton(place);
+        if (sk) caps.onItinerary(sk);
+      }} />
+    </div>
+  );
+}
 
 export const MODE_LABEL: Record<PlaceMode, string> = { plane: "Fly", rail: "Train", coach: "Coach", ferry: "Ferry", other: "Ride" };
 const MODE_TAG: Record<string, string> = { plane: "FLY", rail: "TRN", coach: "BUS", ferry: "FRY", walk: "WLK", other: "···" };
@@ -88,6 +126,13 @@ type Props = {
   // trips, every kind
   tripsPanel: TripsPanelProps;
   onHere: () => void;
+  // capabilities shown on every page, and the views that sit in front of the tabs
+  caps: Capabilities;
+  /** A view in front of everything (the itinerary): it brings its own back button. */
+  front: ReactNode | null;
+  /** A place page opened from anywhere (atlas:place, the command line, an event). */
+  placePage: PlacePage | null;
+  onClosePlace: () => void;
   // the chat asking the globe to pick something
   pick: PickMode | null;
   pickPeriod: Period;
@@ -138,7 +183,7 @@ function Chips(p: { band: Band; onBand: (b: Band) => void; children?: React.Reac
   );
 }
 
-function DealCard({ d, active, photo, gem, been, warm, why, onClick, onHover }: { d: Deal; active: boolean; photo: string | null; gem: boolean; been: boolean; warm: number | null; why: string; onClick: () => void; onHover: (on: boolean) => void }) {
+function DealCard({ d, active, photo, gem, been, warm, why, event, onClick, onHover }: { d: Deal; active: boolean; photo: string | null; gem: boolean; been: boolean; warm: number | null; why: string; event: EventSpot | null; onClick: () => void; onHover: (on: boolean) => void }) {
   return (
     <div className={`card${active ? " active" : ""}`} onClick={onClick} onMouseEnter={() => onHover(true)} onMouseLeave={() => onHover(false)}>
       <div className="thumb">{photo && <img src={photo} alt="" loading="lazy" />}</div>
@@ -161,6 +206,11 @@ function DealCard({ d, active, photo, gem, been, warm, why, onClick, onHover }: 
           {d.stops ? ` · ${stops(d.stops)}` : ""}
         </div>
         <div className="badges">
+          {event && (
+            <span className="badge event" title={`${event.name}, ${dateRange(event.start, event.end)}: on while you are there`}>
+              {eventGlyph(event.kind)} {event.name}
+            </span>
+          )}
           {d.stops === 0 && <span className="badge direct">direct</span>}
           {d.backTo && <span className="badge heritage">home via {d.backTo}</span>}
           {d.trick && <span className="badge warm">hidden-city, one way</span>}
@@ -175,6 +225,63 @@ function DealCard({ d, active, photo, gem, been, warm, why, onClick, onHover }: 
         </div>
       </div>
     </div>
+  );
+}
+
+/** What a place page shows under Get there: things to do, where to eat, the guide's festivals, and the facts. */
+function PlaceSections({ p }: { p: Props }) {
+  return (
+    <>
+      {p.sights && (p.sights.see.length > 0 || p.sights.do.length > 0) && (
+        <div className="section">
+          <div className="headline">
+            <h2>What to do in {p.sights.title}</h2>
+            <button className="chip ghost" onClick={p.onShowSights}>
+              Show on the map
+            </button>
+          </div>
+          <div className="sights">
+            {[...p.sights.see.slice(0, 6), ...p.sights.do.slice(0, 2)].map((s) => (
+              <a key={s.kind + s.name} className="sight" href={s.url ?? p.sights!.url} target="_blank" rel="noreferrer">
+                <div className="sightimg" style={s.image ? { backgroundImage: `url(${s.image})` } : undefined}>
+                  <span className={`badge ${s.kind === "do" ? "warm" : "heritage"}`}>{s.kind === "do" ? "do" : "see"}</span>
+                </div>
+                <b>{s.name}</b>
+                {s.desc && <p>{s.desc}</p>}
+              </a>
+            ))}
+          </div>
+        </div>
+      )}
+      {p.eats && p.eats.food.status === "ok" && p.eats.food.places.length > 0 && (
+        <div className="section">
+          <h2>Eat well, fairly priced</h2>
+          {p.eats.food.places.slice(0, 6).map((e) => (
+            <a key={e.id} className="row" href={e.url ?? `https://foursquare.com/v/${e.id}`} target="_blank" rel="noreferrer" style={{ color: "inherit" }}>
+              <span className="code">{e.rating?.toFixed(1)}</span>
+              <span>
+                <div className="name">
+                  {e.name} <span className="muted">{"€".repeat(e.price ?? 1)}</span>
+                </div>
+                <div className="sub">{[e.category, e.tip].filter(Boolean).join(" · ")}</div>
+              </span>
+              <span className="meta">{e.distance != null ? `${(e.distance / 1000).toFixed(1)} km` : ""}</span>
+            </a>
+          ))}
+        </div>
+      )}
+      {p.sights && p.sights.events.length > 0 && (
+        <div className="section">
+          <h2>Festivals and events</h2>
+          {p.sights.events.slice(0, 4).map((e, i) => (
+            <p key={i} className="para" style={{ margin: 0 }}>
+              {e}
+            </p>
+          ))}
+        </div>
+      )}
+      {p.intel && <PlaceIntel intel={p.intel} summary={p.summary} />}
+    </>
   );
 }
 
@@ -201,6 +308,9 @@ export default function Panel(p: Props) {
         ? (boardNote ?? "No deals stored for these airports yet.")
         : "Nothing matches these filters. Loosen one.";
 
+  // A front view (the itinerary) or a place page sits over the tabs; the chat stays mounted underneath.
+  const covered = !!p.front || !!p.placePage;
+  const dealEvents = p.deal ? p.caps.eventsAtPlace({ code: p.deal.dstCity, country: p.deal.country, lat: p.intel?.lat ?? 0, lon: p.intel?.lon ?? 0 }) : [];
   const step = (dir: 1 | -1) => {
     const order: Sheet[] = ["peek", "half", "full"];
     const i = order.indexOf(p.sheet);
@@ -223,7 +333,7 @@ export default function Panel(p: Props) {
         }}
       />
 
-      {!(tab === "deals" && p.deal) && (
+      {!(tab === "deals" && p.deal) && !p.front && !p.placePage && (
         <div className="tabs">
           <button className={`tab${tab === "chat" ? " on" : ""}`} onClick={() => p.onView("chat")}>
             Ask
@@ -267,13 +377,37 @@ export default function Panel(p: Props) {
       {/* The chat stays mounted on every tab: a tool call still running while the visitor peeks
           at Deals must deliver its answer into the same thread. display:contents keeps the
           panel's flex layout exactly as if the wrapper were not there. */}
-      <div className="chatwrap" style={{ display: tab === "chat" ? "contents" : "none" }} aria-hidden={tab !== "chat"}>
+      <div className="chatwrap" style={{ display: tab === "chat" && !covered ? "contents" : "none" }} aria-hidden={tab !== "chat" || covered}>
         <ChatPanel context={p.chatContext} seed={p.chatSeed} onSeedConsumed={p.onChatSeedConsumed} onDeals={p.onChatDeals} onTrip={p.onChatTrip} onOpenDeal={(key) => p.onDeal(key)} />
       </div>
 
-      {tab === "trips" && <TripsPanel {...p.tripsPanel} />}
+      {p.front}
 
-      {tab === "deals" && p.deal && (
+      {!p.front && p.placePage && (
+        <>
+          <div className="heroimg" style={{ backgroundImage: p.summary?.thumbnail ? `url(${p.summary.thumbnail})` : undefined }}>
+            <button className="back" onClick={p.onClosePlace}>
+              ← Back
+            </button>
+            <div className="title">
+              <h3>
+                {p.placePage.name}
+                <small>{p.placePage.country ? countryName(p.placePage.country) : "a place"}</small>
+              </h3>
+            </div>
+          </div>
+          <div className="scroll" style={{ display: "flex", flexDirection: "column", gap: 10, paddingTop: 10 }}>
+            <PlaceItinerary caps={p.caps} place={p.placePage} />
+            <GetThere from={p.caps.fromPlace} to={p.placePage.name} exclude={p.caps.excludeQ} onOpen={p.caps.onOpenRoute} />
+            <WorthFlyingFor events={p.caps.eventsAtPlace({ code: p.placePage.code, country: p.placePage.country, lat: p.placePage.lat, lon: p.placePage.lon })} onEvent={p.caps.onEvent} />
+            <PlaceSections p={p} />
+          </div>
+        </>
+      )}
+
+      {!covered && tab === "trips" && <TripsPanel {...p.tripsPanel} />}
+
+      {!covered && tab === "deals" && p.deal && (
         <>
           <div className="heroimg" style={{ backgroundImage: `url(${kiwiPhoto(p.deal.img) ?? p.thumbs[p.deal.city] ?? ""})` }}>
             <button className="back" onClick={() => p.onDeal(null)}>
@@ -304,11 +438,24 @@ export default function Panel(p: Props) {
                 Book on Kiwi.com <small>€{p.deal.price} return ↗</small>
               </a>
             )}
+            <div className="chips">
+              <ItineraryButton onClick={() => p.deal && p.caps.onItinerary(skeletonFromDeal(p.deal, p.caps.originPlace))} />
+              {dealEvents
+                .filter((e) => e.end >= p.deal!.out && e.start <= p.deal!.back)
+                .slice(0, 1)
+                .map((e) => (
+                  <button key={e.key} className="chip ghost eventchip" onClick={() => p.caps.onEvent(e)} title="On while you are there">
+                    {eventGlyph(e.kind)} {e.name} · {dateRange(e.start, e.end)}
+                  </button>
+                ))}
+            </div>
             {p.deal.trick && <div className="fact warn wide">{p.deal.trick}</div>}
             <div className="status">
               From {p.deal.gw}, {stops(p.deal.stops)} with {p.deal.carriers.join(" + ")}: {formatDuration(p.deal.outMin)} out, {formatDuration(p.deal.backMin)} back.
               {p.deal.bags ? ` ${p.deal.bags[0].toUpperCase()}${p.deal.bags.slice(1)} included.` : ""} Found on Kiwi.com {newest ? shortDate(newest) : "recently"}; the booking page shows the live price.
             </div>
+            <GetThere from={p.caps.fromPlace} to={p.deal.city} depart={p.deal.out} nights={p.deal.nights} exclude={p.caps.excludeQ} onOpen={p.caps.onOpenRoute} />
+            <WorthFlyingFor events={dealEvents} onEvent={p.caps.onEvent} />
             {p.dealOptions.length > 1 && (
               <div className="section">
                 <h2>Other dates</h2>
@@ -494,7 +641,7 @@ export default function Panel(p: Props) {
         </>
       )}
 
-      {tab === "deals" && !p.deal && (
+      {!covered && tab === "deals" && !p.deal && (
         <div className="scroll cards">
           <FinderForm gateways={p.gateways} defaults={p.boards.map((b) => b.gateway)} state={p.finder} onSearch={p.onFinder} onClear={p.onFinderClear} />
           <div className="headline">
@@ -573,6 +720,7 @@ export default function Panel(p: Props) {
                 been={!p.been.newOnly && p.been.countries.includes(d.country)}
                 warm={p.warmOf(d)}
                 why={p.whyOf(d)}
+                event={p.caps.eventOf(d)}
                 onClick={() => p.onDeal(dealKey(d))}
                 onHover={(on) => p.onHoverDeal(on ? dealKey(d) : null)}
               />
@@ -584,7 +732,7 @@ export default function Panel(p: Props) {
         </div>
       )}
 
-      {tab === "explore" && (
+      {!covered && tab === "explore" && (
         <div className="chips">
           <button className={`chip${p.view === "all" ? " on" : ""}`} onClick={() => p.onView("all")}>
             Any way
@@ -598,7 +746,7 @@ export default function Panel(p: Props) {
         </div>
       )}
 
-      {p.view === "all" && (
+      {!covered && p.view === "all" && (
         <div className="scroll" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
           {!place && p.origin && (
             <div className="row" onClick={p.onHere} title="What's on, what to do, where to eat, right here">
@@ -653,6 +801,9 @@ export default function Panel(p: Props) {
                   </>
                 )}
               </div>
+              <PlaceItinerary caps={p.caps} place={{ name: place.name, code: p.intel?.code, country: place.country, lat: place.lat, lon: place.lon }} />
+              <GetThere from={p.caps.fromPlace} to={place.name} exclude={p.caps.excludeQ} onOpen={p.caps.onOpenRoute} />
+              <WorthFlyingFor events={p.caps.eventsAtPlace({ code: p.intel?.code, country: place.country, lat: place.lat, lon: place.lon })} onEvent={p.caps.onEvent} />
             </>
           )}
           <div className="headline">
@@ -761,7 +912,7 @@ export default function Panel(p: Props) {
         </div>
       )}
 
-      {p.view === "ground" && (
+      {!covered && p.view === "ground" && (
         <div className="scroll" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
           <h2>Nearest stations</h2>
           <div>
@@ -801,7 +952,7 @@ export default function Panel(p: Props) {
         </div>
       )}
 
-      {p.view === "fly" && (
+      {!covered && p.view === "fly" && (
         <div className="scroll" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
           <h2>Your airports</h2>
           <div>

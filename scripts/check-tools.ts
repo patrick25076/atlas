@@ -15,7 +15,22 @@
 // the tools hand their engines (read through AgentContext.trace, which stops the tool before
 // any search leaves: the deadlines, the route budget, region custom for a countries list),
 // a dated route whose window would start in the past, and a long stay refused in a sentence.
-import { atlasTools, parseDay, type AgentContext } from "../lib/agent-tools";
+//
+// Three more sections, zero Kiwi searches each, run first:
+//   command    parseCommand (lib/command.ts) on a table of typed lines, against a fixed today;
+//   dispatch   the details the chat sends on the UI bus (atlas:route-result, atlas:itinerary,
+//              atlas:command, atlas:route), built from real converters on fixed inputs;
+//   itinerary  make_itinerary: a two-stop list (the model, or with --itin-stub the engine's
+//              no-model path that builds the days from the guides), nothing to plan from,
+//              last_route replayed from a thread's history, and an unknown place.
+// --only=command,dispatch,itinerary runs just those (no live tool at all); --only=tools just
+// the live table.
+import { atlasTools, parseDay, rememberOutput, type AgentContext } from "../lib/agent-tools";
+import { parseCommand, type Command } from "../lib/command";
+import { eventCommand, eventRoute, eventTripDays, routeDetail, routeResultDetail, type ChatEvent } from "../lib/chat-widgets";
+import { skeletonFromDeal, skeletonFromRoute, type Itinerary } from "../lib/itinerary";
+import type { RouteResult } from "../lib/route-finder";
+import type { Deal } from "../lib/types";
 import { kiwiStats, kiwiThrottled } from "../lib/kiwi";
 import { readJson } from "../lib/boards-store";
 import { wildPath, type WildTrip } from "../lib/wild";
@@ -145,6 +160,265 @@ const LONG_BUILD_MS = Math.max(30_000, Number(process.env.LONG_BUILD_MS) || 150_
 const DEADLINE_MARGIN_MS = 10_000;
 /** True when `at` (epoch ms) is within five seconds of `want`. */
 const near = (at: unknown, want: number) => typeof at === "number" && Math.abs(at - want) < 5_000;
+
+const only = args.find((a) => a.startsWith("--only="))?.split("=")[1]?.split(",").map((x) => x.trim()) ?? null;
+const want = (section: string) => !only || only.includes(section);
+
+/** The whole table and the verdict; exits non-zero when anything failed. */
+function report(): never {
+  console.log("");
+  const w = { tool: 28, ms: 7, status: 62, kiwi: 5, source: 8 };
+  console.log(`${"tool".padEnd(w.tool)} ${"ms".padStart(w.ms)} ${"status".padEnd(w.status)} ${"kiwi".padStart(w.kiwi)} ${"source".padEnd(w.source)} note`);
+  for (const r of rows) console.log(`${r.tool.padEnd(w.tool)} ${String(r.ms).padStart(w.ms)} ${r.status.slice(0, w.status).padEnd(w.status)} ${String(r.kiwi).padStart(w.kiwi)} ${r.source.padEnd(w.source)} ${r.note}`);
+  const st = kiwiStats();
+  console.log("");
+  console.log(`${rows.length} tools, ${failures} failed; Kiwi searches sent this run: ${st.today} (${st.failedToday} failed, ${st.throttledToday} held by the breaker); turn budget used: ${ctx.budget!.used}; breaker ${st.throttledUntil ? `open until ${st.throttledUntil}` : "closed"}`);
+  process.exit(failures ? 1 : 0);
+}
+
+// ---------------------------------------------------------------------------------------
+// command: the command line, pure. Each case is a typed line and the fields its FIRST
+// suggestion must have (anything not named is free); every list must end with an ask.
+if (want("command")) {
+  console.log("parseCommand (today 2026-10-10, a Saturday):");
+  const T = "2026-10-10";
+  type Want = Partial<Record<string, unknown>> & { kind: Command["kind"] };
+  // An optional third field is the day the line is typed on (default T).
+  const cases: [string, Want, string?][] = [
+    ["Brasov to Lisbon", { kind: "route", from: "Brasov", to: "Lisbon" }],
+    ["to Lisbon 14 Nov 4 nights", { kind: "route", from: undefined, to: "Lisbon", depart: "2026-11-14", nights: 4 }],
+    ["Bucharest -> Rome one way", { kind: "route", from: "Bucharest", to: "Rome", oneWay: true, nights: undefined }],
+    ["lisbon in november", { kind: "getaways", where: "Lisbon", from: "2026-11-01", to: "2026-11-30" }],
+    ["events in february", { kind: "events", from: "2027-02-01", to: "2027-02-28" }],
+    ["carnival", { kind: "events", words: ["carnival"] }],
+    ["jazz festivals in march", { kind: "events", words: ["jazz", "festival"], from: "2027-03-01", to: "2027-03-31" }],
+    ["getaways under 3h this weekend", { kind: "getaways", from: "2026-10-10", to: "2026-10-11", maxHours: 3 }],
+    ["/route", { kind: "route", to: "" }],
+    ["/events", { kind: "events", from: undefined, words: undefined }],
+    ["/wild sea 21", { kind: "wild", region: "sea", nights: 21 }],
+    ["/stay thailand 2 months", { kind: "longstay", countries: ["Thailand"], months: 2 }],
+    ["/place Porto", { kind: "place", name: "Porto" }],
+    ["/itinerary", { kind: "itinerary", stops: undefined }],
+    ["Brasov to Lisbon 2026-11-14", { kind: "route", from: "Brasov", to: "Lisbon", depart: "2026-11-14" }],
+    ["Cluj to Paris next friday", { kind: "route", from: "Cluj", to: "Paris", depart: "2026-10-16" }],
+    ["to Vienna 14/11 for a week", { kind: "route", to: "Vienna", depart: "2026-11-14", nights: 7 }],
+    ["Bucharest → Barcelona 14 to 18 Nov", { kind: "route", from: "Bucharest", to: "Barcelona", depart: "2026-11-14", nights: 4 }],
+    ["Brasov to Lisbon 20 Dec to 3 Jan", { kind: "route", depart: "2026-12-20", nights: 14 }],
+    ["how do I get from Brasov to Vienna", { kind: "route", from: "Brasov", to: "Vienna" }],
+    ["cheapest way to Lisbon", { kind: "route", from: undefined, to: "Lisbon" }],
+    ["Brasov - Budapest this weekend", { kind: "route", from: "Brasov", to: "Budapest", depart: "2026-10-10", nights: 1 }],
+    ["OTP to LIS 2 weeks", { kind: "route", from: "OTP", to: "LIS", nights: 14 }],
+    ["Brasov to Lisbon flex 3", { kind: "route", flex: 3 }],
+    ["trip to Japan for 2 weeks", { kind: "route", to: "Japan", nights: 14 }],
+    ["Rome", { kind: "place", name: "Rome" }],
+    ["porto", { kind: "place", name: "Porto" }],
+    ["new york", { kind: "place", name: "New York" }],
+    ["is Porto nice in October", { kind: "ask", text: "is Porto nice in October" }],
+    ["tell me about Porto", { kind: "ask" }],
+    ["what's on in Lisbon in november", { kind: "events", where: "Lisbon", from: "2026-11-01", to: "2026-11-30" }],
+    ["oktoberfest", { kind: "events", words: ["oktoberfest"] }],
+    ["marathons in april", { kind: "events", words: ["marathon"], from: "2027-04-01", to: "2027-04-30" }],
+    ["christmas markets in december", { kind: "events", words: ["christmas market"], from: "2026-12-01", to: "2026-12-31" }],
+    ["northern lights", { kind: "events", words: ["northern lights"] }],
+    ["festivals in Spain in june", { kind: "events", words: ["festival"], where: "Spain", from: "2027-06-01" }],
+    ["/wild southeast asia 3 weeks", { kind: "wild", region: "sea", nights: 21 }],
+    ["Balkans loop 10 nights", { kind: "wild", region: "balkans", nights: 10 }],
+    ["/wild vietnam, laos 18", { kind: "wild", countries: ["Vietnam", "Laos"], nights: 18 }],
+    ["2 months in Bali", { kind: "longstay", countries: ["Bali"], months: 2 }],
+    ["/stay sea 3", { kind: "longstay", region: "sea", months: 3 }],
+    ["itinerary Lisbon 3 nights from 2026-11-14", { kind: "itinerary", stops: [{ place: "Lisbon", nights: 3 }], start: "2026-11-14" }],
+    ["itinerary Lisbon 3 nights, Porto 2 nights from 14 Nov", { kind: "itinerary", stops: [{ place: "Lisbon", nights: 3 }, { place: "Porto", nights: 2 }], start: "2026-11-14" }],
+    ["plan my days: 2 nights in Rome then Florence 3", { kind: "itinerary", stops: [{ place: "Rome", nights: 2 }, { place: "Florence", nights: 3 }] }],
+    ["/itinerary Porto 2 from Brasov on 1 Dec", { kind: "itinerary", stops: [{ place: "Porto", nights: 2 }], start: "2026-12-01", from: "Brasov" }],
+    ["weekend in Rome", { kind: "getaways", where: "Rome", minNights: 2, maxNights: 3 }],
+    ["anywhere warm in december", { kind: "getaways", where: undefined, from: "2026-12-01", to: "2026-12-31" }],
+    ["getaways under €100 next weekend", { kind: "getaways", maxPrice: 100, from: "2026-10-16", to: "2026-10-18" }],
+    ["somewhere this weekend", { kind: "getaways", from: "2026-10-10", to: "2026-10-11" }],
+    ["14 Nov", { kind: "getaways", from: "2026-11-14" }],
+    ["next month", { kind: "getaways", from: "2026-11-01", to: "2026-11-30" }],
+    ["Lisbon early december", { kind: "getaways", where: "Lisbon", from: "2026-12-01", to: "2026-12-10" }],
+    ["/route Brasov to Lisbon 4 nights", { kind: "route", from: "Brasov", to: "Lisbon", nights: 4 }],
+    ["/ask is it cold in Oslo", { kind: "ask", text: "is it cold in Oslo" }],
+    ["", { kind: "ask" }],
+    // Weekday ranges end on the first such weekday after the start, never a year on.
+    ["friday to sunday", { kind: "getaways", from: "2026-10-16", to: "2026-10-18" }],
+    ["Rome friday to sunday", { kind: "getaways", where: "Rome", from: "2026-10-16", to: "2026-10-18" }],
+    ["friday to sunday in Rome", { kind: "getaways", where: "Rome", from: "2026-10-16", to: "2026-10-18" }],
+    ["between march and june", { kind: "getaways", from: "2027-03-01", to: "2027-06-30" }],
+    // "this friday" said on a Friday is today; "next friday" is a week on.
+    ["fly from Vienna to Rome on friday", { kind: "route", from: "Vienna", to: "Rome", depart: "2026-10-16" }, "2026-10-16"],
+    ["Paris this friday", { kind: "getaways", where: "Paris", from: "2026-10-16" }, "2026-10-16"],
+    ["friday to sunday", { kind: "getaways", from: "2026-10-16", to: "2026-10-18" }, "2026-10-16"],
+    ["Cluj to Paris next friday", { kind: "route", depart: "2026-10-23" }, "2026-10-16"],
+    // Words after the destination are not part of its name.
+    ["Lisbon to Porto by train", { kind: "route", from: "Lisbon", to: "Porto" }],
+    ["Brasov to Lisbon and back", { kind: "route", from: "Brasov", to: "Lisbon" }],
+    ["Brasov to Lisbon on 14 Nov flexible", { kind: "route", to: "Lisbon", depart: "2026-11-14", flex: 3 }],
+    ["Rome to Paris to London", { kind: "route", from: "Rome", to: "Paris" }],
+    ["Lisbon 4 nights from Brasov", { kind: "route", from: "Brasov", to: "Lisbon", nights: 4 }],
+    // A list of stays is an itinerary without the word.
+    ["Lisbon 3 nights, Porto 2 nights from 14 Nov", { kind: "itinerary", stops: [{ place: "Lisbon", nights: 3 }, { place: "Porto", nights: 2 }], start: "2026-11-14" }],
+    ["Lisbon 3 nights then Porto 2 nights", { kind: "itinerary", stops: [{ place: "Lisbon", nights: 3 }, { place: "Porto", nights: 2 }] }],
+    ["Porto 2 from Brasov on 1 Dec", { kind: "itinerary", stops: [{ place: "Porto", nights: 2 }], start: "2026-12-01", from: "Brasov" }],
+    ["itinerary from Brasov: Lisbon 3 nights, Porto 2 nights", { kind: "itinerary", stops: [{ place: "Lisbon", nights: 3 }, { place: "Porto", nights: 2 }], from: "Brasov" }],
+    ["itinerary Rome 2 nights, Florence 2 days, Venice a week", { kind: "itinerary", stops: [{ place: "Rome", nights: 2 }, { place: "Florence", nights: 1 }, { place: "Venice", nights: 7 }] }],
+    // A bare name keeps one way and a price cap; holidays are events, not places.
+    ["Lisbon 14 Nov 4 nights one way", { kind: "route", to: "Lisbon", oneWay: true, depart: "2026-11-14" }],
+    ["Lisbon under 100", { kind: "getaways", where: "Lisbon", maxPrice: 100 }],
+    ["Christmas in Vienna", { kind: "events", where: "Vienna", words: ["christmas"] }],
+    ["Easter in Seville", { kind: "events", where: "Seville", words: ["easter"] }],
+    ["new year in Berlin", { kind: "events", where: "Berlin", words: ["new year"] }],
+  ];
+  const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
+  for (const [input, wantFirst, on] of cases) {
+    const list = parseCommand(input, on ?? T);
+    const first = list[0] as unknown as Record<string, unknown>;
+    const wrong = Object.entries(wantFirst).filter(([k, v]) => !same(first?.[k], v)).map(([k, v]) => `${k} ${JSON.stringify(first?.[k]) ?? "undefined"} (wanted ${JSON.stringify(v) ?? "undefined"})`);
+    const askLast = list.at(-1)?.kind === "ask" && list.filter((c) => c.kind === "ask").length === 1;
+    const labelled = list.every((c) => typeof c.label === "string" && c.label.length > 0 && !c.label.includes("—"));
+    const ok = !wrong.length && askLast && labelled;
+    if (!ok) failures++;
+    const detail = ok ? `${first.kind}: ${first.label}` : [...wrong, askLast ? "" : "the list does not end with exactly one ask", labelled ? "" : "a label is empty or has an em dash"].filter(Boolean).join("; ");
+    rows.push({ tool: `cmd "${input}"`.slice(0, 28), ms: 0, status: ok ? `ok (${first.kind})` : `FAIL: ${detail}`, kiwi: 0, source: "", note: ok ? String(first.label).slice(0, 90) : "" });
+    process.stdout.write(`  ${`"${input}"`.slice(0, 46).padEnd(46)} ${ok ? "ok  " : "FAIL"} ${detail.slice(0, 110)}\n`);
+  }
+  // The same line on the same day is the same answer (the bar re-ranks on every keystroke).
+  const a1 = JSON.stringify(parseCommand("to Lisbon 14 Nov 4 nights", T));
+  const a2 = JSON.stringify(parseCommand("to Lisbon 14 Nov 4 nights", T));
+  verdict("command: deterministic", a1 === a2, a1 === a2 ? "same input, same suggestions" : "two runs differ");
+  console.log("");
+}
+
+// ---------------------------------------------------------------------------------------
+// dispatch: what the chat sends on the UI bus, from fixed inputs (no network).
+if (want("dispatch")) {
+  console.log("UI event details (atlas:route-result, atlas:itinerary, atlas:command, atlas:route):");
+  const leg = (from: string, to: string, date: string, price: number | null, kind: "fly" | "train" = "fly") => ({ kind, from, fromName: from, to, toName: to, date, minutes: 180, price, ...(kind === "fly" ? { url: "https://www.kiwi.com/x" } : {}) });
+  const opt = { kind: "direct" as const, legs: [leg("OTP", "LIS", "2026-11-14", 120)], back: [leg("LIS", "OTP", "2026-11-18", null)], backTotal: 0, total: 120, hours: 5, stops: 0, title: "Bucharest to Lisbon", why: "the cheapest", urls: ["https://www.kiwi.com/x"], score: 1, nonstop: true };
+  const result: RouteResult = { from: { label: "Brașov", lat: 45.657, lon: 25.601, airports: ["OTP"] }, to: { label: "Lisbon", lat: 38.72, lon: -9.14, airports: ["LIS"] }, options: [opt, { ...opt, kind: "via-hub", title: "Via Madrid", total: 140 }], cheapest: opt, fastest: opt, searched: 1, failed: 0, considered: ["the direct fare"], sources: ["live"], generatedAt: "2026-10-10T10:00:00Z" };
+  const d1 = routeResultDetail(result);
+  verdict("route-result: whole result", d1.result === result && !("option" in d1), JSON.stringify({ option: (d1 as { option?: number }).option, options: d1.result.options.length }));
+  const d2 = routeResultDetail(result, 1);
+  verdict("route-result: one option", d2.option === 1, `option ${d2.option}`);
+  verdict("route-result: bad option", !("option" in routeResultDetail(result, 7)), "an index past the list is dropped, not sent");
+  const r1 = routeDetail({ from: "Brașov", to: "Lisbon", depart: "2026-11-14", flex: 2, nights: 4 });
+  verdict("route: return", r1.to === "Lisbon" && r1.nights === 4 && r1.oneWay === false && r1.depart === "2026-11-14", JSON.stringify(r1));
+  const r2 = routeDetail({ from: "Brașov", to: "Lisbon", depart: "2026-11-14", nights: null });
+  verdict("route: one way", r2.oneWay === true && !("nights" in r2), JSON.stringify(r2));
+  const sk = skeletonFromRoute(result, 0);
+  verdict("itinerary: route skeleton", sk.source === "route" && sk.stops.length === 1 && sk.stops[0].nights === 4 && sk.legs.length === 2, `${sk.title}; ${sk.stops.length} stop, ${sk.legs.length} legs`);
+  const deal = { gw: "OTP", dst: "LIS", dstCity: "LIS", city: "Lisbon", country: "PT", price: 120, out: "2026-11-14", back: "2026-11-18", nights: 4, stops: 0, carriers: ["W6"], outMin: 230, backMin: 240, url: "https://www.kiwi.com/x" } as Deal;
+  const sd = skeletonFromDeal(deal, { name: "Brașov", lat: 45.657, lon: 25.601 });
+  verdict("itinerary: deal skeleton", sd.source === "deal" && sd.stops[0].nights === 4 && sd.origin.name === "Brașov", `${sd.title}; from ${sd.origin.name}`);
+  const ev: ChatEvent = { event: "Carnival of Venice", city: "Venice", code: "VCE", country: "IT", start: "2027-02-07", end: "2027-02-17", dates: "2027-02-07 to 2027-02-17" };
+  const cmd = eventCommand(ev);
+  const parsed = parseCommand(cmd.text, "2026-10-10")[0] as Extract<Command, { kind: "events" }>;
+  verdict("command: event on the map", parsed.kind === "events" && parsed.where === "Venice" && parsed.from === "2027-02-07" && parsed.to === "2027-02-17", `${cmd.text} -> ${parsed.kind} ${parsed.where} ${parsed.from} to ${parsed.to}`);
+  // A run longer than five days gets four nights (what skeletonFromEvent plans).
+  const er = eventRoute(ev, "2026-10-10");
+  verdict("route: get to the event", er.to === "Venice" && er.depart === "2027-02-07" && er.nights === 4, JSON.stringify(er));
+  const short = eventRoute({ event: "Holi", city: "Jaipur", dates: "2027-03-03 to 2027-03-03" }, "2026-10-10");
+  verdict("route: a one-day event", short.nights === 2 && short.depart === "2027-03-03", JSON.stringify(short));
+  // An event already on is joined from tomorrow, never from its first day in the past.
+  const fiesta: ChatEvent = { event: "Balloon Fiesta", city: "Albuquerque", start: "2026-10-03", end: "2026-10-11" };
+  const on = eventRoute(fiesta, "2026-10-10");
+  const onDays = eventTripDays(fiesta, "2026-10-10");
+  verdict("route: an event under way", on.depart === "2026-10-11" && on.nights === 2 && onDays?.start === "2026-10-11" && onDays.end === "2026-10-11", `${JSON.stringify(on)}; trip days ${JSON.stringify(onDays)}`);
+  const xmas = eventRoute({ event: "Christmas markets", city: "Vienna", start: "2026-12-01", end: "2026-12-23" }, "2026-10-10");
+  verdict("route: a season", xmas.nights === 4 && xmas.depart === "2026-12-01", JSON.stringify(xmas));
+  console.log("");
+}
+
+// ---------------------------------------------------------------------------------------
+// itinerary: make_itinerary, no Kiwi. The two-stop case calls the model (a minute) unless
+// --itin-stub is given: then the model key is hidden for the call, and the engine writes the
+// days from the guides alone (its own no-model path), which needs no Bedrock at all.
+if (want("itinerary")) {
+  console.log(`make_itinerary (${flag("itin-stub") ? "no model: the engine's guide-only path" : "the model writes the days"}):`);
+  const ictx: AgentContext = { origin: { lat: 45.657, lon: 25.601, label: "Brașov" }, gateways: ["GHV", "SBZ", "OTP"], home: "RO", today, budget: { used: 0, max: 0 } };
+  const it = atlasTools(ictx) as unknown as Tools;
+  const run = async (input: unknown) => (await it.make_itinerary!.execute!(input, { toolCallId: "check-itin", messages: [] })) as Record<string, unknown>;
+  // Two stops by name, from Brasov, five weeks out.
+  {
+    const start = plus(35);
+    const key = process.env.AWS_BEARER_TOKEN_BEDROCK;
+    if (flag("itin-stub")) delete process.env.AWS_BEARER_TOKEN_BEDROCK;
+    const before = sent();
+    const t0 = Date.now();
+    let r: Record<string, unknown> = {};
+    try {
+      r = await run({ stops: [{ place: "Lisbon", nights: 2 }, { place: "Porto", nights: 2 }], start, wishes: "pastries and tiles" });
+    } finally {
+      if (key) process.env.AWS_BEARER_TOKEN_BEDROCK = key;
+    }
+    const raw = r.raw as Itinerary | undefined;
+    const days = Array.isArray(r.days) ? (r.days as { day: number; date: string; where: string; title: string }[]) : [];
+    const ok = !r.error && !!raw && raw.stops.length === 2 && raw.start === start && days.length === raw.days.length && days.length >= 4 && sent() === before && typeof r.skeleton === "object";
+    if (!ok) failures++;
+    rows.push({ tool: "make_itinerary (2 stops)", ms: Date.now() - t0, status: ok ? `ok (${days.length} days, ${raw?.status}, €${raw?.costs.total} est.)` : `FAIL: ${String(r.error ?? r.note ?? "no itinerary")}`, kiwi: sent() - before, source: String(r.source ?? ""), note: String(r.note ?? "").slice(0, 90) });
+    process.stdout.write(`  ${"make_itinerary (2 stops)".padEnd(28)} ${rows.at(-1)!.status}\n`);
+    for (const d of days.slice(0, 6)) process.stdout.write(`      day ${d.day} ${d.date} ${d.where}: ${d.title}\n`);
+    // What the model reads: no raw, no skeleton.
+    const model = (it.make_itinerary as unknown as { toModelOutput?: (o: { output: unknown }) => { value: Record<string, unknown> } }).toModelOutput?.({ output: r });
+    verdict("make_itinerary: model output", !!model && !("raw" in model.value) && !("skeleton" in model.value) && Array.isArray(model.value.days), model ? `keys ${Object.keys(model.value).join(", ").slice(0, 60)}` : "no toModelOutput");
+  }
+  // Nothing shown yet: a plain note, never an error, no model call.
+  {
+    const r = await run({ from: "last_route" });
+    verdict("make_itinerary: nothing yet", typeof r.error !== "string" && typeof r.note === "string" && /no way from A to B/.test(r.note as string), String(r.note ?? r.error ?? "").slice(0, 70));
+  }
+  // An unknown place: the engine's sentence as a note.
+  {
+    const r = await run({ stops: [{ place: "Narnia Town", nights: 2 }], start: plus(35) });
+    verdict("make_itinerary: unknown place", typeof r.error !== "string" && typeof r.note === "string" && /Narnia/.test(r.note as string), String(r.note ?? r.error ?? "").slice(0, 70));
+  }
+  // last_route replayed from a thread's history (what the chat route does): the parameters
+  // the tool hands the engine are read through the trace, which stops it before any model call.
+  {
+    const hctx: AgentContext = { ...ictx, budget: { used: 0, max: 0 } };
+    const leg = (from: string, to: string, date: string, price: number | null) => ({ kind: "fly" as const, from, fromName: from, to, toName: to, date, minutes: 200, price, url: "https://www.kiwi.com/x" });
+    const opt = { kind: "direct" as const, legs: [leg("OTP", "LIS", plus(30), 120)], back: [leg("LIS", "OTP", plus(34), null)], total: 120, hours: 5, stops: 0, title: "Bucharest to Lisbon", why: "", urls: [], score: 1 };
+    const raw: RouteResult = { from: { label: "Brașov", lat: 45.657, lon: 25.601, airports: ["OTP"] }, to: { label: "Lisbon", lat: 38.72, lon: -9.14, airports: ["LIS"] }, options: [opt], cheapest: opt, fastest: opt, searched: 1, failed: 0, considered: [], sources: ["live"], generatedAt: new Date().toISOString() };
+    rememberOutput(hctx, "cheapest_way", { from: "Brașov", to: "Lisbon", options: [{}], raw });
+    let seen: Record<string, unknown> | null = null;
+    hctx.trace = (_engine, params) => {
+      seen = params;
+      throw new Error("harness: parameters read");
+    };
+    await (atlasTools(hctx) as unknown as Tools).make_itinerary!.execute!({ from: "last_route", pace: "slow" }, { toolCallId: "check-itin-route", messages: [] });
+    const got = seen as Record<string, unknown> | null;
+    verdict("make_itinerary: last_route", !!got && Array.isArray(got.stops) && (got.stops as string[])[0] === "Lisbon" && got.start === plus(30) && got.nights === 4 && got.pace === "slow", got ? `stops ${String(got.stops)}, start ${got.start}, ${got.nights} nights, pace ${got.pace}, deadline ${got.deadlineMs} ms` : "the tool never reached the engine");
+    // A restored thread keeps only the compact rows: planned by names instead.
+    const cctx: AgentContext = { ...ictx, budget: { used: 0, max: 0 } };
+    rememberOutput(cctx, "cheapest_way", { from: "Brașov", to: "Lisbon", depart: plus(30), nights: 3, options: [{ kind: "direct" }] });
+    let seen2: Record<string, unknown> | null = null;
+    cctx.trace = (_engine, params) => {
+      seen2 = params;
+      throw new Error("harness: parameters read");
+    };
+    await (atlasTools(cctx) as unknown as Tools).make_itinerary!.execute!({ from: "last_route" }, { toolCallId: "check-itin-compact", messages: [] });
+    const got2 = seen2 as Record<string, unknown> | null;
+    verdict("make_itinerary: compact route", !!got2 && (got2.stops as string[])?.[0] === "Lisbon" && got2.nights === 3 && got2.start === plus(30) && got2.legs === 2, got2 ? `stops ${String(got2.stops)}, ${got2.nights} nights from ${got2.start}, ${got2.legs} legs` : "the tool never reached the engine");
+    // A restored one-way route stays one way, and an option whose tickets the rows cannot
+    // rebuild (a train to a hub) is named in a note instead of silently ignored.
+    const octx: AgentContext = { ...ictx, budget: { used: 0, max: 0 } };
+    rememberOutput(octx, "cheapest_way", { from: "Brașov", to: "Lisbon", depart: plus(30), nights: null, options: [{ kind: "direct", title: "Bucharest to Lisbon" }, { kind: "ground-then-fly", title: "Train to Vienna, then fly" }] });
+    let seen3: Record<string, unknown> | null = null;
+    octx.trace = (_engine, params) => {
+      seen3 = params;
+      throw new Error("harness: parameters read");
+    };
+    await (atlasTools(octx) as unknown as Tools).make_itinerary!.execute!({ from: "last_route", option: 2 }, { toolCallId: "check-itin-oneway", messages: [] });
+    const got3 = seen3 as Record<string, unknown> | null;
+    const notes3 = (got3?.corrections as string[] | undefined) ?? [];
+    verdict("make_itinerary: compact one way", !!got3 && got3.legs === 1 && notes3.some((n) => /one way/.test(n)) && notes3.some((n) => /option 2 \(Train to Vienna/.test(n)), got3 ? `${got3.legs} leg; ${notes3.join(" | ").slice(0, 120)}` : "the tool never reached the engine");
+    const r4 = (await (atlasTools(octx) as unknown as Tools).make_itinerary!.execute!({ from: "last_route", option: 5 }, { toolCallId: "check-itin-nooption", messages: [] })) as Record<string, unknown>;
+    verdict("make_itinerary: compact bad option", typeof r4.note === "string" && /option 5 does not exist/.test(r4.note), String(r4.note ?? r4.error ?? "").slice(0, 70));
+  }
+  console.log("");
+}
+
+if (!want("tools")) report();
 
 console.log(`check-tools: context GHV, SBZ, OTP, home RO, origin Brasov, today ${today}; live cap ${LIVE_CAP} searches; Kiwi ${kiwiThrottled() ? "THROTTLED (breaker open)" : "open"}`);
 console.log("");
@@ -373,11 +647,4 @@ console.log("loose inputs (must resolve, no note needed):");
 await check("place_facts", { city: "cluj" });
 await check("ground_reach", { from: "Lisbon", maxHours: 3 });
 
-console.log("");
-const w = { tool: 28, ms: 7, status: 62, kiwi: 5, source: 8 };
-console.log(`${"tool".padEnd(w.tool)} ${"ms".padStart(w.ms)} ${"status".padEnd(w.status)} ${"kiwi".padStart(w.kiwi)} ${"source".padEnd(w.source)} note`);
-for (const r of rows) console.log(`${r.tool.padEnd(w.tool)} ${String(r.ms).padStart(w.ms)} ${r.status.slice(0, w.status).padEnd(w.status)} ${String(r.kiwi).padStart(w.kiwi)} ${r.source.padEnd(w.source)} ${r.note}`);
-const st = kiwiStats();
-console.log("");
-console.log(`${rows.length} tools, ${failures} failed; Kiwi searches sent this run: ${st.today} (${st.failedToday} failed, ${st.throttledToday} held by the breaker); turn budget used: ${ctx.budget!.used}; breaker ${st.throttledUntil ? `open until ${st.throttledUntil}` : "closed"}`);
-process.exit(failures ? 1 : 0);
+report();

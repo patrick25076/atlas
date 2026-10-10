@@ -3,7 +3,7 @@
 // a live search fills the rest for the best few. Dates of the edition are the usual ones;
 // the chat verifies the exact edition on the web when it matters.
 import { countryAllowed } from "./been";
-import { eventsInWindow, type PurposeEvent } from "./purpose-events";
+import { eventsAt, eventsInWindow, type PlaceEvent, type PurposeEvent } from "./purpose-events";
 import { dealsFor } from "./deals-source";
 import { kiwiDate, nightsOf, searchFlight } from "./kiwi";
 import { haversineKm } from "./geo";
@@ -43,7 +43,8 @@ const fold = (s: string) =>
  */
 export function eventMatches(e: PurposeEvent, kinds: readonly string[] | undefined): boolean {
   if (!kinds?.length) return true;
-  const words = `${fold(e.name)} ${fold(e.city)}`.split(" ").filter(Boolean);
+  // The venue counts as the city too: "kyoto" finds Gion Matsuri, filed under Osaka for the flight.
+  const words = `${fold(e.name)} ${fold(e.city)} ${fold(e.venue ?? "")}`.split(" ").filter(Boolean);
   const matchesWord = (k: string) => words.some((w) => w === k || (k.length >= 4 && w.startsWith(k)));
   return kinds.some((raw) => {
     const k = fold(raw);
@@ -115,4 +116,43 @@ export async function purposeTrips(gateways: string[], from: string, to: string,
   );
   const sorted = out.sort((a, b) => (a.deal ? a.deal.price : 9999) - (b.deal ? b.deal.price : 9999));
   return Object.assign(sorted, { searched, failed });
+}
+
+/**
+ * "What is on here": the curated events at a city (a code such as "LIS" or a name such as
+ * "Lisbon") or near a point, during a window. No board lookup, no search: the place pages
+ * call it through GET /api/purpose?city= or ?near=. A city the data knows also matches by
+ * distance to the venue (within `km`, default 150): a point near Bath finds Glastonbury at Pilton.
+ */
+export function placeEvents(q: { city?: string; lat?: number; lon?: number; km?: number }, from: string, to: string, exclude: string[] = []): { place: { code?: string; name: string; lat?: number; lon?: number } | null; events: PlaceEvent[] } {
+  let lat = q.lat;
+  let lon = q.lon;
+  let place: { code?: string; name: string; lat?: number; lon?: number } | null = null;
+  if (q.city) {
+    const raw = q.city.trim();
+    const code = /^[A-Za-z]{3}$/.test(raw) ? (CITIES[raw.toUpperCase()] ? raw.toUpperCase() : cityOf.get(raw.toUpperCase())) : undefined;
+    const byName = code ? undefined : cityByFoldedName().get(fold(raw));
+    const found = code ?? byName;
+    if (found && CITIES[found]) {
+      const c = CITIES[found];
+      place = { code: found, name: c.name, lat: c.lat, lon: c.lon };
+      lat ??= c.lat;
+      lon ??= c.lon;
+    } else place = { name: raw };
+  } else if (lat != null && lon != null) place = { name: `${lat.toFixed(2)},${lon.toFixed(2)}`, lat, lon };
+  const events = eventsAt({ city: place?.code ?? q.city, lat, lon, km: q.km }, from, to).filter((e) => countryAllowed(e.country, exclude));
+  return { place, events };
+}
+
+let foldedNames: Map<string, string> | null = null;
+/** Folded city name to code, built on first use (the bigger city wins a shared name). */
+function cityByFoldedName(): Map<string, string> {
+  if (foldedNames) return foldedNames;
+  foldedNames = new Map();
+  for (const [code, c] of Object.entries(CITIES)) {
+    const k = fold(c.name);
+    const had = foldedNames.get(k);
+    if (!had || (CITIES[had].pop ?? 0) < (c.pop ?? 0)) foldedNames.set(k, code);
+  }
+  return foldedNames;
 }

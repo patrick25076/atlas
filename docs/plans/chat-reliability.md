@@ -172,7 +172,16 @@ of a correction.
 node --env-file=.env.local node_modules/tsx/dist/cli.mjs scripts/check-tools.ts
 node --env-file=.env.local node_modules/tsx/dist/cli.mjs scripts/check-tools.ts --live-cap=0
 node --env-file=.env.local node_modules/tsx/dist/cli.mjs scripts/check-tools.ts --long-stay
+node --env-file=.env.local node_modules/tsx/dist/cli.mjs scripts/check-tools.ts --only=command,dispatch
+node --env-file=.env.local node_modules/tsx/dist/cli.mjs scripts/check-tools.ts --only=itinerary --itin-stub
 ```
+
+`--only=` picks sections: `command` (parseCommand on 55 typed lines against a fixed Saturday,
+2026-10-10; every list must end with exactly one ask), `dispatch` (the details the chat puts
+on the UI bus, from fixed inputs), `itinerary` (make_itinerary: two stops by name, nothing to
+plan from, an unknown place, `last_route` replayed from history and from compact rows; with
+`--itin-stub` the model key is hidden for the call so the engine's guide-only path writes the
+days, no Bedrock), `tools` (the live table below). All but `tools` spend zero Kiwi searches.
 
 It builds `atlasTools` for the Brasov context (GHV, SBZ, OTP, home RO, origin 45.657/25.601,
 today) and calls every tool once: the stored, memoised and static ones first (no search
@@ -271,6 +280,42 @@ and the nineteen date cases all passed with nothing sent.
 - A route answered only from the fare memory said `source: data`; now `memory`.
 - The turn-budget fallback note said "rate-limited ... try again in a few minutes"; now it
   says a new message searches at once.
+
+## Itineraries, the command line and the UI bus (added 2026-10-10)
+
+The owner's verdict on the Trips tab's "Purpose" and "A to B" modes: they are capabilities,
+not tabs. The chat's part of that:
+
+- **`make_itinerary`** turns what the thread showed into a day-by-day itinerary through
+  `generateItinerary` (lib/itinerary-server.ts). Two ways in: `from: last_route | last_deal |
+  last_wild` (with `option`, 1 = the first shown; there is no chat tool for short loops, so
+  no `last_loop`) or `stops` by name with `start`
+  and `origin` (through `skeletonFromStops`). "The latest" lives in `AgentContext.recent`, a
+  per-request map: the chat route replays the thread's history through `rememberOutput`
+  before the raw payloads are slimmed, and every route, deal or wild tool of the turn
+  replaces its entry. A restored thread (raw payloads gone) still works: the compact rows are
+  kept and planned by names; a one-way route stays one way (no return leg), and an option
+  whose tickets cannot be rebuilt from the rows (a train to a hub, an open-jaw) is named in
+  the note as planned by place names. No Kiwi search; the engine's clock ends eight seconds before
+  the tool's (`CHAT_ITINERARY_MS`, default 150 s, never past the turn), and a run past it
+  answers with the days written so far as a `partial` itinerary; its card opens the view
+  from the skeleton, so the whole trip is written there. Errors of input (an unknown
+  place, nothing shown yet) are notes. The model reads the days in short; the `skeleton` and
+  the whole itinerary (`raw`) go only to the browser, which opens the itinerary view with
+  them. Saving is never a tool: it is the traveller's click.
+- **The system prompt** (`chatSystem` in lib/agent-tools.ts, shared with the terminal CLI)
+  says: two places named means `cheapest_way`; "what is on" means
+  `events_worth_travelling_for` and saying which events are within reach; after a route, deals
+  or a wild loop offer an itinerary once; "plan the days" means `make_itinerary`; mention the "/"
+  command line once in a thread.
+- **The chat panel** draws a `cheapest_way` result the moment it arrives (`atlas:route-result`,
+  no second search); every route option, deal card, wild trip and event has "Make an
+  itinerary" (a skeleton from lib/itinerary.ts, `atlas:itinerary`); an event has "Show on the
+  map" (`atlas:command` with an `/events` line) and "Get there" (`atlas:route`); a written
+  itinerary is a short timeline with "Open the itinerary". The detail builders live in
+  lib/chat-widgets.ts so the harness checks their shapes.
+- **The command line** (lib/command.ts) is pure and runs in the browser and in the terminal
+  (`scripts/atlas.ts`, docs/cli.md).
 
 ## What cannot be guaranteed
 

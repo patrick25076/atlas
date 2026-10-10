@@ -2398,7 +2398,7 @@ a.hdcard:hover {
   margin: 0;
   padding: 0;
 }
-/* The Trips mode row wraps too (six modes now), and stays above the scrolling column. */
+/* The Trips mode row wraps when narrow, and stays above the scrolling column. */
 .modes {
   flex-wrap: wrap;
   overflow: visible;
@@ -2545,4 +2545,663 @@ textarea.search.wishes {
 }
 .routecard .legrows .meta a {
   color: var(--mint);
+}
+
+/* ---------- the command line in the top bar ---------- */
+.cmdbar {
+  position: relative;
+  flex: 3 1 360px;
+  gap: 8px;
+  padding-left: 12px;
+  max-width: 620px;
+}
+.cmdbar.open {
+  border-color: rgba(111, 240, 196, 0.5);
+}
+.cmdicon {
+  flex: 0 0 auto;
+  width: 20px;
+  height: 20px;
+  display: grid;
+  place-items: center;
+  border-radius: 6px;
+  font-size: 12px;
+  color: var(--mint);
+  background: rgba(111, 240, 196, 0.12);
+}
+.cmdspin {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 2px solid rgba(111, 240, 196, 0.3);
+  border-top-color: var(--mint);
+  animation: spin 0.8s linear infinite;
+}
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.cmdkbd {
+  flex: 0 0 auto;
+  font: 600 11px/18px var(--mono);
+  color: var(--ink-3);
+  border: 1px solid var(--line-2);
+  border-radius: 5px;
+  padding: 0 6px;
+}
+.cmdbar.open .cmdkbd {
+  display: none;
+}
+.cmdlist {
+  position: absolute;
+  z-index: 9;
+  top: 46px;
+  right: 0;
+  width: max(100%, 460px);
+  max-height: min(70vh, 460px);
+  overflow: auto;
+  padding: 6px;
+  border-radius: var(--radius-s);
+  border: 1px solid var(--line);
+  /* Nearly opaque: the map chips and tags under it must not read through the suggestions. */
+  background: rgba(12, 16, 28, 0.97);
+  backdrop-filter: blur(24px) saturate(140%);
+  -webkit-backdrop-filter: blur(24px) saturate(140%);
+  box-shadow: var(--shadow);
+  animation: rise 0.14s ease-out;
+}
+.cmdhead {
+  padding: 6px 10px 4px;
+  font-size: 12px;
+  color: var(--ink-3);
+}
+/* The list sits inside the ask bar's form: its buttons must not take the round Go button's look. */
+.askbar.cmdbar .cmdopt {
+  height: auto;
+  padding: 9px 10px;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 500;
+}
+.cmdopt {
+  display: grid;
+  grid-template-columns: 26px 1fr auto;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 9px 10px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: 14px;
+  text-align: left;
+  cursor: pointer;
+}
+.cmdopt.hint {
+  grid-template-columns: 1fr auto;
+}
+.askbar.cmdbar .cmdopt.on,
+.cmdopt.on {
+  background: rgba(111, 240, 196, 0.12);
+}
+.cmdopt.on .cmdglyph {
+  background: var(--mint);
+  color: var(--mint-ink);
+}
+.cmdglyph {
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.07);
+  color: var(--mint);
+  font-size: 14px;
+}
+.cmdopt.ask .cmdglyph {
+  color: var(--sky);
+}
+.cmdlabel {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 560;
+}
+.cmdlabel.mono {
+  font-family: var(--mono);
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--mint);
+}
+.cmdwhat {
+  font-size: 12px;
+  color: var(--ink-3);
+  white-space: nowrap;
+}
+.cmdfoot {
+  display: flex;
+  gap: 14px;
+  padding: 6px 10px 2px;
+  border-top: 1px solid var(--line);
+  margin-top: 4px;
+  font-size: 11.5px;
+  color: var(--ink-3);
+}
+
+/* ---------- map chips and the cards that float on the map ---------- */
+.mapchips {
+  position: absolute;
+  z-index: 5;
+  top: calc(var(--topbar) + 8px);
+  right: 16px;
+  display: flex;
+  gap: 6px;
+}
+.mapchip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 34px;
+  padding: 0 13px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--glass);
+  backdrop-filter: blur(18px) saturate(140%);
+  -webkit-backdrop-filter: blur(18px) saturate(140%);
+  color: var(--ink-2);
+  font: inherit;
+  font-size: 13.5px;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.35);
+  transition: all 0.15s;
+}
+.mapchip:hover {
+  color: var(--ink);
+  border-color: var(--line-2);
+}
+.mapchip.on {
+  color: var(--ink);
+  border-color: rgba(255, 107, 138, 0.6);
+  background: rgba(255, 107, 138, 0.16);
+}
+.mapchip small {
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.12);
+}
+.mapcards {
+  position: absolute;
+  z-index: 5;
+  top: calc(var(--topbar) + 52px);
+  right: 16px;
+  width: 380px;
+  max-height: calc(100% - var(--topbar) - 120px);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  pointer-events: none;
+}
+.mapcards > * {
+  pointer-events: auto;
+}
+.mapcard {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  border-radius: 18px;
+  border: 1px solid var(--line);
+  background: var(--glass-2);
+  backdrop-filter: blur(22px) saturate(140%);
+  -webkit-backdrop-filter: blur(22px) saturate(140%);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+  animation: rise 0.18s ease-out;
+}
+.mapcardhead {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 10px 8px 10px 14px;
+}
+.mapcardtitle {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  padding: 0;
+}
+.mapcardtitle b {
+  font-size: 15.5px;
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mapcardtitle small {
+  font-size: 12.5px;
+  color: var(--ink-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.kicker {
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--mint);
+}
+.iconbtn {
+  flex: 0 0 auto;
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--ink-2);
+  font: inherit;
+  font-size: 15px;
+  cursor: pointer;
+}
+.iconbtn:hover,
+.iconbtn.on {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--ink);
+}
+.mapcardbar {
+  height: 2px;
+  background: linear-gradient(90deg, transparent, var(--mint), var(--sky), transparent);
+  background-size: 50% 100%;
+  background-repeat: no-repeat;
+  animation: sweep 1.2s linear infinite;
+}
+@keyframes sweep {
+  from {
+    background-position: -50% 0;
+  }
+  to {
+    background-position: 150% 0;
+  }
+}
+.mapcardbody {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 0 12px 12px;
+  max-height: 62vh;
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+.mapcard .routecard {
+  padding: 10px 12px;
+}
+.mapcard .routecard .price {
+  font-size: 18px;
+}
+.routeedit {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--line);
+}
+.routeedit .form {
+  flex-wrap: wrap;
+}
+.routeedit .placepick {
+  flex: 1 1 140px;
+}
+.routeedit .search {
+  padding: 8px 11px;
+  font-size: 14px;
+}
+.answer.compact {
+  padding: 8px 12px;
+  font-size: 13px;
+}
+.status.small {
+  font-size: 12px;
+  line-height: 1.45;
+}
+.mapnotice {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 8px 10px 14px;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 180, 84, 0.45);
+  background: rgba(40, 28, 10, 0.88);
+  color: var(--ink);
+  font-size: 13.5px;
+  line-height: 1.4;
+  box-shadow: var(--shadow);
+  animation: rise 0.18s ease-out;
+}
+
+/* ---------- events worth flying for ---------- */
+.eventhero {
+  position: relative;
+  height: 132px;
+  display: flex;
+  align-items: flex-end;
+}
+.eventhero .stopphoto.eventhero-img {
+  position: absolute;
+  inset: 0;
+  border-radius: 0;
+}
+.eventhero::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(180deg, rgba(5, 7, 14, 0.1), rgba(5, 7, 14, 0.85));
+  pointer-events: none;
+}
+.eventhero-text {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 12px 14px;
+  min-width: 0;
+}
+.eventhero-text .kicker {
+  color: var(--rose);
+}
+.eventhero-text b {
+  font-size: 19px;
+  font-weight: 760;
+  letter-spacing: -0.01em;
+}
+.eventhero-text small {
+  font-size: 12.5px;
+  color: var(--ink-2);
+}
+.eventhero-btns {
+  position: absolute;
+  z-index: 2;
+  top: 8px;
+  right: 8px;
+  display: flex;
+  gap: 4px;
+}
+.eventhero-btns .iconbtn {
+  background: rgba(5, 7, 14, 0.55);
+  color: var(--ink);
+}
+.eventmapcard .mapcardbody {
+  padding-top: 10px;
+}
+.eventmapcard .para {
+  margin: 0;
+}
+.eventrow {
+  display: grid;
+  grid-template-columns: 28px 1fr auto;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 10px;
+  border-radius: 12px;
+  border: 1px solid transparent;
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--ink);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+.eventrow:hover {
+  background: rgba(255, 107, 138, 0.1);
+  border-color: rgba(255, 107, 138, 0.35);
+}
+.eventrow .glyph {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border-radius: 9px;
+  background: rgba(255, 107, 138, 0.16);
+  color: var(--rose);
+}
+.eventrow b {
+  display: block;
+  font-size: 14px;
+  font-weight: 650;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.eventrow small {
+  display: block;
+  font-size: 12px;
+  color: var(--ink-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.eventrow .when {
+  font-size: 12px;
+  color: var(--ink-2);
+  white-space: nowrap;
+  text-align: right;
+}
+.eventrow .when .fare {
+  color: var(--mint);
+  font-weight: 650;
+}
+.badge.event {
+  background: rgba(255, 107, 138, 0.16);
+  color: #ffb3c2;
+  border-color: rgba(255, 107, 138, 0.35);
+}
+.chip.eventchip {
+  border-color: rgba(255, 107, 138, 0.45);
+  color: #ffb3c2;
+}
+.tag.event {
+  color: #ffd0da;
+  border-color: rgba(255, 107, 138, 0.55);
+  background: rgba(40, 10, 20, 0.88);
+}
+.tag.event small {
+  color: rgba(255, 208, 218, 0.7);
+}
+.tag.event.hot,
+.tag.event:hover {
+  background: var(--rose);
+  color: #2a0610;
+  border-color: var(--rose);
+}
+
+/* ---------- Get there, on deal and place pages ---------- */
+.getthere .getbest {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 14px;
+  border-radius: 16px;
+  border: 1px solid rgba(124, 196, 255, 0.3);
+  background: linear-gradient(135deg, rgba(124, 196, 255, 0.08), rgba(111, 240, 196, 0.05));
+}
+.getthere .cardtop {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+}
+.getthere .cardtitle {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-weight: 650;
+  font-size: 15px;
+  min-width: 0;
+}
+.getthere .cardtitle .sub,
+.getthere .price .sub {
+  font-weight: 500;
+  font-size: 12.5px;
+  color: var(--ink-3);
+}
+.getthere .price {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  font-weight: 760;
+  font-size: 19px;
+  color: var(--mint);
+  white-space: nowrap;
+}
+
+/* ---------- Make an itinerary: the one action every result shares ---------- */
+.chip.itinbtn {
+  color: #06121f;
+  font-weight: 700;
+  border-color: transparent;
+  background: linear-gradient(120deg, var(--mint), var(--sky) 60%, #c7a6ff);
+  background-size: 160% 100%;
+  box-shadow: 0 6px 20px rgba(111, 240, 196, 0.22);
+  transition: background-position 0.4s, transform 0.15s, box-shadow 0.15s;
+}
+.chip.itinbtn:hover {
+  color: #06121f;
+  background-position: 100% 0;
+  transform: translateY(-1px);
+  box-shadow: 0 10px 26px rgba(124, 196, 255, 0.3);
+}
+
+/* ---------- the itinerary view in the panel ---------- */
+.itinview {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 0;
+  flex: 1;
+}
+.itinbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.itinbar .linkbtn {
+  font-size: 14px;
+  font-weight: 600;
+}
+.itinbar .sub {
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+.panel .scroll.itinscroll {
+  padding-top: 0;
+}
+
+/* ---------- tablets: the command line takes its own row under the pills (as on phones),
+   and the panel and the map cards share the width instead of overlapping ---------- */
+@media (min-width: 721px) and (max-width: 1100px) {
+  :root {
+    --topbar: 108px;
+  }
+  .cmdbar {
+    position: fixed;
+    top: 66px;
+    left: 16px;
+    right: 16px;
+    max-width: none;
+    height: 40px;
+    flex: none;
+  }
+  .cmdlist {
+    width: 100%;
+  }
+  .mapcards {
+    width: min(380px, calc(100vw - var(--panel-w) - 48px));
+  }
+}
+@media (min-width: 721px) and (max-width: 960px) {
+  :root {
+    --panel-w: 400px;
+  }
+}
+
+/* ---------- phones: the command line is its own row; the cards sit above the sheet ---------- */
+@media (max-width: 720px) {
+  :root {
+    --topbar: 100px;
+  }
+  .cmdbar {
+    position: fixed;
+    top: 54px;
+    left: 10px;
+    right: 10px;
+    max-width: none;
+    height: 40px;
+    flex: none;
+  }
+  .cmdkbd {
+    display: none;
+  }
+  .cmdlist {
+    max-height: 60vh;
+    width: 100%;
+  }
+  .cmdwhat {
+    display: none;
+  }
+  .mapchips {
+    top: calc(var(--topbar) + 2px);
+    right: 10px;
+  }
+  .mapchip {
+    height: 30px;
+    padding: 0 10px;
+    font-size: 12.5px;
+  }
+  .mapcards {
+    top: auto;
+    left: 8px;
+    right: 8px;
+    width: auto;
+    bottom: calc(60vh + 8px);
+    max-height: calc(40vh - var(--topbar) - 48px);
+  }
+  .app.sheet-peek .mapcards {
+    bottom: 158px;
+    max-height: calc(100vh - 158px - var(--topbar) - 48px);
+  }
+  .app.sheet-full .mapcards {
+    display: none;
+  }
+  /* The card scrolls inside itself, so a strip of globe always shows above it. */
+  .mapcardbody {
+    max-height: 34vh;
+  }
+  .eventhero {
+    height: 104px;
+  }
 }

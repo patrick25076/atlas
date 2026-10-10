@@ -6,6 +6,8 @@ import type { Origin } from "@/lib/ui-types";
 import type { BeenPrefs } from "@/lib/been";
 import { countryName, monthLabel, monthOptions } from "@/lib/format";
 import BeenEditor from "./BeenEditor";
+import CommandBar from "./CommandBar";
+import type { Command } from "@/lib/command";
 
 type Props = {
   origin: Origin | null;
@@ -14,8 +16,10 @@ type Props = {
   month: string | null;
   onMonth: (m: string | null) => void;
   searching: boolean;
-  asking: boolean;
-  onAsk: (q: string) => void;
+  /** Something is searching anywhere in the app: the command line shows a spinner. */
+  busy: boolean;
+  /** Run a command from the command line (the globe runs it, like an atlas:command event). */
+  onCommand: (c: Command) => void;
   onShare: () => void;
   copied: boolean;
   /** The "Been" preference: countries already visited, and whether only new ones are wanted. */
@@ -59,7 +63,6 @@ function useDismiss(open: boolean, close: () => void) {
 export default function TopBar(p: Props) {
   const [open, setOpen] = useState<"from" | "when" | "been" | null>(null);
   const [query, setQuery] = useState("");
-  const [question, setQuestion] = useState("");
   const hits = useMemo(() => searchAirports(p.airports, query), [p.airports, query]);
   const ref = useDismiss(open !== null, () => setOpen(null));
   const months = useMemo(monthOptions, []);
@@ -183,21 +186,8 @@ export default function TopBar(p: Props) {
         </div>
       </div>
 
-      <form
-        className="askbar desktop"
-        onSubmit={(e) => {
-          e.preventDefault();
-          if (question.trim()) {
-            p.onAsk(question.trim());
-            setQuestion("");
-          }
-        }}
-      >
-        <input placeholder="Ask anything: a warm weekend under €60, direct…" value={question} onChange={(e) => setQuestion(e.target.value)} disabled={p.asking} />
-        <button type="submit" disabled={p.asking || !question.trim()}>
-          {p.asking ? "Thinking…" : "Ask"}
-        </button>
-      </form>
+      {/* The command line: routes, events, trips, places and questions, all from one box. */}
+      <CommandBar onRun={p.onCommand} busy={p.busy} />
 
       <span className="spacer" />
       <button className="pill share" onClick={p.onShare} title="Copy a link to this view">

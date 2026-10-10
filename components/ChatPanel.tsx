@@ -5,15 +5,23 @@
 // on the globe) rendered here; an answer is sent back as a short message. Results come back
 // as cards, a price calendar, bases or group options, and flow to the globe as pins or a
 // route. Threads are kept in the browser; voice input uses the Web Speech API when it exists.
+//
+// Everything the chat finds is a starting point for the rest of the app: a computed route is
+// drawn at once (atlas:route-result, no second search), any route option, deal, wild trip or
+// event can become an itinerary (atlas:itinerary with a skeleton from lib/itinerary.ts), a
+// written itinerary opens in the itinerary view, and an event can be shown on the map
+// (atlas:command) or reached (atlas:route). The event details are built in lib/chat-widgets.ts.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport, type UIMessage } from "ai";
 import type { Deal } from "@/lib/types";
 import type { WildTrip } from "@/lib/wild";
+import type { RouteResult } from "@/lib/route-finder";
+import { skeletonFromDeal, skeletonFromEvent, skeletonFromRoute, skeletonFromWild, type BudgetTier, type Itinerary, type ItinPlace, type Pace, type Skeleton } from "@/lib/itinerary";
 import { countryName, dateRange, monthLabel, monthOptions } from "@/lib/format";
 import { formatDuration } from "@/lib/geo";
 import { WILD_REGIONS } from "@/lib/ui-types";
-import { FOLLOWUPS, ISO_DAY_RE, LOCAL_DAY, LONG_TOOLS, NIGHT_OPTIONS, ROUTE_KIND_LABEL, TOOL_LABEL, addDays, quickDateRanges, toolProgress, widgetAnswer, type PersonRow, type WidgetKind, type WidgetSpec } from "@/lib/chat-widgets";
+import { FOLLOWUPS, ISO_DAY_RE, LOCAL_DAY, LONG_TOOLS, NIGHT_OPTIONS, ROUTE_KIND_LABEL, TOOL_LABEL, addDays, dispatchAtlas, eventCommand, eventDays, eventRoute, eventTripDays, quickDateRanges, routeDetail, routeResultDetail, toolProgress, widgetAnswer, type ChatEvent, type PersonRow, type WidgetKind, type WidgetSpec } from "@/lib/chat-widgets";
 import s from "./ChatPanel.module.css";
 
 export type ChatContext = { origin?: { lat: number; lon: number; label: string }; gateways: string[]; home: string; month?: string; today?: string; been?: { countries: string[]; newOnly: boolean } };
@@ -39,7 +47,15 @@ type InsightOut = { route: string; month: string; typical: number | null; sample
 type MonthsOut = { city: string; best: string[]; months: { month: string; highC: number; rainMm: number; score: number }[] };
 /** One option of cheapest_way as the tool compacts it (the legs are one line each). */
 type RouteOptOut = { kind: string; title: string; total: number; hours: number; stops: number; nonstop?: boolean; why: string; legs: string[]; back?: string[]; backTotal?: number; urls: string[]; cheapest?: boolean; fastest?: boolean };
-type RouteOut = { from: string; to: string; depart?: string; flex?: number; nights: number | null; searched: number; source?: string; considered?: string[]; note?: string; cheapest: RouteOptOut | null; fastest: RouteOptOut | null; options: RouteOptOut[] };
+type RouteOut = { from: string; to: string; depart?: string; flex?: number; nights: number | null; searched: number; source?: string; considered?: string[]; note?: string; cheapest: RouteOptOut | null; fastest: RouteOptOut | null; options: RouteOptOut[]; raw?: RouteResult };
+/** One day of make_itinerary as the tool compacts it. */
+type ItinDayOut = { day: number; date: string; where: string; title: string; plan: string; travel?: string; weather?: string };
+type ItinOut = { title: string; start: string; end: string; nights: number; stops: string[]; days: ItinDayOut[]; costs?: { total: number; perDay: number; estimated: boolean }; status?: string; note?: string; skeleton?: Skeleton; wishes?: string; pace?: Pace; budget?: BudgetTier; raw?: Itinerary };
+type EventOut = ChatEvent & { kind?: string; note?: string; cheapestTrip: { price: number; dates?: string; from?: string; key?: string } | null };
+/** The traveller's own point as an itinerary place, when the browser knows it. */
+const herePlace = (c: ChatContext): ItinPlace | undefined => (c.origin ? { name: c.origin.label, lat: c.origin.lat, lon: c.origin.lon } : undefined);
+/** Opens the itinerary view on a skeleton (it generates there). */
+const openSkeleton = (skeleton: Skeleton) => dispatchAtlas("atlas:itinerary", { skeleton });
 
 // Threads live in localStorage as one small index plus one key per thread, so a turn writes
 // only the thread it changed; the older one-key stores (v2, and the single v1 conversation)
@@ -116,6 +132,20 @@ function settle(messages: UIMessage[]): UIMessage[] {
       return { ...p, state: "output-error", errorText: "stopped before it finished", input: p.input ?? {} } as unknown as typeof p;
     });
     return changed ? { ...m, parts } : m;
+  });
+}
+
+/** The thread as sent to the server: make_itinerary answers lose their raw itinerary (the skeleton stays). */
+function withoutItineraries(messages: UIMessage[]): UIMessage[] {
+  return messages.map((m) => {
+    if (m.role !== "assistant" || !m.parts.some((p) => isToolPart(p) && p.type === "tool-make_itinerary")) return m;
+    const parts = m.parts.map((p) => {
+      if (!isToolPart(p) || p.type !== "tool-make_itinerary" || !p.output || typeof p.output !== "object" || !("raw" in p.output)) return p;
+      const { raw: _raw, ...rest } = p.output as Record<string, unknown>;
+      void _raw;
+      return { ...p, output: rest } as typeof p;
+    });
+    return { ...m, parts };
   });
 }
 
@@ -256,11 +286,12 @@ function Text({ text }: { text: string }) {
   );
 }
 
-function DealCards({ deals, onOpen }: { deals: Deal[]; onOpen: (key: string) => void }) {
+function DealCards({ deals, onOpen, origin }: { deals: Deal[]; onOpen: (key: string) => void; origin?: ItinPlace }) {
   return (
     <div className={s.cards}>
       {deals.slice(0, 6).map((d) => (
-        <button key={`${d.gw}|${d.dst}|${d.out}|${d.backTo ?? ""}`} className={s.card} onClick={() => onOpen(`${d.gw}|${d.dst}|${d.out}`)}>
+        <div key={`${d.gw}|${d.dst}|${d.out}|${d.backTo ?? ""}`} className={s.dealRow}>
+        <button className={s.card} onClick={() => onOpen(`${d.gw}|${d.dst}|${d.out}`)}>
           <span className={s.price}>€{d.price}</span>
           <span className={s.body}>
             <b>
@@ -274,7 +305,104 @@ function DealCards({ deals, onOpen }: { deals: Deal[]; onOpen: (key: string) => 
             </span>
           </span>
         </button>
+        <button className={s.mini} title="Plan the days of this trip" onClick={() => openSkeleton(skeletonFromDeal(d, origin))}>
+          Make an itinerary
+        </button>
+        </div>
       ))}
+    </div>
+  );
+}
+
+/** A written itinerary in short: a timeline of the days, the estimated total, and the button that opens the full view. */
+function ItineraryCard({ out }: { out: ItinOut }) {
+  const days = out.days ?? [];
+  const open = () => {
+    // A plan the tool cut short (its time ran out, days are missing) is opened from its
+    // skeleton, so the view writes the whole trip; opening the partial plan would show the
+    // missing days as done. A partial plan with every day (some from the guides) opens as is.
+    const r = out.raw;
+    const span = r?.start && r.end ? Math.round((Date.parse(r.end) - Date.parse(r.start)) / 86_400_000) + 1 : 0;
+    const cut = !!r && r.status === "partial" && r.days.length < span;
+    if (r && !(cut && out.skeleton)) dispatchAtlas("atlas:itinerary", { itinerary: r });
+    else if (out.skeleton) dispatchAtlas("atlas:itinerary", { skeleton: out.skeleton, ...(out.wishes ? { wishes: out.wishes } : {}), ...(out.pace ? { pace: out.pace } : {}), ...(out.budget ? { budget: out.budget } : {}) });
+  };
+  const canOpen = !!(out.raw || out.skeleton);
+  return (
+    <div className={`${s.base} ${s.itin}`}>
+      <div className={s.row}>
+        <b>{out.title}</b>
+        {out.costs && <span className={s.price}>{euro(out.costs.total)}</span>}
+      </div>
+      <span className={s.sub}>
+        {out.start ? dateRange(out.start, out.end) : ""} · {out.nights} night{out.nights === 1 ? "" : "s"}
+        {out.costs ? ` · about ${euro(out.costs.perDay)} a day${out.costs.estimated ? ", estimated" : ""}` : ""}
+        {out.status === "partial" ? " · partly written" : ""}
+      </span>
+      <ol className={s.days}>
+        {days.slice(0, 8).map((d, i) => (
+          <li key={d.day} style={{ animationDelay: `${i * 60}ms` }}>
+            <span className={s.dayHead}>
+              Day {d.day} · {d.date} · {d.where}
+              {d.weather ? ` · ${d.weather}` : ""}
+            </span>
+            <span className={s.dayTitle}>{d.title}</span>
+            {d.travel && <span className={s.sub}>{d.travel}</span>}
+            {d.plan && <span className={s.sub}>{d.plan}</span>}
+          </li>
+        ))}
+      </ol>
+      {days.length > 8 && <p className={s.caption}>And {days.length - 8} more days in the full itinerary.</p>}
+      {canOpen && (
+        <div className={s.actions}>
+          <button className={s.go} onClick={open}>
+            Open the itinerary
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Events worth the trip: each with its fare when priced, shown on the map, reached, or planned. */
+function EventCards({ events, origin }: { events: EventOut[]; origin?: ItinPlace }) {
+  return (
+    <div className={s.cards}>
+      {events.slice(0, 6).map((e, i) => {
+        const days = eventDays(e);
+        // The trip's days, not the event's: an event already on is joined from tomorrow.
+        const trip = eventTripDays(e, LOCAL_DAY(new Date()));
+        const plannable = trip && typeof e.lat === "number" && typeof e.lon === "number";
+        return (
+          <div key={`${e.event}-${i}`} className={s.base}>
+            <div className={s.row}>
+              <b>
+                {e.event} <span className={s.sub}>{e.city}</span>
+              </b>
+              {e.cheapestTrip && <span className={s.price}>{euro(e.cheapestTrip.price)}</span>}
+            </div>
+            <span className={s.sub}>
+              {days ? (days.start === days.end ? days.start : dateRange(days.start, days.end)) : e.dates}
+              {e.kind ? ` · ${e.kind}` : ""}
+              {e.cheapestTrip ? ` · return from ${e.cheapestTrip.from ?? "your airports"}${e.cheapestTrip.dates ? `, ${e.cheapestTrip.dates}` : ""}` : " · not priced yet"}
+            </span>
+            {e.note && <span className={s.sub}>{e.note}</span>}
+            <div className={s.actions}>
+              <button className={s.mini} onClick={() => dispatchAtlas("atlas:command", eventCommand(e))}>
+                Show on the map
+              </button>
+              <button className={s.mini} onClick={() => dispatchAtlas("atlas:route", eventRoute(e, LOCAL_DAY(new Date())))}>
+                Get there
+              </button>
+              {plannable && (
+                <button className={s.mini} onClick={() => openSkeleton(skeletonFromEvent({ name: e.event, city: e.city, country: e.country ?? "", lat: e.lat!, lon: e.lon!, from: trip!.start, to: trip!.end }, origin))}>
+                  Make an itinerary
+                </button>
+              )}
+            </div>
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -468,11 +596,15 @@ function Itineraries({ items }: { items: Itin[] }) {
 /** The ways from A to B as cards: a kind badge, the title, the total and the hours, the legs
  * as small pills, cheapest and fastest marked, and one button that asks the globe to draw the
  * route (the UI's A-to-B mode listens for atlas:route). */
-function RouteCards({ out }: { out: RouteOut }) {
+function RouteCards({ out, onAsk }: { out: RouteOut; onAsk: (text: string) => void }) {
   const options = out.options ?? [];
-  // The globe redraws the same question the cards came from: a one-way answer (nights null)
-  // stays one way, and the departure is the day the engine priced (the tool always sends it).
-  const show = () => window.dispatchEvent(new CustomEvent("atlas:route", { detail: { from: out.from, to: out.to, depart: out.depart, flex: out.flex, nights: out.nights ?? undefined, oneWay: out.nights == null } }));
+  // The computed result is drawn as it is (no second search) while this session has it; a
+  // restored thread has only the compact rows, so the globe searches the same question again:
+  // a one-way answer (nights null) stays one way, on the day the engine priced.
+  const raw = out.raw && Array.isArray(out.raw.options) && out.raw.options.length ? out.raw : null;
+  // The compact options are the engine's first six, in its order, so index i is raw option i.
+  const show = (i?: number) => (raw ? dispatchAtlas("atlas:route-result", routeResultDetail(raw, i)) : dispatchAtlas("atlas:route", routeDetail(out)));
+  const plan = (i: number) => (raw ? openSkeleton(skeletonFromRoute(raw, i)) : onAsk(`Make option ${i + 1} an itinerary`));
   const pill: React.CSSProperties = { fontSize: 12, padding: "3px 9px", cursor: "default" };
   return (
     <div className={s.cards}>
@@ -516,6 +648,14 @@ function RouteCards({ out }: { out: RouteOut }) {
             ))}
           </div>
           {o.why && <span className={s.sub}>{o.why}</span>}
+          <div className={s.actions}>
+            <button className={s.mini} onClick={() => show(i)}>
+              On the map
+            </button>
+            <button className={s.mini} onClick={() => plan(i)}>
+              Make an itinerary
+            </button>
+          </div>
           {o.urls?.length > 0 && (
             <span className={s.sub}>
               {o.urls.slice(0, 3).map((u, k) => (
@@ -532,7 +672,7 @@ function RouteCards({ out }: { out: RouteOut }) {
       ))}
       {options.length > 0 && (
         <div className={s.chips}>
-          <button className={s.go} onClick={show}>
+          <button className={s.go} onClick={() => show()}>
             Show the route
           </button>
         </div>
@@ -723,7 +863,10 @@ export default function ChatPanel(p: Props) {
   // What goes to the server: the thread settled (a stopped tool call is an error, not a call
   // still waiting), so a turn after Stop never fails on the half-finished one, and the
   // visitor's own calendar day, so the agent and the date widgets agree on what "today" is.
-  const transport = useMemo(() => new DefaultChatTransport({ api: "/api/chat", prepareSendMessagesRequest: ({ messages }) => ({ body: { messages: settle(messages), context: { ...contextRef.current, today: LOCAL_DAY(new Date()) } } }) }), []);
+  // A written itinerary (make_itinerary's raw) is the largest payload a thread holds and the
+  // server never reads it back, so it stays in the browser; the routes, deals and trips do
+  // travel, because "make it an itinerary" in a later turn plans from them.
+  const transport = useMemo(() => new DefaultChatTransport({ api: "/api/chat", prepareSendMessagesRequest: ({ messages }) => ({ body: { messages: withoutItineraries(settle(messages)), context: { ...contextRef.current, today: LOCAL_DAY(new Date()) } } }) }), []);
   const initial = useMemo(() => store.threads.find((t) => t.id === store.active)?.messages ?? [], []); // eslint-disable-line react-hooks/exhaustive-deps
   const { messages, sendMessage, status, stop, setMessages, error, regenerate, clearError } = useChat({ transport, messages: initial });
   const messagesRef = useRef(messages);
@@ -819,6 +962,12 @@ export default function ChatPanel(p: Props) {
         if (name === "wild_trip" && out?.raw && typeof out.raw === "object") {
           applied.current.add(part.toolCallId);
           p.onTrip(out.raw as WildTrip);
+        }
+        // The way from A to B is drawn the moment it arrives, from the result itself: the
+        // globe's route view shows it without searching again.
+        if (name === "cheapest_way" && out?.raw && typeof out.raw === "object" && Array.isArray((out.raw as RouteResult).options) && (out.raw as RouteResult).options.length) {
+          applied.current.add(part.toolCallId);
+          dispatchAtlas("atlas:route-result", routeResultDetail(out.raw as RouteResult));
         }
       }
     }
@@ -974,13 +1123,25 @@ export default function ChatPanel(p: Props) {
             {name === "group_trip" && Array.isArray(out.options) && <GroupOptions out={out as unknown as GroupOut} />}
             {name === "reprice_route" && Array.isArray(out.itineraries) && <Itineraries items={out.itineraries as Itin[]} />}
             {name === "best_months" && Array.isArray(out.months) && <MonthStrip out={out as unknown as MonthsOut} />}
-            {name === "cheapest_way" && Array.isArray(out.options) && <RouteCards out={out as unknown as RouteOut} />}
+            {name === "cheapest_way" && Array.isArray(out.options) && <RouteCards out={out as unknown as RouteOut} onAsk={send} />}
+            {name === "make_itinerary" && Array.isArray(out.days) && <ItineraryCard out={out as unknown as ItinOut} />}
+            {name === "wild_trip" && out.raw && typeof out.raw === "object" && Array.isArray((out.raw as WildTrip).stops) && (
+              <div className={s.actions}>
+                <button className={s.mini} onClick={() => p.onTrip(out.raw as WildTrip)}>
+                  Show the loop
+                </button>
+                <button className={s.mini} onClick={() => openSkeleton(skeletonFromWild(out.raw as WildTrip))}>
+                  Make an itinerary
+                </button>
+              </div>
+            )}
+            {name === "events_worth_travelling_for" && Array.isArray(out.events) && out.events.length > 0 && <EventCards events={out.events as EventOut[]} origin={herePlace(p.context)} />}
             {name === "price_insight" && (
               <span className={`${s.verdict} ${s[(out as unknown as InsightOut).verdict] ?? ""}`}>
                 {(out as unknown as InsightOut).verdict === "unknown" ? "No fare history yet for this route" : `Fare memory: ${(out as unknown as InsightOut).verdict}${(out as unknown as InsightOut).typical != null ? `, usually ${euro((out as unknown as InsightOut).typical)}` : ""}${(out as unknown as InsightOut).low != null ? `, lowest seen ${euro((out as unknown as InsightOut).low)}` : ""}`}
               </span>
             )}
-            {(name === "find_getaways" || name === "cheapest_deals" || name === "events_worth_travelling_for") && cardDeals(out).length > 0 && <DealCards deals={cardDeals(out)} onOpen={p.onOpenDeal} />}
+            {(name === "find_getaways" || name === "cheapest_deals") && cardDeals(out).length > 0 && <DealCards deals={cardDeals(out)} onOpen={p.onOpenDeal} origin={herePlace(p.context)} />}
           </>
         )}
       </div>

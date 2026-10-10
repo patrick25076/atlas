@@ -52,8 +52,10 @@ import { GroupInputError, groupTrip, groupWindows, type GroupMember } from "./gr
 import { bestMonths } from "./climate";
 import { priceInsight } from "./insights";
 import { WIDGET_KINDS, type WidgetKind, type WidgetSpec } from "./chat-widgets";
-import { cleanCodes, countryAllowed, filterByCountry, type BeenPrefs } from "./been";
+import { beenLine, cleanCodes, countryAllowed, excludedCountries, filterByCountry, type BeenPrefs } from "./been";
 import { expandWeather, visaFor, type Airport, type City, type CityPlaces, type CountryInfo, type Deal, type VisaFile, type WeatherCompact } from "./types";
+import { generateItinerary, hasItineraryModel, ItineraryInputError, normaliseSkeleton, skeletonFromStops } from "./itinerary-server";
+import { itineraryKey, skeletonFromDeal, skeletonFromRoute, skeletonFromWild, type BudgetTier, type ItinDay, type Itinerary, type ItinPlace, type Pace, type Skeleton } from "./itinerary";
 
 const CITIES = citiesJson as unknown as Record<string, City>;
 const COUNTRIES = countriesJson as unknown as Record<string, CountryInfo>;
@@ -83,7 +85,48 @@ export type AgentContext = {
    * it into { error }), which is how the harness checks the parameters at no cost.
    */
   trace?: (engine: string, params: Record<string, unknown>) => void;
+  /**
+   * The latest route, deals, wild trip and loop this conversation showed, by kind: what
+   * make_itinerary's `from: "last_route"` means. One map per request: the chat route fills it
+   * from the thread's history first (rememberOutput), and every tool of the turn that
+   * produces one of these replaces the entry, so "the latest" is the latest in the thread.
+   */
+  recent?: Map<RecentKind, unknown>;
 };
+
+/** What make_itinerary can be asked to plan from: the latest of each kind shown in the thread. */
+export type RecentKind = "route" | "deal" | "wild";
+/** The tools whose answers are remembered, and as what. */
+const RECENT_KIND: Record<string, RecentKind> = { cheapest_way: "route", find_getaways: "deal", cheapest_deals: "deal", scan_cheapest: "deal", reprice_route: "deal", events_worth_travelling_for: "deal", wild_trip: "wild" };
+
+/**
+ * Records one tool answer in the context's recent map when it is a route, deals or a wild
+ * trip (the chat has no short-loop tool, so a loop is never remembered). The raw payload is kept when the answer has it (this session's own results);
+ * a thread restored from the browser has only the compact rows, which are kept instead, so
+ * make_itinerary can still plan by place names. Errors, notes without data and other tools
+ * are ignored. Exported for the chat route, which replays the thread's history through it.
+ */
+export function rememberOutput(ctx: AgentContext, toolName: string, output: unknown): void {
+  const kind = RECENT_KIND[toolName];
+  if (!kind || !output || typeof output !== "object") return;
+  const o = output as Record<string, unknown>;
+  if (typeof o.error === "string") return;
+  const recent = ctx.recent ?? (ctx.recent = new Map());
+  const raw = o.raw as Record<string, unknown> | unknown[] | undefined;
+  if (kind === "route") {
+    if (raw && !Array.isArray(raw) && Array.isArray(raw.options) && raw.options.length) recent.set("route", raw);
+    // A restored thread has only the compact rows: the ends, the dates and each option's kind
+    // and title (its legs are sentences, not places), so make_itinerary can at least say
+    // which option it could not rebuild and keep a one-way trip one way.
+    else if (Array.isArray(o.options) && o.options.length && typeof o.to === "string")
+      recent.set("route", { from: o.from, to: o.to, depart: o.depart, nights: o.nights, compact: (o.options as Record<string, unknown>[]).map((x) => ({ kind: String(x?.kind ?? ""), title: String(x?.title ?? "") })) });
+  } else if (kind === "deal") {
+    if (Array.isArray(raw) && raw.length) recent.set("deal", raw);
+    else if (Array.isArray(o.deals) && o.deals.length) recent.set("deal", o.deals);
+  } else if (kind === "wild") {
+    if (raw && !Array.isArray(raw) && Array.isArray(raw.stops) && raw.stops.length) recent.set("wild", raw);
+  }
+}
 
 /** The `exclude` and `allow` inputs every searching tool takes: the same shape and the same
  * words everywhere. `exclude` ADDS to the Been list of the context (it never replaces it), so a
@@ -229,6 +272,7 @@ const compactDeal = (d: Deal) => ({
   url: d.url,
 });
 const addDays = (iso: string, n: number) => new Date(Date.parse(iso) + n * 86_400_000).toISOString().slice(0, 10);
+const daysBetweenIso = (a: string, b: string) => Math.round((Date.parse(b) - Date.parse(a)) / 86_400_000);
 const isoDay = (s: unknown): s is string => typeof s === "string" && /^\d{4}-\d{2}-\d{2}$/.test(s);
 /** Every airport a place means, for the fare memory: a code is itself, a city gives all of its
  * airports (London is LHR, LGW, STN, LTN; at most four), anything else is empty. */
@@ -265,6 +309,10 @@ const ROUTE_SEARCHES_HARDER = 24;
 /** How long cheapest_way lets the route engine run: its own default, longer when asked to
  * look harder; always cut to what is left of the turn, and the engine floors it at ten seconds. */
 const ROUTE_DEADLINE_MS = 90_000;
+/** How long make_itinerary waits for the days: the engine writes a stop a model call at a
+ * time, so a week in two cities is about a minute; past this the days written so far come
+ * back as a partial itinerary (the view can finish it). Never past the turn's own clock. */
+const ITINERARY_MS = Math.max(30_000, Number(process.env.CHAT_ITINERARY_MS) || 150_000);
 const ROUTE_DEADLINE_HARDER_MS = 150_000;
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 /** Big countries where the way home from another city is worth pricing in the same scan. */
@@ -609,7 +657,7 @@ export function atlasTools(ctx: AgentContext) {
     if (!exclude.length) return lost ? { beenFilter: lost } : {};
     return { beenFilter: `${exclude.length} been countr${exclude.length === 1 ? "y" : "ies"} skipped as destinations${dropped.length ? `; dropped from the request: ${dropped.join(", ")}` : ""}${lost ? `; ${lost}` : ""}` };
   };
-  return {
+  const tools = {
     home_airports: tool({
       description: "The traveller's airports with drive time, size and whether a nightly price board exists. Use for 'which airport should I fly from'.",
       inputSchema: jsonSchema<Record<string, never>>({ type: "object", properties: {} }),
@@ -1663,7 +1711,13 @@ export function atlasTools(ctx: AgentContext) {
         const events = r.filter((t) => countryAllowed(t.event.country, exclude));
         const priced = events.filter((t) => t.deal).length;
         const note = r.failed ? `${r.failed} live search${r.failed === 1 ? "" : "es"} failed (Kiwi refused); those events are unpriced, not absent` : blocked && events.length > priced ? `${over ? over.error : kiwiThrottled() ? "Kiwi is throttling this address for a few minutes" : "today's live search budget is spent"}; ${priced} of ${events.length} events are priced from tonight's boards, the rest are listed unpriced` : !events.length ? `no event worth the trip is known between ${f.day} and ${to}${a.kinds?.length ? ` of kind ${a.kinds.join(", ")}` : ""}; widen the window or drop the kind` : undefined;
-        return { searched: r.searched ?? live, source: ((r.searched ?? 0) > 0 ? "live" : priced ? "boards" : "data") as Source, ...corrected, ...excludedSummary(exclude, [], a.exclude), ...(r.failed ? { failed: r.failed } : {}), ...(note ? { note } : {}), events: events.slice(0, 12).map((t) => ({ event: t.event.name, city: t.event.city, country: t.event.country, dates: `${t.event.start} to ${t.event.end}`, kind: t.event.kind, note: t.event.note, cheapestTrip: t.deal ? compactDeal(t.deal) : null, priced: t.source })), raw: events.map((t) => t.deal).filter((d): d is Deal => !!d) };
+        return { searched: r.searched ?? live, source: ((r.searched ?? 0) > 0 ? "live" : priced ? "boards" : "data") as Source, ...corrected, ...excludedSummary(exclude, [], a.exclude), ...(r.failed ? { failed: r.failed } : {}), ...(note ? { note } : {}), events: events.slice(0, 12).map((t) => {
+            // The events file names a city by its code (city) and its name (cityName, when
+            // the engine has it); the chat cards need the name, the place and the dates.
+            const e = t.event as typeof t.event & { cityName?: string; lat?: number; lon?: number; url?: string };
+            const cityName = e.cityName ?? CITIES[e.city]?.name ?? e.city;
+            return { event: e.name, city: cityName, code: e.code ?? e.city, country: e.country, start: e.start, end: e.end, dates: `${e.start} to ${e.end}`, kind: e.kind, note: e.note, ...(typeof e.lat === "number" && typeof e.lon === "number" ? { lat: e.lat, lon: e.lon } : {}), ...(e.url ? { url: e.url } : {}), cheapestTrip: t.deal ? compactDeal(t.deal) : null, priced: t.source };
+          }), raw: events.map((t) => t.deal).filter((d): d is Deal => !!d) };
       }),
       toModelOutput: withoutRaw,
     }),
@@ -1763,6 +1817,164 @@ export function atlasTools(ctx: AgentContext) {
         await writeJson(path, plan).catch(() => null);
         return { searched: 0, source: "model" as Source, highlights: plan.highlights, days: plan.days, food: plan.food, monthly: plan.monthly, total: plan.total };
       }),
+    }),
+
+    make_itinerary: tool({
+      description:
+        "Turns a trip into a day-by-day itinerary: what to see, do and eat each morning, afternoon and evening, with the travel legs in place, the weather, events on those days and the estimated costs. Two ways in. (1) from: 'last_route' (the latest cheapest_way answer; option 1 is the first option shown, default the cheapest), 'last_deal' (the latest deals shown; option picks the card, default the first), 'last_wild' (the latest wild_trip). (2) stops: places by name with nights each, in order, plus start (YYYY-MM-DD, default three weeks out) and origin (default the traveller's place). Optional wishes (the traveller's words: 'street food, no museums'), pace (slow, balanced, packed) and budget (backpacker, mid, comfort). No Kiwi search; about a minute of writing. Returns the days in short and the costs; the app opens the full itinerary. Saving it is the traveller's click in that view, never yours.",
+      inputSchema: jsonSchema<{ from?: "last_route" | "last_deal" | "last_wild"; option?: number; origin?: string; start?: string; stops?: { place: string; nights: number }[]; wishes?: string; pace?: Pace; budget?: BudgetTier }>({
+        type: "object",
+        properties: {
+          from: { type: "string", enum: ["last_route", "last_deal", "last_wild"], description: "plan the latest thing of that kind shown in this conversation" },
+          option: { type: "number", description: "which one, 1 = the first shown; a route defaults to its cheapest option, deals to the first" },
+          origin: { type: "string", description: "with stops: where the trip starts and ends (a city or airport code); default the traveller's place" },
+          start: { type: "string", description: "with stops: the first day, YYYY-MM-DD" },
+          stops: { type: "array", items: { type: "object", properties: { place: { type: "string" }, nights: { type: "number" } }, required: ["place", "nights"] }, description: "the places in order with nights in each (up to 12)" },
+          wishes: { type: "string", description: "the traveller's own words about the days, up to 300 characters" },
+          pace: { type: "string", enum: ["slow", "balanced", "packed"] },
+          budget: { type: "string", enum: ["backpacker", "mid", "comfort"] },
+        },
+      }),
+      execute: safe(async (a) => {
+        const recent = ctx.recent ?? (ctx.recent = new Map());
+        const here: ItinPlace | undefined = ctx.origin ? { name: ctx.origin.label, lat: ctx.origin.lat, lon: ctx.origin.lon } : undefined;
+        const corrections: string[] = [];
+        const pick = Number.isFinite(a.option) && (a.option ?? 0) >= 1 ? Math.round(a.option!) - 1 : null;
+        const stopsIn = Array.isArray(a.stops) ? a.stops.filter((x) => x && typeof x.place === "string" && x.place.trim()).slice(0, 12).map((x) => ({ place: x.place.trim().slice(0, 80), nights: Math.min(30, Math.max(1, Math.round(Number(x.nights) || 2))) })) : [];
+        /** A skeleton from names: the shared way in for a stops list and for compact rows a restored thread kept. */
+        const byNames = (origin: string | ItinPlace | undefined, start: string | undefined, stops: { place: string; nights: number }[]): Skeleton => {
+          let day = addDays(ctx.today, 21);
+          if (start != null && String(start).trim()) {
+            const d = futureDay(start, ctx.today, "the start");
+            if (!d.day) throw new ItineraryInputError(d.note!);
+            if (d.note) corrections.push(d.note);
+            day = d.day;
+          } else corrections.push(`no start day given; planned from ${day}, three weeks out, say so`);
+          return skeletonFromStops({ origin: origin ?? here ?? gateways[0], start: day, stops });
+        };
+        let skeleton: Skeleton;
+        try {
+          if (!a.from && stopsIn.length) skeleton = byNames(a.origin?.trim() || undefined, a.start, stopsIn);
+          else if (a.from) {
+            const kind = ({ last_route: "route", last_deal: "deal", last_wild: "wild" } as const)[a.from];
+            if (!kind) return { error: "from must be last_route, last_deal or last_wild" };
+            const got = recent.get(kind);
+            const what = { route: "way from A to B (cheapest_way)", deal: "deal", wild: "wild trip (wild_trip)" }[kind];
+            if (!got) return plain(`no ${what} has been shown in this conversation yet; find one first, or pass stops (places and nights) with a start day`);
+            if (kind === "route") {
+              const r = got as Partial<RouteResult> & { from?: unknown; to?: unknown; depart?: string; nights?: number | null; compact?: { kind: string; title: string }[] };
+              if (Array.isArray(r.options) && r.options.length && typeof (r.options[0] as RouteOption).total === "number" && Array.isArray((r.options[0] as RouteOption).legs) && typeof (r.options[0] as RouteOption).legs[0] === "object") {
+                const full = r as RouteResult;
+                const i = pick ?? Math.max(0, full.cheapest ? full.options.indexOf(full.cheapest) : 0);
+                if (i >= full.options.length) return plain(`the route has ${full.options.length} options; option ${i + 1} does not exist`);
+                skeleton = skeletonFromRoute(full, i);
+              } else {
+                // A restored thread: planned by place names. The option asked for is checked
+                // and named when its tickets differ from a plain trip there (a train to a hub,
+                // an open-jaw), and a one-way answer (nights null) gets no return leg.
+                const shown = r.compact ?? [];
+                if (pick != null && shown.length && pick >= shown.length) return plain(`the route has ${shown.length} options; option ${pick + 1} does not exist`);
+                const chosen = pick != null ? shown[pick] : undefined;
+                if (chosen && chosen.kind && chosen.kind !== "direct" && chosen.kind !== "nearby-airports") corrections.push(`this conversation was reloaded, so option ${pick! + 1} (${chosen.title || chosen.kind}) could not be rebuilt leg by leg; the plan goes there by place names and its travel legs are estimates, say so`);
+                const oneWay = r.nights == null;
+                const sk = byNames(String(r.from ?? ""), r.depart, [{ place: String(r.to ?? ""), nights: r.nights ?? 3 }]);
+                if (oneWay) corrections.push("the route was one way: planned 3 nights there with no way back, say so");
+                // With an origin the names path adds the way home last (one leg more than stops).
+                skeleton = oneWay && sk.legs.length > sk.stops.length ? { ...sk, legs: sk.legs.slice(0, -1) } : sk;
+              }
+            } else if (kind === "deal") {
+              const list = got as Record<string, unknown>[];
+              const i = pick ?? 0;
+              const d = list[i];
+              if (!d) return plain(`only ${list.length} deals were shown; option ${i + 1} does not exist`);
+              if (typeof d.gw === "string" && typeof d.dstCity === "string" && typeof d.out === "string") skeleton = skeletonFromDeal(d as unknown as Deal, here);
+              else {
+                // A compact row (a restored thread): its key is gw|dst|out, its dates "out to back".
+                const [gw = "", , keyOut = ""] = String(d.key ?? "").split("|");
+                const [out, back] = String(d.dates ?? "").split(" to ");
+                const nights = Number(d.nights) || (out && back ? Math.max(1, Math.round((Date.parse(back) - Date.parse(out)) / 86_400_000)) : 3);
+                skeleton = byNames(gw || undefined, out || keyOut || undefined, [{ place: String(d.city ?? ""), nights }]);
+              }
+            } else skeleton = skeletonFromWild(got as WildTrip);
+          } else return plain("say what to plan: from 'last_route', 'last_deal' or 'last_wild' for something shown in this conversation, or stops (places and nights) with a start day");
+          skeleton = normaliseSkeleton(skeleton);
+        } catch (err) {
+          if (err instanceof ItineraryInputError) return plain(`${err.message}; name the nearest city instead`);
+          throw err;
+        }
+        const pace: Pace = (["slow", "balanced", "packed"] as Pace[]).includes(a.pace as Pace) ? a.pace! : "balanced";
+        const tier: BudgetTier = (["backpacker", "mid", "comfort"] as BudgetTier[]).includes(a.budget as BudgetTier) ? a.budget! : "mid";
+        const wishes = typeof a.wishes === "string" && a.wishes.trim() ? a.wishes.trim().slice(0, 300) : undefined;
+        // The engine's own clock ends a few seconds before ours, so it closes the days it has;
+        // ours is the backstop that returns what was written when the engine overruns.
+        const ms = Math.max(20_000, Math.min(ITINERARY_MS, turnLeftMs() - DEADLINE_MARGIN_MS));
+        const opts = { wishes, pace, budget: tier, deadlineMs: Math.max(15_000, ms - 8_000) };
+        trace("generateItinerary", { ...opts, stops: skeleton.stops.map((x) => x.name), start: skeleton.start, nights: skeleton.nights, legs: skeleton.legs.length, corrections: [...corrections] });
+        const days: ItinDay[] = [];
+        const before = kiwiStats().today;
+        const building = generateItinerary(skeleton, opts, (d) => days.push(d));
+        let it = await Promise.race([building, sleep(ms).then(() => undefined)]);
+        spend(Math.max(0, kiwiStats().today - before));
+        let timedOut = false;
+        if (!it) {
+          void building.catch(() => null);
+          timedOut = true;
+          const priced = (k: (kind: string) => boolean) => skeleton.legs.filter((l) => k(l.kind)).reduce((t, l) => t + (l.price ?? 0), 0);
+          const flights = priced((k) => k === "fly");
+          const ground = priced((k) => k !== "fly");
+          it = { ...skeleton, id: itineraryKey(skeleton, { wishes, pace, budget: tier }), v: 1, days: [...days], costs: { flights, ground, stay: 0, food: 0, activities: 0, total: flights + ground, perDay: Math.round((flights + ground) / Math.max(1, days.length)), estimated: true }, food: [], events: [], ...(wishes ? { wishes } : {}), pace, budget: tier, sources: [], generatedAt: new Date().toISOString(), status: "partial" } satisfies Itinerary;
+        }
+        const itin = it;
+        const brief = (d: ItinDay) => ({
+          day: d.n,
+          date: d.date,
+          where: itin.stops[d.stop]?.name ?? "",
+          title: d.title,
+          plan: d.blocks.filter((b) => b.kind !== "travel").slice(0, 5).map((b) => `${b.slot}${b.time ? ` ${b.time}` : ""}: ${b.title}`).join("; "),
+          ...(d.blocks.some((b) => b.kind === "travel") ? { travel: d.blocks.filter((b) => b.kind === "travel").map((b) => b.title).join("; ") } : {}),
+          ...(d.weather ? { weather: d.weather } : {}),
+        });
+        const notes = [...corrections];
+        if (timedOut) notes.push(`the writing took longer than ${Math.round(ms / 1000)} seconds: ${itin.days.length} of ${daysBetweenIso(itin.start, itin.end) + 1} days are written; opening it writes the whole trip again in the itinerary view, so offer that`);
+        else if (itin.status === "partial") notes.push("some days were built from the guides because the model did not write them; they are plainer");
+        return {
+          searched: 0,
+          // "model" when the planner wrote the days; "data" when it is not configured and the
+          // engine built them from the guides alone.
+          source: (hasItineraryModel() ? "model" : "data") as Source,
+          title: itin.title,
+          start: itin.start,
+          end: itin.end,
+          nights: itin.nights,
+          stops: itin.stops.map((x) => `${x.name} (${x.nights} night${x.nights === 1 ? "" : "s"})`),
+          days: itin.days.map(brief),
+          // The parts of the total, so the answer can say what it covers; legs without a price
+          // (a trip planned by names) are counted, so "flights not priced yet" is said, not 0.
+          costs: { total: itin.costs.total, perDay: itin.costs.perDay, flights: itin.costs.flights, ground: itin.costs.ground, stay: itin.costs.stay, food: itin.costs.food, activities: itin.costs.activities, estimated: itin.costs.estimated, unpricedLegs: itin.legs.filter((l) => l.price == null && !l.url).length },
+          ...(itin.events.length ? { events: itin.events.slice(0, 4).map((e) => `${e.date} ${e.name} (${e.city})`) } : {}),
+          status: itin.status,
+          ...(itin.status === "partial" ? { partial: true } : {}),
+          ...(notes.length ? { note: notes.join("; ") } : {}),
+          // The skeleton travels with the answer (the model never reads it, the browser keeps
+          // it), so a restored thread can still open the itinerary: the view regenerates it,
+          // or the itinerary API answers from its cache.
+          skeleton,
+          ...(wishes ? { wishes } : {}),
+          pace,
+          budget: tier,
+          raw: itin,
+        };
+      }),
+      // The model reads the days in short; the skeleton and the whole itinerary go only to the browser.
+      toModelOutput: ({ output }: { output: unknown }): { type: "json"; value: JSONValue } => {
+        if (output && typeof output === "object" && ("raw" in output || "skeleton" in output)) {
+          const { raw: _raw, skeleton: _sk, ...rest } = output as Record<string, unknown>;
+          void _raw;
+          void _sk;
+          return { type: "json", value: rest as JSONValue };
+        }
+        return { type: "json", value: (output ?? null) as JSONValue };
+      },
     }),
 
     sights: tool({
@@ -1916,4 +2128,113 @@ export function atlasTools(ctx: AgentContext) {
         }
       : {}),
   };
+  // Every route, deal list, wild trip or loop a tool of this turn produces becomes "the
+  // latest" for make_itinerary (rememberOutput); the wrapper keeps each tool's own types.
+  for (const [name, t] of Object.entries(tools) as unknown as [string, { execute?: (input: unknown, options: unknown) => Promise<unknown> }][]) {
+    if (!RECENT_KIND[name] || !t.execute) continue;
+    const run = t.execute;
+    t.execute = async (input, options) => {
+      const out = await run(input, options);
+      rememberOutput(ctx, name, out);
+      return out;
+    };
+  }
+  return tools;
+}
+
+// ---------------------------------------------------------------------------------------
+// The conversation's frame, shared by the chat route (app/api/chat/route.ts) and the
+// terminal CLI (scripts/atlas.ts), so a question asked in either gets the same agent.
+
+const monthLong = (iso: string) => new Date(iso + "T12:00:00Z").toLocaleDateString("en-GB", { month: "long", year: "numeric", timeZone: "UTC" });
+
+/**
+ * The agent's context from what a client sent: the origin, airports, home country, month,
+ * calendar day and Been list, each believed only when it is well formed. `today` is the
+ * client's calendar day when it is within one day of the server's (in the evening west of UTC
+ * the server is already on tomorrow, and a date widget would be rejected as past).
+ */
+export function chatContext(c: Record<string, unknown> | undefined): AgentContext {
+  const raw = c ?? {};
+  const o = raw.origin as { lat?: unknown; lon?: unknown; label?: unknown } | undefined;
+  const origin = o && Number.isFinite(o.lat) && Number.isFinite(o.lon) ? { lat: Number(o.lat), lon: Number(o.lon), label: String(o.label ?? "their location").slice(0, 60) } : undefined;
+  const gateways = (Array.isArray(raw.gateways) ? raw.gateways : []).filter((g): g is string => typeof g === "string" && /^[A-Z]{3}$/.test(g)).slice(0, 4);
+  const home = typeof raw.home === "string" && /^[A-Z]{2}$/.test(raw.home) ? raw.home : "RO";
+  const month = typeof raw.month === "string" && /^\d{4}-\d{2}$/.test(raw.month) ? raw.month : undefined;
+  const serverDay = new Date().toISOString().slice(0, 10);
+  const given = typeof raw.today === "string" && /^\d{4}-\d{2}-\d{2}$/.test(raw.today) ? raw.today : "";
+  const today = given && Math.abs(Date.parse(given) - Date.parse(serverDay)) <= 86_400_000 ? given : serverDay;
+  // The Been list is believed only as clean ISO2 codes; an empty list is no list. It is never
+  // stored here: it lives in the traveller's browser and rides along with each turn.
+  const rawBeen = raw.been && typeof raw.been === "object" ? (raw.been as Partial<BeenPrefs>) : undefined;
+  const beenCodes = rawBeen ? cleanCodes(rawBeen.countries) : [];
+  const been: BeenPrefs | undefined = beenCodes.length ? { countries: beenCodes, newOnly: rawBeen?.newOnly === true } : undefined;
+  return { origin, gateways, home, month, today, budget: { used: 0, max: TURN_SEARCH_BUDGET }, been, exclude: excludedCountries(been), recent: new Map() };
+}
+
+/** The system prompt for one turn: who the traveller is, the rules, the defaults, the tools' etiquette. */
+export function chatSystem(ctx: AgentContext): string {
+  const { origin, gateways, home, month, today, been } = ctx;
+  const airports = origin ? nearestGateways(AIRPORTS, origin.lat, origin.lon, { maxKm: 350, limit: 6 }).map((g) => `${g.airport.iata} ${g.airport.city ?? g.airport.name} (${g.driveMin} min drive${gateways.includes(g.airport.iata) ? ", searched nightly" : ""})`) : gateways;
+  const mainAirports = (gateways.length ? gateways : ["OTP"]).join(", ");
+  // The been line names the countries (not codes) so the model can talk about them; the rule
+  // after it covers the thread. A "been there" said in the chat becomes an exclusion only
+  // when the traveller wants new countries (the chip's "only new", or asked for in words):
+  // with revisits fine, it is a record to mention, never a filter. A tool's exclude ADDS to
+  // the chip's list, so the model can only ever narrow the search, and `allow` lifts named
+  // countries for one search.
+  const newOnly = !!been?.newOnly;
+  const chatRule = newOnly
+    ? "When the traveller says in the chat that they have been somewhere else too, pass those countries (ISO2 codes) as exclude to every search tool for the rest of the thread: exclude ADDS to their Been list, which always applies on its own, so pass only the new ones. When they say a country is fine again this time, pass it in allow for that search."
+    : "When the traveller says in the chat that they have been somewhere, remember it as a record for the thread and mention when a suggestion is somewhere new to them; do NOT pass it as exclude, revisits are fine. Only when they ask for new countries ('somewhere new', 'nowhere I have been') pass the countries they named (ISO2 codes) as exclude to every search tool for the rest of the thread; when they say a country is fine again this time, pass it in allow for that search.";
+  const beenRule = `${beenLine(been, (cc) => COUNTRIES[cc]?.name ?? cc)}${been ? " " : ""}${chatRule} Never propose a destination or an overnight stop in an excluded country; a layover or connection through one is fine and never a reason to drop a route. For a lasting setting, suggest the Been chip in the top bar once, in one short line.`;
+
+  return `You are Atlas, a travel agent in a chat, and you act before you ask. Today is ${today} (${monthLong(today)}). The traveller is in ${origin?.label ?? "an unknown place"}, home country ${COUNTRIES[home]?.name ?? home} (passport ${home}). Their airports: ${airports.join("; ") || "unknown"}. The airports searched nightly: ${mainAirports}.${month ? ` They have the month ${month} selected in the app.` : ""}
+
+${beenRule}
+
+The rule that matters most: when something is unsaid, assume the sensible default, state the assumption in one line, search, show results, and only then ask at most ONE question, always through the ask tool (a widget), never as prose. Never ask two things. Never answer about prices without a tool result from this turn. Never say "no deals in the data" without a live search.
+
+Defaults when the traveller does not say:
+- When: open or "anytime" means a price calendar, the next 6 months month by month (scan_cheapest). A period of dates means find_getaways with those dates. A single month means that month.
+- How long: 2 to 4 nights for a weekend, 3 to 7 nights inside Europe, 7 to 14 nights long-haul (another continent), 14 nights for a wild loop, 2 months for a long stay. The tools pick these by distance when you leave nights out.
+- Where from: all their nightly airports at once (the tools take several origins). Mention a nearby airport only when it beats theirs by a clear margin.
+- Two places named ("Brasov to Lisbon", "from Cluj to Paris"), how to get from one place to another, or the cheapest way somewhere ("cheapest way to Lisbon", "how do I get from Brasov to Vienna"): cheapest_way FIRST; it already checks nearby airports, trains to a bigger airport, hubs on two tickets and open-jaw, so never rebuild that by hand with reprice_route calls. Say what was considered (its considered list) in one line, name the cheapest and the fastest, and the tradeoff between them. When the traveller says "search harder", "look harder", "exhaust", "every option", call it again with harder: true (twice the searches). An option's kind "direct" means the nearest airports, not a nonstop flight: say nonstop only when its nonstop field is true. When placed says an end could not be placed, do not write "from X" or "to X" for it; say the place was not found and ask for the nearest city or airport.
+- What is on, something to go to, festivals, carnivals, marathons, concerts, "worth flying for": events_worth_travelling_for with the window they gave (default the next three months; a single month means that month), kinds as their words. Say which events are within reach: the ones priced from their airports, cheapest first, with the dates and the fare; the unpriced ones in one line.
+- "Anywhere", "the cheapest possible", "wherever is cheapest": find_getaways with exhaustive=true (it goes through many more targets and nearby origins).
+- Named destination not on the boards (San Francisco, Tokyo, Bali, a country): ONE scan_cheapest call. When the destination is in a big country (${OPEN_JAW_COUNTRIES.join(", ")}) set openJawFrom to that country in that same single call, so coming home from another big city is priced too; never a second scan_cheapest for the open-jaw. Then reprice_route on the best month if a precise day matters.
+- Where is cheap to stay, hotel deals, hotels in general with no city named: hotel_deals (instant, from the nightly hotel snapshots). When it says it is warming up, say plainly that the hotel history is not there yet and how many nights it has; for a named city and dates use hotels_near.
+- "Return from another city": open-jaw via openJawFrom (a country or city), not a question.
+- A region word (Southeast Asia, the Balkans), "a loop", "a trip through": wild_trip with 14 nights unless told; named countries go in countries, and the trip is then keyed as region custom (the key it returns says so, pass it on unchanged). A month or more somewhere: long_stay.
+- Several people from different cities: group_trip at once with what is known, each person from their OWN city or airport; when a person's dates or airport are missing or the tool says a place is unknown, show the result for the others and ask with ONE people widget prefilled with what you know.
+- Open "where could I go": cheapest_deals (tonight's boards, instant), then follow with find_getaways only when they give dates.
+- Cool autumn, warm winter, beaches, food: pick the countries yourself (where as a comma list of at most four) rather than asking; use best_months when the traveller is flexible on when.
+
+Itineraries:
+- After you show a way from A to B, deals or a wild loop, close with one short line offering to make it an itinerary (the cards also carry a "Make an itinerary" button). Offer it once per result, not on every message.
+- When the traveller asks to plan the days, wants a day-by-day plan, an itinerary, or says "make it an itinerary", call make_itinerary: from 'last_route', 'last_deal' or 'last_wild' (option for which one, 1 = the first shown) for what was shown, or stops (places with nights, in order) plus start when they name places ("3 nights in Lisbon from 14 November"). Pass their wishes in their words, and pace or budget when they say. For a wild trip prefer make_itinerary over plan_days unless they ask for a month's rent per city.
+- After make_itinerary, say the shape in two or three lines (the days' highlights, the estimated total) and that the full itinerary opens in the app, where they can change the pace, regenerate, save and share it. Never offer to save it yourself.
+- The app has a command line: "/" in the top bar opens it and runs things like "Brasov to Lisbon", "events in february", "/wild sea 21" or "itinerary Lisbon 3 nights from 14 Nov" directly. Mention it once in a thread, in one line, when the request was exactly such a shape; never again after that.
+
+Working with results:
+- Rank by price per night for comparable trips, and say why the winner wins (price, direct, better dates, the right airport). Show the best three, never ten.
+- When the dates are open, show the price calendar: the months with their cheapest fare. The client draws it from the scan_cheapest result; you name the best month and the best dates in words.
+- Name the one or two tradeoffs that matter: a better layover or direct for €20 more, a stopover programme when the route goes through Istanbul, Doha, Lisbon, Reykjavik, Helsinki or Singapore (stopover_programmes), a nearby airport, open-jaw home from another city.
+- Mention the fare memory's verdict (price_insight on the winning route and month, with the price in hand) when it has history; skip it when it says unknown.
+- Remember stated preferences for the whole thread: "that one", "the second", "make it direct", "from Cluj too" refer to what you showed. Keep them for later searches too.
+- Prices are return fares in euros unless you say one-way; say when a price is live versus searched nightly. Be honest about gaps (events only in 20 cities, trains only in Europe, hotels in sandbox).
+- A tool answering with { error } is a fact to state in one line, then carry on with the next best tool; never retry the same call unchanged more than once.
+- Every result says where it came from in source: live (searched now), memo (the same search within the hour), boards (searched last night), memory (a fare someone saw in the last days), stored (a trip built earlier), data (the static files), model (written now). Say which when you quote a price, in a few words ("searched now", "from last night's boards", "a remembered fare").
+- When a result carries a note saying live prices are rate-limited (Kiwi is throttling, today's budget is spent), say so in ONE plain line, say the prices shown come from tonight's boards, the fare memory or a stored trip, and offer to try live again in a few minutes. Do not call the same live tool again in this turn. A result with a note and no data is still an answer: state the note and suggest the next step it names.
+- A note saying this turn's search budget is spent is NOT a rate limit: nothing is blocked, a new message searches at once; say that in one line and never say "in a few minutes" for it.
+- A note written as a plain sentence about the request (a city on the been list, nights not enough to pass through the cities asked, an unknown start airport, region custom without countries) is the engine's own refusal: repeat it to the traveller in your words and fix the input or ask, never call the same tool again unchanged.
+- A result with corrected means an input was adjusted or read a certain way (a past date moved to today, a swapped window, "next friday" read as a date, a departure assumed three weeks out); say it in one short line so the traveller can object.
+- Dates: write them as YYYY-MM-DD when you can; the tools also read "tomorrow", "next friday", "14 November", "Nov 14 2026" and say how they read them. Vague words ("this weekend", "Christmas", "end of October") are not dates: pick the day yourself and state it.
+- plan_days takes the key object wild_trip returned, unchanged.
+
+Searches cost: every live tool says how many Kiwi searches it makes, and a turn has ${TURN_SEARCH_BUDGET} in all; when a tool says the budget is used up, answer with what you have. Prefer one scan over many reprices; never call the same live tool twice with the same input in one turn.
+
+Before a slow tool (scan_cheapest, find_getaways, cheapest_way, wild_trip, long_stay, group_trip, plan_days, make_itinerary) write one short line saying what you are searching and the assumption you made, then call it. A long build (wild_trip, long_stay, group_trip) may answer with what it had when its time ran out: partial: true with the engine's note (a shorter loop, bases or windows not priced in time), or a stored copy under a note (undated: true means that copy was built for no particular dates, so never present its days as the ones asked; its key is its own, pass it to plan_days as is); say so in one line and offer to ask again in two minutes.
+
+Style: plain words, short paragraphs, no bullet symbols, no headings, no em dashes (use commas or full stops), links as [text](url). Name the city, the price, the dates and the airport. End with the one question, if any, through the ask tool, and nothing after it.`;
 }

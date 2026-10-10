@@ -8,19 +8,18 @@ export type Origin = { lat: number; lon: number; label: string; source: "gps" | 
 /** "wild" stays a valid view for old links; the globe maps it to the Trips tab in Wild mode. */
 export type View = "chat" | "deals" | "all" | "fly" | "ground" | "trips" | "wild";
 
-/** The modes of the Trips tab; "ab" is the A to B route finder (/api/route). */
-export type TripMode = "short" | "wild" | "longstay" | "group" | "purpose" | "ab";
+/**
+ * The modes of the Trips tab: the trip builders only. "A to B" and "events worth flying for"
+ * used to be modes here; they are capabilities now (the command line, the route card on the
+ * map, the Events layer, "Get there" on every place), so they are not tied to one tab.
+ */
+export type TripMode = "short" | "wild" | "longstay" | "group";
 export const TRIP_MODES: { key: TripMode; label: string; hint: string }[] = [
   { key: "short", label: "Short loops", hint: "fly out, hop by train, fly home: 2 to 21 nights" },
   { key: "wild", label: "Wild loops", hint: "a far region or your own countries, many stops, live fares" },
   { key: "longstay", label: "Long stay", hint: "one base for a month or more, priced all in" },
   { key: "group", label: "Group", hint: "friends from different cities meet somewhere cheap" },
-  { key: "purpose", label: "Purpose", hint: "events worth flying for" },
 ];
-/** The A to B mode's chip; kept apart from TRIP_MODES so a panel that appends its own copy does not draw it twice. */
-export const AB_MODE: { key: TripMode; label: string; hint: string } = { key: "ab", label: "A to B", hint: "the cheapest way from one place to another, by air, rail, coach and ferry" };
-/** Every mode of the Trips tab, A to B last: what the panel should draw. */
-export const ALL_TRIP_MODES: { key: TripMode; label: string; hint: string }[] = [...TRIP_MODES, AB_MODE];
 /** The region key that means "custom countries" in the Wild form (WILD_REGIONS has no chip for it; the form adds a box). */
 export const WILD_CUSTOM_CHIP: { key: string; label: string } = { key: "custom", label: "Custom countries" };
 
@@ -220,3 +219,20 @@ export function climateScore(tmax: number, rain: number): number {
   const dry = rain <= 60 ? 1 : Math.max(0, 1 - (rain - 60) / 200);
   return Math.round((warm * 0.6 + dry * 0.4) * 100) / 100;
 }
+
+// ---- Capabilities that live everywhere, not in one tab: the events layer, place pages, the
+// route card. Kept here so the globe, the panel and the cards share one shape.
+
+/**
+ * An event worth flying for as the map and the cards show it: the curated entry with its
+ * dates in the window asked and a point on the globe. key is stable across renders (name and
+ * start date), city is the city code, cityName the readable name.
+ */
+/** deal: the cheapest stored fare from the traveller's airports that overlaps the event (from /api/purpose with live=0), when one is known. */
+export type EventSpot = { key: string; name: string; city: string; cityName: string; country: string; lat: number; lon: number; start: string; end: string; kind: string; why?: string; url?: string; deal?: Deal | null };
+
+/** The Events layer: on or off, the window it shows (empty: the When pill, else the next four months), optional words to narrow it ("jazz"), a country (ISO2), and whether the list card is open. */
+export type EventsLayer = { on: boolean; from: string; to: string; words?: string[]; country?: string; list: boolean };
+
+/** A place page opened from anywhere: the command line, atlas:place, an event, a sight's city. */
+export type PlacePage = { name: string; code?: string; country?: string; lat: number; lon: number };
