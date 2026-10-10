@@ -32,6 +32,18 @@ Warsaw, train to Gdańsk, fly home; hidden gems; an impeccable globe. Here is wh
    World Heritage nearby) that fewer than 400,000 people looked up on Wikipedia last year.
    Sibiu and Matera qualify; Paris never will.
 
+8. **Wild trips** (new tab). Your Asia loop, generalised. Pick a region and a length: the
+   engine flies you out (through Istanbul or Budapest when that is cheaper), chains cheap
+   one-way flights and border hops through the region for two or three nights a stop, and
+   flies you home from the last city. Every fare is live (about fifty searches, you watch
+   the progress), living costs per stop come from World Bank price levels (Thailand about
+   €35 a day, Singapore €63), visas and warnings are attached, and a model then scores it
+   out of 100 with reasons and the two changes that would make it better. First result:
+   Bucharest → Istanbul → Kuala Lumpur → Singapore → Saigon → Phnom Penh by road → Bangkok →
+   home, 13 nights, 5 countries, about €1,250 all in, judged 54 ("skip Singapore, do the
+   Mekong Delta instead; the 24-hour return is a cost"). Results are kept a day, so the next
+   person asking gets it at once.
+
 **Numbers:** ~150 airport boards, each 50 to 100 deals to 30 to 50 cities; 2,549 cities with a
 fame score; 20 event feeds; combos in 10 seconds; the nightly boards job ran once (8 runners,
 15 minutes each) and runs every night at 04:00 your time.

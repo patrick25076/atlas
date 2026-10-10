@@ -184,6 +184,15 @@ export async function buildWild(p: WildParams): Promise<WildTrip | null> {
   }
   entries.sort((a, b) => a.score - b.score);
   if (!entries.length) return null;
+  // A cheap landing in a place nobody wants three nights in (Urumqi for China) only wins
+  // when it undercuts the best known city by a wide margin.
+  const famous = entries.find((e) => worth(cityOfItinerary(e.it)) >= 70);
+  if (famous) {
+    const cut = famous.score - 120;
+    const keep = entries.filter((e) => worth(cityOfItinerary(e.it)) >= 70 || e.score < cut);
+    entries.length = 0;
+    entries.push(...keep);
+  }
 
   // Positioning for a hub entry: arrive the day before or the same day with three hours to spare.
   let entry: Entry | null = null;

@@ -28,7 +28,18 @@ export async function judgeTrip(trip: WildTrip): Promise<Judge | null> {
     totals: { ...trip.totals, hoursInTransitDoorToDoor: trip.totals.hoursInAir, hoursInAir: undefined },
     note: "Flight hours are door to door including layovers. Living costs are per night, estimated from the country's price level, for hotel, food, local transport and one activity.",
   };
-  try {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const r = await judgeOnce(model, brief).catch((err: unknown) => {
+      console.log(`judge: ${err instanceof Error ? err.message.slice(0, 300) : err}`);
+      return null;
+    });
+    if (r) return r;
+  }
+  return null;
+}
+
+async function judgeOnce(model: Parameters<typeof generateObject>[0]["model"], brief: unknown): Promise<Judge | null> {
+  {
     const { object } = await generateObject({
       model,
       schema: jsonSchema<Judge>({
@@ -48,9 +59,14 @@ export async function judgeTrip(trip: WildTrip): Promise<Judge | null> {
       prompt: JSON.stringify(brief),
       maxOutputTokens: 600,
     });
-    return { ...object, score: Math.max(0, Math.min(100, Math.round(object.score))), reasons: object.reasons.slice(0, 4), tweaks: object.tweaks.slice(0, 3) };
-  } catch (err) {
-    console.log(`judge: ${err instanceof Error ? err.message.slice(0, 200) : err}`);
-    return null;
+    // The model sometimes drops a field; a verdict without tweaks is still a verdict.
+    if (typeof object?.score !== "number" || !object.verdict) return null;
+    return {
+      score: Math.max(0, Math.min(100, Math.round(object.score))),
+      verdict: object.verdict,
+      reasons: (object.reasons ?? []).slice(0, 4),
+      tweaks: (object.tweaks ?? []).slice(0, 3),
+      bestFor: object.bestFor ?? "",
+    };
   }
 }
