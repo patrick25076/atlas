@@ -80,6 +80,17 @@ Until then the planner leans on the guides and marks the rest "verify".
     away on the 26th: Thessaloniki €44, Corfu €44, Chișinău €58, Katowice €61, Berlin €77,
     and open-jaw pairs such as out of Brașov to Warsaw, home into Bucharest, €82.
 
+12. **The chat is the agent (evening).** The first tab is "Ask": a conversation that is kept
+    in your browser, knows where you are, your airports, your passport and the month you
+    picked, streams its answer and calls every Atlas capability as a tool: tonight's boards,
+    the period search, live re-pricing, two-city combos, wild trips with custom country lists,
+    day plans, sights, events, rated restaurants, hotels, one-way fares, trains, facts and
+    web search. Results come back as cards in the chat and as pins or a route on the globe,
+    and the thread continues: "make it direct, under 2 hours, 4 nights, and tell me what to
+    eat there" re-ran the search with those constraints and answered Warsaw €48, 20 to 24
+    October, direct from Brașov, with restaurants and a source. The box in the top bar sends
+    into the same chat. Wild trips take a custom country list and countries to favour.
+
 **Numbers:** ~150 airport boards, each 50 to 100 deals to 30 to 50 cities; 2,549 cities with a
 fame score; 20 event feeds; combos in 10 seconds; the nightly boards job ran once (8 runners,
 15 minutes each) and runs every night at 04:00 your time.
