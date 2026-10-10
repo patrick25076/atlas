@@ -223,7 +223,8 @@ export async function buildBoard(gatewayCode: string, opts: BuildOptions = {}): 
           .map((it) => ({ it, nights: nightsOf(it) }))
           .filter((x): x is { it: KiwiItinerary; nights: number } => x.nights != null && x.nights >= MIN_NIGHTS && x.nights <= MAX_NIGHTS)
           .map(({ it, nights }) => toDeal(gw.code, it, nights))
-          .filter((d) => d.dstCity !== own);
+          // Not home, and no domestic hop with a connection (a 7-hour way to cross one country).
+          .filter((d) => d.dstCity !== own && !(d.country === gw.country && d.stops > 0));
         deals.push(...found);
         opts.onDeals?.(trimDeals(found), target);
       } catch (err) {

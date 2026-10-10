@@ -70,35 +70,71 @@ function parseListings(wikitext: string): Sight[] {
 function eventsSection(wikitext: string): string[] {
   const m = wikitext.match(/\n==+\s*(?:Events|Festivals|Events and festivals|Festivals and events|Annual events)\s*==+\n([\s\S]*?)(?=\n==[^=])/i);
   if (!m) return [];
-  return m[1]
+  // A listing template becomes "Name (when): what it is"; any other template goes.
+  const text = m[1]
+    .replace(/\{\{(?:do|see|listing|event)\s*\|([\s\S]*?)\}\}/gi, (_, body: string) => {
+      const f: Record<string, string> = {};
+      for (const part of body.split("|")) {
+        const eq = part.indexOf("=");
+        if (eq > 0) f[part.slice(0, eq).trim().toLowerCase()] = part.slice(eq + 1).trim();
+      }
+      const when = [f.date, f.month].filter(Boolean).join(" ");
+      return f.name ? `${f.name}${when ? ` (${when})` : ""}: ${f.content ?? ""}` : (f.content ?? "");
+    })
+    .replace(/\{\{[\s\S]*?\}\}/g, "");
+  return text
     .split("\n")
     .map((l) => clean(l.replace(/^\*+\s*/, "")))
-    .filter((l) => l.length > 20)
+    .filter((l) => l.length > 20 && !/^\|/.test(l))
     .slice(0, 8);
+}
+
+async function wikitext(title: string): Promise<{ title: string; text: string } | null> {
+  const res = await fetch(`https://en.wikivoyage.org/w/api.php?action=parse&page=${encodeURIComponent(title)}&prop=wikitext&format=json&redirects=1`, {
+    headers: { "User-Agent": UA, Accept: "application/json" },
+    next: { revalidate: 7 * 86_400 },
+  });
+  if (!res.ok) {
+    console.log(`sights: wikivoyage ${res.status} for ${title}`);
+    return null;
+  }
+  const j = (await res.json()) as { parse?: { title: string; wikitext: { "*": string } }; error?: { code: string } };
+  const text = j.parse?.wikitext["*"];
+  if (!text || !j.parse) return null;
+  return { title: j.parse.title, text };
+}
+
+/** Big cities are split into district articles ("Paris/1st arrondissement"); the listings live there. */
+function districtTitles(text: string, title: string): string[] {
+  const out = new Set<string>();
+  for (const m of text.matchAll(/\[\[([^\]|#]+)(?:\|[^\]]*)?\]\]/g)) {
+    const t = m[1].trim();
+    if (t.startsWith(`${title}/`)) out.add(t);
+  }
+  return [...out].slice(0, 6);
 }
 
 export async function GET(request: Request) {
   const name = new URL(request.url).searchParams.get("name")?.trim() ?? "";
   if (!name || name.length > 80) return NextResponse.json({ error: "name required" }, { status: 400 });
-  const res = await fetch(`https://en.wikivoyage.org/w/api.php?action=parse&page=${encodeURIComponent(name)}&prop=wikitext&format=json&redirects=1`, {
-    headers: { "User-Agent": UA, Accept: "application/json" },
-    next: { revalidate: 7 * 86_400 },
-  });
-  if (!res.ok) {
-    console.log(`sights: wikivoyage ${res.status} for ${name}`);
-    return NextResponse.json(null, { headers: { "Cache-Control": "public, max-age=3600" } });
+  const page = await wikitext(name);
+  if (!page) return NextResponse.json(null, { headers: { "Cache-Control": "public, max-age=3600" } });
+  let wt = page.text;
+  let all = parseListings(wt);
+  if (all.filter((s) => s.kind === "see").length < 4) {
+    const districts = districtTitles(wt, page.title);
+    const pages = await Promise.all(districts.map((d) => wikitext(d).catch(() => null)));
+    for (const d of pages) {
+      if (!d) continue;
+      all = all.concat(parseListings(d.text));
+      if (!wt.match(/\n==+\s*(?:Events|Festivals)/i) && d.text.match(/\n==+\s*(?:Events|Festivals)/i)) wt = d.text;
+    }
   }
-  const j = (await res.json()) as { parse?: { title: string; wikitext: { "*": string } }; error?: { code: string } };
-  const wt = j.parse?.wikitext["*"];
-  if (!wt || !j.parse) {
-    console.log(`sights: no article for ${name}: ${j.error?.code ?? Object.keys(j).join(",")}`);
-    return NextResponse.json(null, { headers: { "Cache-Control": "public, max-age=3600" } });
-  }
-  const all = parseListings(wt);
+  const j = { parse: page };
   const rank = (s: Sight) => (s.image ? 2 : 0) + (s.lat != null ? 1 : 0) + Math.min(1, s.desc.length / 120);
   const pick = (kind: Sight["kind"], n: number) => all.filter((s) => s.kind === kind).sort((a, b) => rank(b) - rank(a)).slice(0, n);
   const body: Sights = {
-    title: j.parse.title,
+    title: j.parse.title.split("/")[0],
     url: `https://en.wikivoyage.org/wiki/${encodeURIComponent(j.parse.title.replace(/ /g, "_"))}`,
     see: pick("see", 10),
     do: pick("do", 6),
