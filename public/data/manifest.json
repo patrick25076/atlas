@@ -232,5 +232,14 @@
     "fetchedAt": "2026-10-10T06:52:07.489Z",
     "rows": 2549,
     "file": "public/data/fame.json"
+  },
+  "costs": {
+    "source": "World Bank PPP conversion factor / official exchange rate",
+    "url": "https://data.worldbank.org/indicator/PA.NUS.PPP",
+    "licence": "CC BY 4.0",
+    "note": "Price level relative to the United States (1.0); latest of 2022-2024.",
+    "fetchedAt": "2026-10-10T07:46:27.790Z",
+    "rows": 193,
+    "file": "public/data/costs.json"
   }
 }

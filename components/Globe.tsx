@@ -17,7 +17,8 @@ import { countryName, dateRange } from "@/lib/format";
 import { BANDS, dealKey, type AskState, type Band, type BoardState, type DealNights, type LiveSearch, type Origin, type Sheet, type View } from "@/lib/ui-types";
 import type { Airport, City, CityPlaces, CountryInfo, Deal, Destination, FaresResponse, Gateway, HeritageRow, Holiday, Manifest, ReachResponse, ReachStation, Route, VisaFile, WeatherCompact, WeatherFile } from "@/lib/types";
 import { expandWeather, visaFor } from "@/lib/types";
-import Panel, { MODE_LABEL, type CombosState } from "./Panel";
+import Panel, { MODE_LABEL, type CombosState, type WildState } from "./Panel";
+import type { WildLeg, WildTrip } from "@/lib/wild";
 import type { Sights, Sight } from "@/app/api/sights/route";
 import TopBar from "./TopBar";
 import PriceLabels, { type LabelItem } from "./PriceLabels";
@@ -138,6 +139,9 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
   const [sightsOnMap, setSightsOnMap] = useState(false);
   const [combos, setCombos] = useState<CombosState>({ status: "idle" });
   const [selectedCombo, setSelectedCombo] = useState<string | null>(null);
+  const [wild, setWild] = useState<WildState>({ status: "idle", lines: [] });
+  const [wildRegion, setWildRegion] = useState("sea");
+  const [wildNights, setWildNights] = useState(14);
 
   const [boards, setBoards] = useState<Record<string, BoardState>>({});
   const [month, setMonth] = useState<string | null>(null);
@@ -293,7 +297,7 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
     if (m && /^\d{4}-\d{2}$/.test(m)) setMonth(m);
     const from = q.get("from")?.split(",");
     const v = q.get("view");
-    if (v === "deals" || v === "all" || v === "fly" || v === "ground" || v === "trips") setView(v);
+    if (v === "deals" || v === "all" || v === "fly" || v === "ground" || v === "trips" || v === "wild") setView(v);
     if (from && from.length >= 2 && Number.isFinite(Number(from[0])) && Number.isFinite(Number(from[1]))) {
       setOrigin({ lat: Number(from[0]), lon: Number(from[1]), label: from.slice(2).join(",") || "shared location", source: "search" });
       const d = Number(q.get("days"));
@@ -737,6 +741,75 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
     map.fitBounds(bounds, { padding: panelPadding(), maxZoom: 6, duration: 1300 });
   }
 
+  // A wild trip: streamed progress, then the trip; stored ones come back whole.
+  const wildCoord = useCallback((code: string): [number, number] | null => gwCoord(code) ?? (cities[code] ? [cities[code].lon, cities[code].lat] : null), [gwCoord, cities]);
+  async function buildWildTrip() {
+    if (!boardGateways.length || !gateways[0]) return;
+    setWild({ status: "loading", lines: [] });
+    const q = new URLSearchParams({ g: boardGateways.map((g) => g.iata).join(","), home: gateways[0].airport.country, region: wildRegion, nights: String(wildNights) });
+    if (month) q.set("month", month);
+    try {
+      const r = await fetch(`/api/wild?${q}`);
+      if (!r.ok) {
+        const j = await r.json().catch(() => ({}));
+        setWild({ status: "error", lines: [], note: j.error ?? `failed (${r.status})` });
+        return;
+      }
+      if (!r.headers.get("content-type")?.includes("ndjson")) {
+        const trip = (await r.json()) as WildTrip;
+        setWild({ status: "ok", lines: [], trip, source: "stored" });
+        frameWild(trip);
+        return;
+      }
+      const reader = r.body!.getReader();
+      const dec = new TextDecoder();
+      let buf = "";
+      let finished = false;
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, { stream: true });
+        let nl = buf.indexOf("\n");
+        while (nl >= 0) {
+          const line = buf.slice(0, nl).trim();
+          buf = buf.slice(nl + 1);
+          nl = buf.indexOf("\n");
+          if (!line) continue;
+          try {
+            const msg = JSON.parse(line) as { progress?: string; trip?: WildTrip; error?: string };
+            if (msg.progress) setWild((w) => ({ ...w, lines: [...w.lines, msg.progress!] }));
+            if (msg.trip) {
+              finished = true;
+              setWild({ status: "ok", lines: [], trip: msg.trip, source: "live" });
+              frameWild(msg.trip);
+            }
+            if (msg.error) {
+              finished = true;
+              setWild({ status: "error", lines: [], note: msg.error });
+            }
+          } catch {
+            // partial line
+          }
+        }
+      }
+      if (!finished) setWild({ status: "error", lines: [], note: "the search stopped early; try again" });
+    } catch {
+      setWild({ status: "error", lines: [], note: "network" });
+    }
+  }
+  function frameWild(trip: WildTrip) {
+    const map = mapRef.current;
+    if (!map) return;
+    const pts: [number, number][] = [];
+    for (const s of trip.stops) pts.push([s.lon, s.lat]);
+    const home = wildCoord(trip.home);
+    if (home) pts.push(home);
+    if (pts.length < 2) return;
+    const bounds = new maplibregl.LngLatBounds(pts[0], pts[0]);
+    for (const q of pts) bounds.extend(q);
+    map.fitBounds(bounds, { padding: panelPadding(), maxZoom: 4.5, duration: 1600 });
+  }
+
   const homeHolidays = useMemo(() => {
     const home = gateways[0]?.airport.country;
     if (!home) return [];
@@ -784,6 +857,11 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
 
   // Price tags on the globe: one per city shown, cheapest first; the open or hovered one wins.
   const labelItems = useMemo<LabelItem[]>(() => {
+    if (view === "wild") {
+      const t = wild.trip;
+      if (!t) return [];
+      return t.stops.map((st, i) => ({ key: `${st.code}-${i}`, lon: st.lon, lat: st.lat, text: `${st.name} · ${st.nights}n`, hot: i === 0, cheap: false }));
+    }
     if (view !== "deals") return [];
     const out: LabelItem[] = [];
     for (const d of dealsList.slice(0, 80)) {
@@ -798,7 +876,7 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
     }
     out.sort((a, b) => (a.hot === b.hot ? 0 : a.hot ? -1 : 1));
     return out;
-  }, [view, dealsList, deal, selectedDeal, hoveredDeal, dealCoord]);
+  }, [view, dealsList, deal, selectedDeal, hoveredDeal, dealCoord, wild.trip]);
 
   // Animated layers (the trail of the selected deal, the pulse at home) are rebuilt every
   // frame from refs; everything else is rebuilt when state changes.
@@ -1017,6 +1095,8 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
     const fly = view === "fly";
     const tripView = view === "trips";
     const dealView = view === "deals";
+    const wildView = view === "wild";
+    const wildTrip = wildView ? wild.trip : undefined;
     const flownPlaces = placesShown.filter((p) => p.mode === "plane" && p.air && p.key === selectedPlace);
     const dealDots: DealDot[] = dealView ? dealsList.map((d) => ({ d, t: dealCoord(d) })).filter((x): x is DealDot => !!x.t) : [];
     if (dealView && deal && !dealDots.some((x) => dealKey(x.d) === selectedDeal)) {
@@ -1135,6 +1215,50 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
             getLineWidth: 1.5,
             getLineColor: [5, 7, 14, 220],
             pickable: true,
+          })
+        : null,
+      wildView && wildTrip
+        ? new ArcLayer<{ s: [number, number]; t: [number, number] }>({
+            id: "wild-arcs",
+            data: wildTrip.legs
+              .filter((l): l is Extract<WildLeg, { kind: "fly" }> => l.kind === "fly")
+              .map((l) => ({ s: wildCoord(l.from), t: wildCoord(l.to) }))
+              .filter((x): x is { s: [number, number]; t: [number, number] } => !!x.s && !!x.t),
+            getSourcePosition: (x) => x.s,
+            getTargetPosition: (x) => x.t,
+            getSourceColor: [111, 240, 196, 230],
+            getTargetColor: [255, 180, 84, 230],
+            getWidth: 2.5,
+            greatCircle: true,
+            parameters: { cullMode: "none" },
+          })
+        : null,
+      wildView && wildTrip
+        ? new PathLayer<{ path: [number, number][] }>({
+            id: "wild-ground",
+            data: wildTrip.legs
+              .filter((l): l is Extract<WildLeg, { kind: "ground" }> => l.kind === "ground")
+              .map((l) => ({ path: [wildCoord(l.from), wildCoord(l.to)].filter((q): q is [number, number] => !!q) }))
+              .filter((x) => x.path.length === 2),
+            getPath: (d) => d.path,
+            getColor: [255, 180, 84, 240],
+            getWidth: 3,
+            widthUnits: "pixels",
+            parameters: { cullMode: "none" },
+          })
+        : null,
+      wildView && wildTrip
+        ? new ScatterplotLayer<WildTrip["stops"][number]>({
+            id: "wild-stops",
+            data: wildTrip.stops,
+            getPosition: (st) => [st.lon, st.lat],
+            radiusUnits: "pixels",
+            getRadius: (st) => 5 + Math.min(4, st.nights),
+            getFillColor: [111, 240, 196, 255],
+            stroked: true,
+            lineWidthUnits: "pixels",
+            getLineWidth: 2,
+            getLineColor: [5, 7, 14, 230],
           })
         : null,
       tripView
@@ -1285,7 +1409,7 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
             onClick: (info) => focusDestination((info.object as Destination | undefined)?.airport.iata ?? null),
           })
         : null,
-      ground || tripView || dealView
+      ground || tripView || dealView || wildView
         ? null
         : new ScatterplotLayer<Gateway>({
             id: "gateways",
@@ -1325,7 +1449,7 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
     render();
     // focus* helpers only read refs and state setters; listing them would re-run this on every render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [airports, shown, gateways, gatewayIata, origin, selectedDest, live, view, reachBand, selectedStation, pathForSelected, placesShown, selectedPlace, trips, trip, warmOnly, weather, dealsList, selectedDeal, hoveredDeal, deal, render, selectedCombo, combos, sightsOnMap, sights]);
+  }, [airports, shown, gateways, gatewayIata, origin, selectedDest, live, view, reachBand, selectedStation, pathForSelected, placesShown, selectedPlace, trips, trip, warmOnly, weather, dealsList, selectedDeal, hoveredDeal, deal, render, selectedCombo, combos, sightsOnMap, sights, wild.trip, wildCoord]);
 
   const groundFeeds = reach ? reach.feeds.map((f) => f.attribution.split(" via ")[0].split(" (")[0]).join(", ") : "";
 
@@ -1409,6 +1533,12 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
         onCombos={findCombosFor}
         selectedCombo={selectedCombo}
         onCombo={focusCombo}
+        wild={wild}
+        wildRegion={wildRegion}
+        onWildRegion={setWildRegion}
+        wildNights={wildNights}
+        onWildNights={setWildNights}
+        onWild={buildWildTrip}
         gateways={gateways}
         routeCounts={routeCounts}
         gatewayIata={gatewayIata}

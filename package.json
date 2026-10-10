@@ -28,6 +28,7 @@
     "ingest:oneway": "tsx scripts/ingest/oneway.ts",
     "ingest:boards": "tsx scripts/ingest/boards.ts",
     "ingest:fame": "tsx scripts/ingest/fame.ts",
+    "ingest:costs": "tsx scripts/ingest/costs.ts",
     "check:tp": "tsx scripts/check-travelpayouts.ts"
   },
   "dependencies": {

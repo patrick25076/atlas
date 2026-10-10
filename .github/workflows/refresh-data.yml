@@ -75,6 +75,7 @@ jobs:
           pnpm ingest:overture
           pnpm ingest:gtfs
           pnpm ingest:fame
+          pnpm ingest:costs
 
       - name: Commit what changed
         run: |

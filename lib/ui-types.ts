@@ -5,7 +5,17 @@ import type { Deal } from "./types";
 
 export type Origin = { lat: number; lon: number; label: string; source: "gps" | "ip" | "default" | "search" };
 
-export type View = "deals" | "all" | "fly" | "ground" | "trips";
+export type View = "deals" | "all" | "fly" | "ground" | "trips" | "wild";
+
+/** Regions a wild trip can go to; labels for the chips (the engine has the countries). */
+export const WILD_REGIONS: { key: string; label: string }[] = [
+  { key: "sea", label: "Southeast Asia" },
+  { key: "east-asia", label: "East Asia" },
+  { key: "south-asia", label: "South Asia" },
+  { key: "gulf-africa", label: "Gulf and East Africa" },
+  { key: "americas", label: "Americas" },
+  { key: "south-america", label: "South America" },
+];
 export type Band = "all" | "short" | "medium" | "long";
 export type DealNights = "any" | "2-3" | "4-5" | "6-7";
 /** The bottom sheet on phones. */

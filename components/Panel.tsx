@@ -11,6 +11,10 @@ import { changes, countryName, dateRange, kiwiPhoto, monthLabel, shortDate, stop
 import PlaceIntel, { type Intel } from "./PlaceIntel";
 import type { Sights } from "@/app/api/sights/route";
 import type { CombosResult } from "@/lib/combos";
+import type { WildTrip } from "@/lib/wild";
+import { WILD_REGIONS } from "@/lib/ui-types";
+
+export type WildState = { status: "idle" | "loading" | "ok" | "error"; lines: string[]; trip?: WildTrip; note?: string; source?: "stored" | "live" };
 
 export type CombosState = { status: "idle" | "loading" | "ok" | "error"; result?: CombosResult; note?: string };
 
@@ -63,6 +67,13 @@ type Props = {
   onCombos: () => void;
   selectedCombo: string | null;
   onCombo: (code: string | null) => void;
+  // wild
+  wild: WildState;
+  wildRegion: string;
+  onWildRegion: (r: string) => void;
+  wildNights: number;
+  onWildNights: (n: number) => void;
+  onWild: () => void;
   // explore
   gateways: Gateway[];
   routeCounts: Record<string, number>;
@@ -156,7 +167,7 @@ export default function Panel(p: Props) {
   const touchY = useRef<number | null>(null);
   const selected = p.selectedDest ? p.destinations.find((d) => d.airport.iata === p.selectedDest) : null;
   const place = p.selectedPlace ? p.places.find((x) => x.key === p.selectedPlace) : null;
-  const tab: "deals" | "explore" | "trips" = p.view === "deals" ? "deals" : p.view === "trips" ? "trips" : "explore";
+  const tab: "deals" | "explore" | "trips" | "wild" = p.view === "deals" ? "deals" : p.view === "trips" ? "trips" : p.view === "wild" ? "wild" : "explore";
   const loading = p.boards.filter((b) => b.status === "loading");
   const liveBoards = p.boards.filter((b) => b.source === "live");
   const okBoards = p.boards.filter((b) => b.status === "ok");
@@ -196,7 +207,140 @@ export default function Panel(p: Props) {
           <button className={`tab${tab === "trips" ? " on" : ""}`} onClick={() => p.onView("trips")}>
             Trips
           </button>
+          <button className={`tab${tab === "wild" ? " on" : ""}`} onClick={() => p.onView("wild")}>
+            Wild
+          </button>
         </div>
+      )}
+
+      {tab === "wild" && (
+        <>
+          <div className="status">
+            The long, cheap loops: fly out (sometimes through a cheaper hub), chain cheap one-way flights and border hops through a far region, two or three nights a stop, fly home from the last city. Live fares, estimated living costs, and a second opinion on whether it is worth it.
+          </div>
+          <div className="chips nowrap">
+            {WILD_REGIONS.map((r) => (
+              <button key={r.key} className={`chip${p.wildRegion === r.key ? " on" : ""}`} onClick={() => p.onWildRegion(r.key)}>
+                {r.label}
+              </button>
+            ))}
+          </div>
+          <div className="chips nowrap">
+            {[10, 14, 18, 21].map((n) => (
+              <button key={n} className={`chip ghost${p.wildNights === n ? " on" : ""}`} onClick={() => p.onWildNights(n)}>
+                {n} nights
+              </button>
+            ))}
+            <button className="chip on" onClick={p.onWild} disabled={p.wild.status === "loading"}>
+              {p.wild.status === "loading" ? "Building…" : p.wild.status === "ok" ? "Build again" : "Build a wild trip"}
+            </button>
+          </div>
+          {p.wild.status === "loading" && (
+            <div className="answer">
+              {p.wild.lines.map((l, i) => (
+                <p key={i} className={i === p.wild.lines.length - 1 ? "" : "muted"}>
+                  {l}
+                </p>
+              ))}
+              {p.wild.lines.length === 0 && <p className="muted">Starting the search: about forty live fare searches, one to two minutes.</p>}
+            </div>
+          )}
+          {p.wild.status === "error" && <div className="status">{p.wild.note}</div>}
+          {p.wild.status === "idle" && <div className="status muted">Pick a region and a length{p.month ? "" : "; the When pill sets the month"}. The first build of a trip takes a minute or two; the next visitor gets it at once.</div>}
+          {p.wild.status === "ok" && p.wild.trip && (
+            <div className="scroll" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              <div className="headline">
+                <h3>
+                  <b>€{p.wild.trip.totals.all}</b> all in, {p.wild.trip.totals.nights} nights
+                </h3>
+                <span className="sub">€{p.wild.trip.totals.perDay} a day · {p.wild.trip.totals.countries} countries</span>
+              </div>
+              <div className="status">
+                {p.wild.trip.title}. {dateRange(p.wild.trip.outDate, p.wild.trip.backDate)}. Flights €{p.wild.trip.totals.flights}
+                {p.wild.trip.totals.ground ? `, border hops about €${p.wild.trip.totals.ground}` : ""}, living about €{p.wild.trip.totals.living} (hotel, food, local transport, one activity a day, estimated from the country's price level). {p.wild.trip.totals.hoursInAir} hours in transit.
+              </div>
+              {p.wild.trip.judge && (
+                <div className="judge">
+                  <div className="scorebox">
+                    <span className={`score ${p.wild.trip.judge.score >= 70 ? "good" : p.wild.trip.judge.score >= 45 ? "mid" : "low"}`}>{p.wild.trip.judge.score}</span>
+                    <span className="sub">worth it?</span>
+                  </div>
+                  <div className="verdict">
+                    <p>{p.wild.trip.judge.verdict}</p>
+                    <ul>
+                      {p.wild.trip.judge.reasons.map((r, i) => (
+                        <li key={i}>{r}</li>
+                      ))}
+                    </ul>
+                    {p.wild.trip.judge.tweaks.length > 0 && (
+                      <ul className="tweaks">
+                        {p.wild.trip.judge.tweaks.map((r, i) => (
+                          <li key={i}>{r}</li>
+                        ))}
+                      </ul>
+                    )}
+                    <div className="sub">Best for: {p.wild.trip.judge.bestFor}</div>
+                  </div>
+                </div>
+              )}
+              <div className="section">
+                <h2>The route</h2>
+                {p.wild.trip.legs.map((l, i) =>
+                  l.kind === "fly" ? (
+                    <a key={i} className="row" href={l.url} target="_blank" rel="noreferrer" style={{ color: "inherit" }}>
+                      <span className="code">€{l.price}</span>
+                      <span>
+                        <div className="name">
+                          {l.fromName} → {l.toName}
+                        </div>
+                        <div className="sub">
+                          {shortDate(l.date)} · {l.hours} h · {stops(l.stops)}
+                          {l.stops ? ` via ${l.route.slice(1, -1).join(", ")}` : ""} · {l.carriers.join(" + ")} · Book ↗
+                        </div>
+                      </span>
+                      <span className="meta">FLY</span>
+                    </a>
+                  ) : (
+                    <div key={i} className="row">
+                      <span className="code">~€{l.price}</span>
+                      <span>
+                        <div className="name">
+                          {l.fromName} → {l.toName}
+                        </div>
+                        <div className="sub">
+                          {shortDate(l.date)} · {l.mode === "road" ? "by road or ferry" : l.mode} · about {formatDuration(l.minutes)}{l.estimated ? ", estimated" : ""}
+                        </div>
+                      </span>
+                      <span className="meta">HOP</span>
+                    </div>
+                  ),
+                )}
+              </div>
+              <div className="section">
+                <h2>The stops</h2>
+                {p.wild.trip.stops.map((s) => (
+                  <div key={s.code + s.arrive} className="row">
+                    <span className="code">{s.nights}n</span>
+                    <span>
+                      <div className="name">
+                        {s.name}, {countryName(s.country)}
+                      </div>
+                      <div className="sub">
+                        {dateRange(s.arrive, s.depart)} · about €{s.perDay} a day
+                        {s.visa ? ` · ${s.visa}` : ""}
+                        {s.warning ? " · partial travel warning" : ""}
+                      </div>
+                    </span>
+                    <span className="meta">
+                      <strong>€{s.perDay * s.nights}</strong>
+                    </span>
+                  </div>
+                ))}
+                <div className="status muted">Fares found on Kiwi.com just now ({p.wild.trip.searched} searches); they move. Living costs are estimates for a careful mid-range traveller, not quotes.</div>
+              </div>
+            </div>
+          )}
+        </>
       )}
 
       {tab === "deals" && p.deal && (
