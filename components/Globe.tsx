@@ -357,9 +357,12 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
   const boardGateways = useMemo(() => {
     if (!gateways.length) return [] as { iata: string; label: string }[];
     const sizeRank = (a: Airport) => (a.size === "large" ? 0 : a.size === "medium" ? 1 : 2);
+    // Airfields with a handful of flights a week are not worth a search of their own unless
+    // nothing bigger is within reach (Cascais next to Lisbon, Ghimbav next to Sibiu and Otopeni).
     const near = gateways.filter((g) => g.km <= 250);
-    const first = near[0] ?? gateways[0];
-    const rest = near
+    const real = near.filter((g) => g.airport.size !== "small");
+    const first = real[0] ?? near[0] ?? gateways[0];
+    const rest = (real.length ? real : near)
       .filter((g) => g !== first)
       .sort((a, b) => sizeRank(a.airport) - sizeRank(b.airport) || a.km - b.km)
       .slice(0, 2);
