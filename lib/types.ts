@@ -54,6 +54,9 @@ export type Deal = {
   bags?: string;
   /** Kiwi destination photo id: https://images.kiwi.com/photos/600x600/{img}.jpg */
   img?: string;
+  /** Open-jaw: the flight home lands at this airport, booked separately (url2). */
+  backTo?: string;
+  url2?: string;
 };
 export type DealsFile = { updated: string; window: { from: string; to: string }; gateways: string[]; nights: [number, number]; deals: Deal[] };
 

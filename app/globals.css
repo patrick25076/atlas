@@ -1296,3 +1296,24 @@ button {
   font-size: 12.5px;
   line-height: 1.45;
 }
+
+/* the custom search form */
+.finder {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px 12px;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.045);
+  border: 1px solid var(--line);
+}
+.finder h2 {
+  margin: 4px 0 0;
+}
+.finder .form .search {
+  min-width: 0;
+}
+.finder .chip:disabled {
+  opacity: 0.4;
+  cursor: default;
+}

@@ -1,6 +1,7 @@
 "use client";
 
 import { useRef, useState } from "react";
+import FinderForm, { type FinderQuery, type FinderState } from "./FinderForm";
 import { flightMinutes, formatDuration } from "@/lib/geo";
 import type { Place, PlaceMode } from "@/lib/places";
 import type { TripsResult } from "@/lib/trips";
@@ -74,6 +75,10 @@ type Props = {
   onCombos: () => void;
   selectedCombo: string | null;
   onCombo: (code: string | null) => void;
+  // finder
+  finder: FinderState;
+  onFinder: (q: FinderQuery) => void;
+  onFinderClear: () => void;
   // wild
   wild: WildState;
   wildRegion: string;
@@ -164,6 +169,7 @@ function DealCard({ d, active, photo, gem, warm, why, onClick, onHover }: { d: D
         </div>
         <div className="badges">
           {d.stops === 0 && <span className="badge direct">direct</span>}
+          {d.backTo && <span className="badge heritage">home via {d.backTo}</span>}
           {gem && <span className="badge gem">hidden gem</span>}
           {warm != null && warm >= 20 && <span className="badge warm">{warm}° this weekend</span>}
           {why && <span className="badge heritage">{why}</span>}
@@ -457,9 +463,20 @@ export default function Panel(p: Props) {
             </div>
           </div>
           <div className="scroll" style={{ display: "flex", flexDirection: "column", gap: 10, paddingTop: 10 }}>
-            <a className="book" href={p.deal.url} target="_blank" rel="noreferrer">
-              Book on Kiwi.com <small>€{p.deal.price} return ↗</small>
-            </a>
+            {p.deal.url2 ? (
+              <div className="chips" style={{ gap: 8 }}>
+                <a className="book" style={{ width: "auto", flex: 1 }} href={p.deal.url} target="_blank" rel="noreferrer">
+                  Out <small>from {p.deal.gw} ↗</small>
+                </a>
+                <a className="book" style={{ width: "auto", flex: 1 }} href={p.deal.url2} target="_blank" rel="noreferrer">
+                  Home <small>to {p.deal.backTo} ↗</small>
+                </a>
+              </div>
+            ) : (
+              <a className="book" href={p.deal.url} target="_blank" rel="noreferrer">
+                Book on Kiwi.com <small>€{p.deal.price} return ↗</small>
+              </a>
+            )}
             <div className="status">
               From {p.deal.gw}, {stops(p.deal.stops)} with {p.deal.carriers.join(" + ")}: {formatDuration(p.deal.outMin)} out, {formatDuration(p.deal.backMin)} back.
               {p.deal.bags ? ` ${p.deal.bags[0].toUpperCase()}${p.deal.bags.slice(1)} included.` : ""} Found on Kiwi.com {newest ? shortDate(newest) : "recently"}; the booking page shows the live price.
@@ -699,9 +716,10 @@ export default function Panel(p: Props) {
             </div>
           )}
 
+          <FinderForm gateways={p.gateways} defaults={p.boards.map((b) => b.gateway)} state={p.finder} onSearch={p.onFinder} onClear={p.onFinderClear} />
           <div className="headline">
             <h3>
-              <b>{p.totalCities}</b> getaways{p.month ? ` in ${monthLabel(p.month)}` : ""}
+              <b>{p.totalCities}</b> {p.finder.status !== "idle" ? "found" : "getaways"}{p.month && p.finder.status === "idle" ? ` in ${monthLabel(p.month)}` : ""}
             </h3>
             {loading.length > 0 ? (
               <span className="sub">searching {loading.map((b) => b.gateway).join(", ")}…</span>

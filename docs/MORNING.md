@@ -72,6 +72,14 @@ Until then the planner leans on the guides and marks the rest "verify".
     the API token is still missing. The running list of what is done and what is still needed
     is `docs/TODO.md`.
 
+11. **Custom search.** In Deals: "Custom search: a period, a date to include, your airports,
+    open-jaw". Pick which of your airports, a period (20 to 30 October), a date you must be
+    away on (the 26th), nights from and to, anywhere or a region or a country, direct, a
+    maximum flight length, and which other airports the flight home may land at. About twenty
+    live searches, half a minute, streamed. From Brașov's three airports, 20 to 30 October,
+    away on the 26th: Thessaloniki €44, Corfu €44, Chișinău €58, Katowice €61, Berlin €77,
+    and open-jaw pairs such as out of Brașov to Warsaw, home into Bucharest, €82.
+
 **Numbers:** ~150 airport boards, each 50 to 100 deals to 30 to 50 cities; 2,549 cities with a
 fame score; 20 event feeds; combos in 10 seconds; the nightly boards job ran once (8 runners,
 15 minutes each) and runs every night at 04:00 your time.

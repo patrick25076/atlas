@@ -18,6 +18,7 @@ import { BANDS, dealKey, type AskState, type Band, type BoardState, type DealNig
 import type { Airport, City, CityPlaces, CountryInfo, Deal, Destination, FaresResponse, Gateway, HeritageRow, Holiday, Manifest, ReachResponse, ReachStation, Route, VisaFile, WeatherCompact, WeatherFile } from "@/lib/types";
 import { expandWeather, visaFor } from "@/lib/types";
 import Panel, { MODE_LABEL, type CombosState, type PlanState, type WildState } from "./Panel";
+import type { FinderQuery, FinderState } from "./FinderForm";
 import type { Plan } from "@/lib/plan";
 import type { EatsResponse } from "@/app/api/eats/route";
 import type { HotelsResult } from "@/lib/liteapi";
@@ -150,6 +151,7 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
   const [wildStyle, setWildStyle] = useState("experiences");
   const [wildBudget, setWildBudget] = useState("mid");
   const [plan, setPlan] = useState<PlanState>({ status: "idle" });
+  const [finder, setFinder] = useState<FinderState>({ status: "idle", deals: [], lines: [] });
 
   const [boards, setBoards] = useState<Record<string, BoardState>>({});
   const [month, setMonth] = useState<string | null>(null);
@@ -496,7 +498,59 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
   }, [places, band, pricedOnly, bigOnly, warmOnly, cities, weather]);
 
   // ---- deals ----
-  const dealsAll = useMemo(() => boardList.flatMap((b) => b.deals), [boardList]);
+  // A custom search replaces tonight's boards until it is cleared.
+  const dealsAll = useMemo(() => (finder.status === "idle" ? boardList.flatMap((b) => b.deals) : finder.deals), [boardList, finder]);
+  async function runFinder(q: FinderQuery) {
+    setFinder({ status: "loading", query: q, deals: [], lines: [] });
+    setSelectedDeal(null);
+    setAsk(null);
+    const params = new URLSearchParams({ origins: q.origins.join(","), from: q.from, to: q.to, minNights: String(q.minNights), maxNights: String(q.maxNights), where: q.where });
+    if (q.include) params.set("include", q.include);
+    if (q.direct) params.set("direct", "1");
+    if (q.maxHours) params.set("maxHours", String(q.maxHours));
+    if (q.returnTo.length) params.set("returnTo", q.returnTo.join(","));
+    try {
+      const r = await fetch(`/api/finder?${params}`);
+      if (!r.ok) {
+        const j = await r.json().catch(() => ({}));
+        setFinder({ status: "error", query: q, deals: [], lines: [], note: j.error ?? `failed (${r.status})` });
+        return;
+      }
+      if (!r.headers.get("content-type")?.includes("ndjson")) {
+        const j = (await r.json()) as { deals: Deal[]; searched: number };
+        setFinder({ status: "ok", query: q, deals: j.deals, lines: [], searched: j.searched });
+        return;
+      }
+      const reader = r.body!.getReader();
+      const dec = new TextDecoder();
+      let buf = "";
+      let finished = false;
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, { stream: true });
+        let nl = buf.indexOf("\n");
+        while (nl >= 0) {
+          const line = buf.slice(0, nl).trim();
+          buf = buf.slice(nl + 1);
+          nl = buf.indexOf("\n");
+          if (!line) continue;
+          try {
+            const msg = JSON.parse(line) as { progress?: string; deals?: Deal[]; done?: { searched: number; count: number }; error?: string };
+            if (msg.progress) setFinder((f) => ({ ...f, lines: [...f.lines, msg.progress!] }));
+            if (msg.deals) setFinder((f) => { const seen = new Set(f.deals.map(dealKey)); return { ...f, deals: [...f.deals, ...msg.deals!.filter((d) => !seen.has(dealKey(d)))] }; });
+            if (msg.done) { finished = true; setFinder((f) => ({ ...f, status: "ok", searched: msg.done!.searched })); }
+            if (msg.error) { finished = true; setFinder((f) => ({ ...f, status: "error", note: msg.error })); }
+          } catch {
+            // partial line
+          }
+        }
+      }
+      if (!finished) setFinder((f) => ({ ...f, status: f.deals.length ? "ok" : "error", note: f.deals.length ? undefined : "the search stopped early" }));
+    } catch {
+      setFinder({ status: "error", query: q, deals: [], lines: [], note: "network" });
+    }
+  }
   const dealCoord = useCallback(
     (d: Deal): [number, number] | null => {
       const c = cities[d.dstCity] ?? cities[d.dst];
@@ -1577,6 +1631,12 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
         onCombos={findCombosFor}
         selectedCombo={selectedCombo}
         onCombo={focusCombo}
+        finder={finder}
+        onFinder={runFinder}
+        onFinderClear={() => {
+          setFinder({ status: "idle", deals: [], lines: [] });
+          setSelectedDeal(null);
+        }}
         wild={wild}
         wildRegion={wildRegion}
         onWildRegion={setWildRegion}
