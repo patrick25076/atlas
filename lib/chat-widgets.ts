@@ -8,6 +8,8 @@
 // search), built by plain functions so scripts/check-tools.ts can check their shapes.
 import type { RouteResult } from "./route-finder";
 import type { BudgetTier, Itinerary, Pace, Skeleton } from "./itinerary";
+import type { WalkLoop, WalkResult } from "./graph-walk";
+import type { Command } from "./command";
 
 export type WidgetKind = "dates" | "month" | "nights" | "region" | "choices" | "people" | "map-region" | "map-place";
 
@@ -119,12 +121,13 @@ export const TOOL_LABEL: Record<string, string> = {
   best_months: "Reading the climate",
   price_insight: "Checking the fare memory",
   cheapest_way: "Finding the cheapest way",
+  walk_trips: "Walking the cheapest hops",
   make_itinerary: "Writing the itinerary",
   ask: "One question",
 };
 
 /** The tools that can take a while: their chip shows the seconds elapsed while they run. */
-export const LONG_TOOLS = new Set(["wild_trip", "long_stay", "group_trip", "plan_days", "find_getaways", "scan_cheapest", "cheapest_way", "two_city_combos", "events_worth_travelling_for", "make_itinerary"]);
+export const LONG_TOOLS = new Set(["wild_trip", "long_stay", "group_trip", "plan_days", "find_getaways", "scan_cheapest", "cheapest_way", "walk_trips", "two_city_combos", "events_worth_travelling_for", "make_itinerary"]);
 
 /** A short word for each kind of route option, for the badge on its card. */
 export const ROUTE_KIND_LABEL: Record<string, string> = {
@@ -173,6 +176,11 @@ export function toolProgress(name: string, input: unknown): string {
         return `Checking every way ${a.from ? `from ${a.from} ` : ""}to ${a.to ?? "there"}${a.depart ? ` around ${a.depart}` : ""}: nearby airports, trains to a bigger airport, hubs, open-jaw`;
       case "two_city_combos":
         return `Pricing two-city versions around ${a.city ?? a.dst ?? "the city"}`;
+      case "walk_trips": {
+        const must = list(a.mustInclude);
+        const avoid = list(a.avoid);
+        return `Walking the cheapest hops${a.origin ? ` from ${a.origin}` : ""}${must ? ` through ${must}` : ""}${a.from && a.to ? `, ${a.from} to ${a.to}` : ""}: anywhere from home, the next hop by plane, train or coach, then home${avoid ? `, not ${avoid}` : ""}${a.style === "unique" ? ", off the beaten track" : ""}`;
+      }
       case "plan_days":
         return "Planning the days (about a minute)";
       case "make_itinerary": {
@@ -203,6 +211,7 @@ export const FOLLOWUPS: Record<string, string[]> = {
   price_insight: ["Show the cheapest month", "Try a nearby airport"],
   hotel_deals: ["Flights to the first one", "Only in Europe", "What do I do there?"],
   cheapest_way: ["Make it an itinerary", "Fastest instead", "A week later", "One way only", "Is this a good price?"],
+  walk_trips: ["Make the first loop an itinerary", "One more city", "Smaller places, fewer hubs", "Trains between cities where they exist", "A week later"],
   make_itinerary: ["Slower pace", "More food, fewer museums", "Make it cheaper", "Hotels for the first stop"],
   events_worth_travelling_for: ["Get to the first one", "Only in Europe", "Make the first one an itinerary", "Next month instead"],
   default: ["Direct flights only", "Try my other airports too", "Two-city version", "What do I eat there?", "Hotels for those dates"],
@@ -222,12 +231,60 @@ export type CommandDetail = { text: string };
 /** `atlas:place`: open a place page. */
 export type PlaceDetail = { name?: string; code?: string };
 
+/**
+ * The /api/walk query as an object (the shell turns it into the URL's search params): what
+ * `atlas:walk` carries and what a walk result says it was asked. Lists are comma strings, as
+ * the route reads them; nightsPerStop is "2" or "2-3". Only g, home, lat, lon, label, from and
+ * to are always there; the rest are the route's defaults when absent.
+ */
+export type WalkQuery = {
+  g: string;
+  home: string;
+  lat: number;
+  lon: number;
+  label: string;
+  from: string;
+  to: string;
+  minNights?: number;
+  maxNights?: number;
+  nightsPerStop?: string;
+  maxStops?: number;
+  beam?: number;
+  budget?: number;
+  ground?: number;
+  tradeoff?: string;
+  exclude?: string;
+  mustInclude?: string;
+  avoid?: string;
+  prefer?: string;
+  countries?: string;
+  style?: string;
+};
+/** `atlas:walk`: run a graph walk in the shell and draw it live, edge by edge. */
+export type WalkDetail = { params: WalkQuery };
+/** `atlas:walk-result`: draw a finished walk without searching; the first loop is the one shown. */
+export type WalkResultDetail = { result: WalkResult; params?: WalkQuery };
+/** One line of a walk as /api/walk streams it, for a walk that runs somewhere else than the globe. */
+export type WalkLiveLine =
+  | { node: { code: string; name: string; lat: number; lon: number; date: string; depth: number; cost: number } }
+  | { edge: { from: string; to: string; toName: string; lat: number; lon: number; kind: WalkLoop["legs"][number]["kind"]; price: number; minutes: number; source: string; chosen?: boolean; home?: boolean } }
+  | { loop: WalkLoop };
+/**
+ * `atlas:walk-live`: the lines of a walk the chat runs (walk_trips), drawn as they arrive, the same lines
+ * `atlas:walk` reads from /api/walk. `id` is the walk's own (the tool call): a new id starts a new drawing at
+ * `params` (the home point and the window); the same id adds to it. `atlas:walk-result` ends it.
+ */
+export type WalkLiveDetail = { id: string; params?: WalkQuery; lines: WalkLiveLine[] };
+
 export type AtlasEventMap = {
   "atlas:route": RouteDetail;
   "atlas:route-result": RouteResultDetail;
   "atlas:itinerary": ItineraryDetail;
   "atlas:command": CommandDetail;
   "atlas:place": PlaceDetail;
+  "atlas:walk": WalkDetail;
+  "atlas:walk-result": WalkResultDetail;
+  "atlas:walk-live": WalkLiveDetail;
 };
 
 /** Sends one event on the window bus; a no-op on the server. */
@@ -244,6 +301,139 @@ export function routeResultDetail(result: RouteResult, option?: number): RouteRe
 /** The detail that searches a route again (a restored thread has no computed result to draw). */
 export function routeDetail(out: { from?: string; to: string; depart?: string; flex?: number; nights?: number | null }): RouteDetail {
   return { ...(out.from ? { from: out.from } : {}), to: out.to, ...(out.depart ? { depart: out.depart } : {}), ...(out.flex != null ? { flex: out.flex } : {}), ...(out.nights != null ? { nights: out.nights } : {}), oneWay: out.nights == null };
+}
+
+// ---------------------------------------------------------------------------------------
+// The graph walk on the bus: the same window defaults and query for the chat tool
+// (walk_trips), the command line's walk kind and the shell's `atlas:walk`.
+
+/** The longest trip a walk searches, and how far ahead (the route refuses past a year). */
+const WALK_MAX_NIGHTS = 30;
+const WALK_MAX_DAYS_OUT = 366;
+/** When nothing is said: leave in a week, and give the window a week of slack past the stay so
+ * the "anywhere" search (one call over the whole range, like Skyscanner Explore) has days to pick from. */
+const WALK_LEAD_DAYS = 7;
+const WALK_SLACK_DAYS = 7;
+const posInt = (v: unknown): number | null => {
+  const n = typeof v === "string" ? Number(v) : v;
+  return typeof n === "number" && Number.isFinite(n) && n >= 1 ? Math.round(n) : null;
+};
+
+/**
+ * The window and nights a walk searches, from what was said (any may be missing), with one
+ * plain line per assumption so the answer can state it. `today` is the traveller's calendar
+ * day. The window never starts before today, never ends before it starts, always holds
+ * minNights, and ends within a year.
+ */
+export function walkWindow(ask: { from?: string | null; to?: string | null; minNights?: number | null; maxNights?: number | null }, today: string): { from: string; to: string; minNights: number; maxNights: number; notes: string[] } {
+  const base = ISO_DAY_RE.test(today) ? today : LOCAL_DAY(new Date());
+  const notes: string[] = [];
+  const askMin = posInt(ask.minNights);
+  const askMax = posInt(ask.maxNights);
+  const minNights = Math.min(WALK_MAX_NIGHTS, askMin ?? (askMax ? Math.min(askMax, 5) : 5));
+  const maxNights = Math.min(WALK_MAX_NIGHTS, Math.max(minNights, askMax ?? (askMin ? minNights : 6)));
+  if (!askMin && !askMax) notes.push(`no length given; searched ${minNights} to ${maxNights} nights`);
+  let from = ask.from && ISO_DAY_RE.test(ask.from) ? ask.from : "";
+  let to = ask.to && ISO_DAY_RE.test(ask.to) ? ask.to : "";
+  if (!from) {
+    from = addDays(base, WALK_LEAD_DAYS);
+    notes.push(`no dates given; searched from ${from}, a week out`);
+  } else if (from < base) {
+    notes.push(`the start ${from} is in the past; searched from today (${base})`);
+    from = base;
+  }
+  // An end already past is no end (the start was moved to today above); an end before a start in the future is
+  // the two typed the wrong way round. Each note names the window the walk then really searched.
+  if (to && to < base) {
+    notes.push(`the end ${to} is in the past; it was dropped`);
+    to = "";
+  } else if (to && to < from) {
+    const typed = `${from} to ${to}`;
+    [from, to] = [to, from];
+    notes.push(`the window ${typed} ends before it starts; read as ${from} to ${to}`);
+  }
+  if (!to) {
+    to = addDays(from, maxNights + WALK_SLACK_DAYS);
+    if (ask.from) notes.push(`no end given; searched ${from} to ${to}`);
+  }
+  const span = Math.round((Date.parse(to) - Date.parse(from)) / 86_400_000);
+  if (span < minNights) {
+    to = addDays(from, maxNights);
+    notes.push(`the window was shorter than ${minNights} nights; widened to ${from} to ${to}`);
+  }
+  const last = addDays(base, WALK_MAX_DAYS_OUT);
+  if (to > last) {
+    to = last;
+    notes.push(`the window ends a year out at most; cut to ${to}`);
+  }
+  return { from, to, minNights, maxNights, notes };
+}
+
+/** One walk's parameters, as resolved values, turned into the /api/walk query object. */
+export function walkQuery(p: {
+  gateways: string[];
+  home: string;
+  lat: number;
+  lon: number;
+  label: string;
+  from: string;
+  to: string;
+  minNights?: number;
+  maxNights?: number;
+  nightsPerStop?: number | [number, number];
+  maxStops?: number;
+  beam?: number;
+  budget?: number;
+  ground?: number;
+  tradeoff?: string;
+  exclude?: string[];
+  mustInclude?: string[];
+  avoid?: string[];
+  prefer?: string[];
+  countries?: string[];
+  style?: string;
+}): WalkQuery {
+  const list = (v: string[] | undefined) => (v?.length ? v.map((x) => String(x).trim()).filter(Boolean).join(",") : "");
+  const nps = p.nightsPerStop == null ? "" : Array.isArray(p.nightsPerStop) ? (p.nightsPerStop[0] === p.nightsPerStop[1] ? String(p.nightsPerStop[0]) : `${p.nightsPerStop[0]}-${p.nightsPerStop[1]}`) : String(p.nightsPerStop);
+  const q: WalkQuery = { g: p.gateways.join(","), home: p.home, lat: Math.round(p.lat * 1000) / 1000, lon: Math.round(p.lon * 1000) / 1000, label: p.label, from: p.from, to: p.to };
+  if (p.minNights) q.minNights = p.minNights;
+  if (p.maxNights) q.maxNights = p.maxNights;
+  if (nps) q.nightsPerStop = nps;
+  if (p.maxStops) q.maxStops = p.maxStops;
+  if (p.beam) q.beam = p.beam;
+  if (p.budget != null) q.budget = p.budget;
+  if (p.ground) q.ground = p.ground;
+  if (p.tradeoff) q.tradeoff = p.tradeoff;
+  for (const k of ["exclude", "mustInclude", "avoid", "prefer", "countries"] as const) {
+    const v = list(p[k]);
+    if (v) q[k] = v;
+  }
+  if (p.style) q.style = p.style;
+  return q;
+}
+
+/** Where a walk starts: the traveller's point, airports (IATA) and home country. */
+export type WalkHere = { lat: number; lon: number; label: string; gateways: string[]; home: string };
+
+/**
+ * The `atlas:walk` detail for a command line's walk (lib/command.ts): the window defaults of
+ * walkWindow, the traveller's point and airports from `here`. A named start ("loop from Cluj")
+ * is placed by `resolve` (the shell knows the cities file; this file does not); when it cannot
+ * be placed, or no resolver is given, the walk starts from `here` and the label says so.
+ */
+export function walkCommandQuery(c: Extract<Command, { kind: "walk" }>, here: WalkHere, today: string, resolve?: (name: string) => WalkHere | null): { params: WalkQuery; notes: string[] } {
+  const win = walkWindow({ from: c.from, to: c.to, minNights: c.minNights, maxNights: c.maxNights }, today);
+  const named = c.origin && c.origin.trim().toLowerCase() !== here.label.trim().toLowerCase() ? (resolve?.(c.origin) ?? null) : null;
+  const start = named ?? here;
+  const notes = [...win.notes, ...(c.origin && !named && c.origin.trim().toLowerCase() !== here.label.trim().toLowerCase() ? [`${c.origin} could not be placed; the loop starts from ${here.label}`] : [])];
+  const params = walkQuery({ gateways: start.gateways, home: start.home, lat: start.lat, lon: start.lon, label: start.label, from: win.from, to: win.to, minNights: win.minNights, maxNights: win.maxNights, nightsPerStop: c.nightsPerStop, maxStops: c.maxStops, mustInclude: c.mustInclude, avoid: c.avoid, countries: c.countries, style: c.style });
+  return { params, notes };
+}
+
+/** The detail that draws a finished walk; `loop` moves that loop to the front (the one the globe shows first). */
+export function walkResultDetail(result: WalkResult, loop?: number, params?: WalkQuery): WalkResultDetail {
+  const ordered = loop != null && loop > 0 && loop < result.loops.length ? { ...result, loops: [result.loops[loop], ...result.loops.filter((_, i) => i !== loop)] } : result;
+  return params ? { result: ordered, params } : { result: ordered };
 }
 
 /** One event as events_worth_travelling_for compacts it. */

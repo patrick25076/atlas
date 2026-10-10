@@ -2,6 +2,7 @@
 // import each other for a type.
 import type { BoardMeta } from "./boards-client";
 import type { Deal } from "./types";
+import type { WalkLeg, WalkLoop, WalkResult } from "./graph-walk";
 
 export type Origin = { lat: number; lon: number; label: string; source: "gps" | "ip" | "default" | "search" };
 
@@ -236,3 +237,65 @@ export type EventsLayer = { on: boolean; from: string; to: string; words?: strin
 
 /** A place page opened from anywhere: the command line, atlas:place, an event, a sight's city. */
 export type PlacePage = { name: string; code?: string; country?: string; lat: number; lon: number };
+
+// ---- The graph walk on the globe (GET /api/walk, lib/graph-walk.ts). Only types come from the
+// engine: it is server code, and a type import is erased from the browser bundle.
+
+/** The /api/walk question as an object, the detail of the 'atlas:walk' event. Lists may be arrays or comma lists. */
+export const WALK_PARAM_KEYS = ["g", "home", "lat", "lon", "label", "from", "to", "minNights", "maxNights", "nightsPerStop", "maxStops", "beam", "budget", "ground", "tradeoff", "exclude", "mustInclude", "avoid", "prefer", "countries", "style"] as const;
+export type WalkParamKey = (typeof WALK_PARAM_KEYS)[number];
+export type WalkQuery = Partial<Record<WalkParamKey, string | number | string[]>>;
+
+/** The walk's question as a query string: empty values dropped, lists joined with commas. */
+export function walkQueryString(q: WalkQuery): string {
+  const out = new URLSearchParams();
+  for (const k of WALK_PARAM_KEYS) {
+    const v = q[k];
+    const s = Array.isArray(v) ? v.filter(Boolean).join(",") : v == null ? "" : String(v).trim();
+    if (s) out.set(k, s);
+  }
+  return out.toString();
+}
+
+/** A state the walk expanded, as the globe draws it: where, when, and the money its chosen way in cost so far. */
+export type WalkNodeView = { code: string; name: string; lat: number; lon: number; date: string; depth: number; cost: number; money?: number; at: number };
+/** An edge the walk looked at: from the expanded node's point to the far end, its path precomputed (a great circle for a flight, a straight line on the ground). */
+export type WalkEdgeView = { from: string; to: string; toName: string; lat: number; lon: number; kind: WalkLeg["kind"]; price: number; minutes: number; source: WalkLeg["source"]; chosen?: boolean; home?: boolean; path: [number, number][]; at: number };
+/** Who asked for the walk: the card shows them all, a Trips builder shows its own under its form. */
+export type WalkSource = "short" | "wild" | "command" | "event";
+export type WalkState = {
+  status: "idle" | "loading" | "ok" | "error";
+  params?: WalkQuery;
+  source?: WalkSource;
+  lines: string[];
+  nodes: WalkNodeView[];
+  edges: WalkEdgeView[];
+  loops: WalkLoop[];
+  result?: WalkResult;
+  note?: string;
+  /** The loop drawn bold (index into loops, best first). */
+  selected: number;
+  open: boolean;
+  collapsed: boolean;
+};
+export const EMPTY_WALK: WalkState = { status: "idle", lines: [], nodes: [], edges: [], loops: [], selected: 0, open: false, collapsed: false };
+/** At most this many edges stay on the globe; the oldest that were not chosen go first. */
+export const WALK_MAX_EDGES = 200;
+
+/** The countries of each Wild region, for "Walk the region". The same lists as REGIONS in lib/wild.ts (server code, so not importable here): keep the two in step. */
+export const WILD_REGION_COUNTRIES: Record<string, string[]> = {
+  sea: ["TH", "VN", "MY", "SG", "ID", "PH", "KH", "LA"],
+  "east-asia": ["CN", "HK", "JP", "KR", "TW"],
+  "south-asia": ["IN", "LK", "MV", "NP"],
+  "central-asia": ["UZ", "KZ", "KG", "TJ", "AZ"],
+  caucasus: ["GE", "AM", "AZ", "TR"],
+  balkans: ["AL", "ME", "BA", "RS", "MK", "GR", "BG", "HR"],
+  "north-africa": ["MA", "TN", "EG", "JO"],
+  gulf: ["AE", "OM", "QA", "BH", "SA"],
+  "east-africa": ["KE", "TZ", "UG", "RW", "ET"],
+  "southern-africa": ["ZA", "NA", "BW", "ZW", "MU"],
+  americas: ["US", "MX", "CU", "CR", "GT", "CA"],
+  caribbean: ["CU", "DO", "JM", "PR", "CW"],
+  "south-america": ["BR", "AR", "CL", "PE", "CO", "BO", "EC"],
+  oceania: ["AU", "NZ", "FJ"],
+};

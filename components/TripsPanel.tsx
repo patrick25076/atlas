@@ -7,10 +7,11 @@ import type { Plan } from "@/lib/plan";
 import type { Airport, City, CountryInfo, Gateway, Holiday } from "@/lib/types";
 import { formatDuration } from "@/lib/geo";
 import { addDays, countryName, dateRange, daysBetween, euro, hoursLabel, localIso, monthLabel, monthOptions, shortDate, todayIso } from "@/lib/format";
-import { climateScore, MONTH_LETTERS, newId, TRIP_MODES, WILD_BUDGETS, WILD_REGIONS, WILD_STYLES, type GroupForm, type GroupMemberForm, type GroupQuery, type GroupState, type LongStayBase, type LongStayForm, type LongStayState, type Period, type TripMode } from "@/lib/ui-types";
+import { climateScore, MONTH_LETTERS, newId, TRIP_MODES, WILD_BUDGETS, WILD_REGIONS, WILD_STYLES, type GroupForm, type GroupMemberForm, type GroupQuery, type GroupState, type LongStayBase, type LongStayForm, type LongStayState, type Period, type TripMode, type WalkState } from "@/lib/ui-types";
 import { HeroNumbers, LegRows, RouteStrip, StopCards, StopPhoto } from "./RouteStrip";
 import { skeletonFromGroup, skeletonFromLongStay, skeletonFromTrip, skeletonFromWild, type ItinPlace, type Skeleton } from "@/lib/itinerary";
 import { searchAirports } from "./TopBar";
+import { WalkLoopList } from "./WalkCard";
 
 // The Trips tab: the trip builders, with a mode row. Short loops and wild loops share the
 // route components; long stay and group have their own forms and cards. "A to B" and the
@@ -47,17 +48,29 @@ export type WildForm = {
   wishes: string;
   /** Nights a stop, least and most; null leaves it to the engine. */
   stopNights: [number, number] | null;
+  /** "Walk the region": the graph walk (one explore from home, cheap hops, the cheapest way home) instead of the classic builder. */
+  walk: boolean;
 };
+/** The style chips of the Smart loop: what the walk trades for (cheapest: price per hour low; unique: smaller places weighted up). */
+export type SmartStyle = "cheapest" | "unique" | "balanced";
+/**
+ * The Smart loop: the graph walk from where the traveller is, the way the owner searches by
+ * hand with Skyscanner Explore. Empty dates follow the When pill (or the next three weeks).
+ * perStop is the route's nightsPerStop, a number of nights or a range ("2-3").
+ */
+export type SmartForm = { minNights: number; maxNights: number; perStop: string; cities: number; style: SmartStyle; avoid: string[]; /** Skip the countries like the picked ones too ("like Germany": Austria, Switzerland). */ avoidLike?: boolean; mustInclude: string[]; from: string; to: string; /** Live Kiwi searches the walk may spend; 0 answers from the fare memory alone. */ budget: number };
 export type ShortForm = { cities: number; mustInclude: string[]; countries: string[]; maxGroundHours: number };
 export type TripsExtra = {
   wild: WildForm;
   short: ShortForm;
+  smart: SmartForm;
   longStay: { wishes: string; cities: string[] };
   group: { budgetPerPerson: number };
 };
 export const EMPTY_TRIPS_EXTRA: TripsExtra = {
-  wild: { countries: [], mustInclude: [], maxHours: 0, startFrom: [], wishes: "", stopNights: null },
+  wild: { countries: [], mustInclude: [], maxHours: 0, startFrom: [], wishes: "", stopNights: null, walk: false },
   short: { cities: 3, mustInclude: [], countries: [], maxGroundHours: 5 },
+  smart: { minNights: 5, maxNights: 6, perStop: "2", cities: 3, style: "cheapest", avoid: [], mustInclude: [], from: "", to: "", budget: 12 },
   longStay: { wishes: "", cities: [] },
   group: { budgetPerPerson: 0 },
 };
@@ -221,6 +234,13 @@ export type TripsPanelProps = {
   onOption: (i: number | null) => void;
   /** How many countries the Been filter excludes (0 when off): the forms show a one-line note. */
   excludedCount: number;
+  // the graph walk: the Smart loop of Short loops and "Walk the region" of Wild loops run it; the globe draws it live
+  walk: WalkState;
+  onSmartLoop: () => void;
+  onWildWalk: () => void;
+  /** Whether the walk can reach the Wild region: its first search is the cheapest fares out of home, which stay near home, so a far region gets the classic builder. */
+  wildWalkReach: boolean;
+  onWalkSelect: (i: number) => void;
 };
 
 /** A short loop in the shape of a wild trip, so the strip, cards and rows draw both. */
@@ -716,6 +736,138 @@ function PlayButton({ playing, onPlay, onStop }: { playing: number | null; onPla
   );
 }
 
+const SMART_STYLES: { key: SmartStyle; label: string; hint: string }[] = [
+  { key: "cheapest", label: "Cheapest", hint: "The lowest total; an hour on a train or a plane counts for little" },
+  { key: "unique", label: "Unique", hint: "Smaller cities and hidden gems weighted up, the biggest hubs weighted down" },
+  { key: "balanced", label: "Balanced", hint: "Money and hours weighed evenly" },
+];
+const PER_STOP: { key: string; label: string }[] = [
+  { key: "1", label: "1" },
+  { key: "2", label: "2" },
+  { key: "3", label: "3" },
+  { key: "2-3", label: "2 to 3" },
+];
+
+/** What a walk started from this builder is doing: its last progress lines while it runs, then its loops as rows. */
+function WalkStatus({ walk, mine, onSelect, homeLabel, idle }: { walk: WalkState; mine: boolean; onSelect: (i: number) => void; homeLabel: string; idle: string }) {
+  if (!mine || walk.status === "idle") return <div className="status muted">{idle}</div>;
+  const lines = walk.lines.slice(-3);
+  return (
+    <>
+      {walk.status === "loading" && (
+        <div className="answer compact" aria-live="polite">
+          {lines.length === 0 && <p className="muted">Asking where the cheap flights go from your airports…</p>}
+          {lines.map((l, i) => (
+            <p key={walk.lines.length - lines.length + i} className={i === lines.length - 1 ? "" : "muted"}>
+              {l}
+            </p>
+          ))}
+        </div>
+      )}
+      {walk.status === "error" && <div className="status">{walk.note ?? "The walk failed."}</div>}
+      {walk.status === "ok" && !walk.loops.length && <div className="status">{walk.result?.note ?? "No loop closed inside these dates. Try more nights or another window."}</div>}
+      {walk.loops.length > 0 && <WalkLoopList loops={walk.loops} selected={walk.selected} onSelect={onSelect} homeLabel={homeLabel} />}
+    </>
+  );
+}
+
+/**
+ * The Smart loop: the graph walk from the traveller's door, the way the owner searches by
+ * hand (an explore search from home, the cheapest next hops from each stop, the cheapest way
+ * home to any of his airports). The form lives in Globe state (TripsExtra.smart); the globe
+ * runs the walk and draws it as it thinks.
+ */
+function SmartLoop({ form, onForm, walk, onRun, onSelect, countries, cities, homeLabel, month }: { form: SmartForm; onForm: (patch: Partial<SmartForm>) => void; walk: WalkState; onRun: () => void; onSelect: (i: number) => void; countries: Record<string, CountryInfo>; cities: Record<string, City>; homeLabel: string; month: string | null }) {
+  const mine = walk.source === "short";
+  const loading = mine && walk.status === "loading";
+  const today = todayIso();
+  const when = form.from && form.to ? null : month ? `Leaving in ${monthLabel(month)} (the When pill); pick dates to choose.` : "Leaving in the next three weeks; pick dates to choose.";
+  const perStopMin = Number(form.perStop.split("-")[0]) || 2;
+  const short = form.cities * Number(form.perStop.split("-").pop() || perStopMin) < form.minNights;
+  return (
+    <div className="smartloop">
+      <h2>Smart loop</h2>
+      <div className="status">The cheapest places from your airports, then cheap hops by plane, train or coach from each, and the cheapest way home to any of your airports. Watch the globe while it thinks.</div>
+      <div className="chips">
+        <select className="search slim" value={form.minNights} onChange={(e) => { const n = Number(e.target.value); onForm({ minNights: n, maxNights: Math.max(n, form.maxNights) }); }} aria-label="Fewest nights">
+          {[2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 14].map((n) => (
+            <option key={n} value={n}>
+              {n} nights
+            </option>
+          ))}
+        </select>
+        <span className="muted" style={{ fontSize: 12.5, alignSelf: "center" }}>
+          to
+        </span>
+        <select className="search slim" value={form.maxNights} onChange={(e) => { const n = Number(e.target.value); onForm({ maxNights: n, minNights: Math.min(n, form.minNights) }); }} aria-label="Most nights">
+          {[2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 14, 16].map((n) => (
+            <option key={n} value={n}>
+              {n} nights
+            </option>
+          ))}
+        </select>
+      </div>
+      <div className="chips">
+        <span className="muted" style={{ fontSize: 12.5, alignSelf: "center" }}>
+          Nights a stop:
+        </span>
+        {PER_STOP.map((x) => (
+          <button key={x.key} className={`chip ghost${form.perStop === x.key ? " on" : ""}`} onClick={() => onForm({ perStop: x.key })}>
+            {x.label}
+          </button>
+        ))}
+      </div>
+      <div className="chips">
+        {[2, 3, 4].map((n) => (
+          <button key={n} className={`chip ghost${form.cities === n ? " on" : ""}`} onClick={() => onForm({ cities: n })} title="The most cities the loop visits">
+            up to {n} cities
+          </button>
+        ))}
+      </div>
+      <div className="chips" role="radiogroup" aria-label="What to favour">
+        {SMART_STYLES.map((st) => (
+          <button key={st.key} role="radio" aria-checked={form.style === st.key} className={`chip ghost${form.style === st.key ? " on" : ""}`} onClick={() => onForm({ style: st.key })} title={st.hint}>
+            {st.label}
+          </button>
+        ))}
+      </div>
+      <div className="form wrap">
+        <input className="search" type="date" value={form.from} min={today} onChange={(e) => onForm({ from: e.target.value, to: form.to && form.to < e.target.value ? "" : form.to })} aria-label="Leave from" style={{ flex: "1 1 130px" }} />
+        <input className="search" type="date" value={form.to} min={form.from || today} onChange={(e) => onForm({ to: e.target.value })} aria-label="Back by" style={{ flex: "1 1 130px" }} />
+      </div>
+      {when && <div className="status muted">{when}</div>}
+      <CountryPick countries={countries} value={form.avoid} onChange={(v) => onForm({ avoid: v })} placeholder="countries to skip: Germany, Austria" max={8} />
+      {form.avoid.length > 0 && (
+        <div className="chips">
+          <button className={`chip ghost${form.avoidLike ? " on" : ""}`} aria-pressed={!!form.avoidLike} onClick={() => onForm({ avoidLike: !form.avoidLike })} title="Germany brings Austria and Switzerland with it, Belgium the Netherlands and Luxembourg, Sweden the other Nordics.">
+            and countries like them
+          </button>
+        </div>
+      )}
+      <CityPick cities={cities} value={form.mustInclude} onChange={(v) => onForm({ mustInclude: v })} placeholder="a city to pass through: Gdansk, Porto" max={2} />
+      <select className="search slim" value={form.budget} onChange={(e) => onForm({ budget: Number(e.target.value) })} aria-label="Live searches">
+        {[
+          [0, "fares already seen only, no live search"],
+          [6, "up to 6 live searches"],
+          [12, "up to 12 live searches"],
+          [20, "up to 20 live searches"],
+        ].map(([n, label]) => (
+          <option key={n} value={n}>
+            {label}
+          </option>
+        ))}
+      </select>
+      {short && <div className="status muted">{form.cities} cities of {form.perStop.replace("-", " to ")} nights cannot fill {form.minNights} nights; the walk will say so. Allow more cities or more nights a stop.</div>}
+      <div className="chips">
+        <button className="chip on" onClick={onRun} disabled={loading}>
+          {loading ? "Walking…" : mine && walk.status === "ok" ? "Walk again" : "Find my loop"}
+        </button>
+      </div>
+      <WalkStatus walk={walk} mine={mine} onSelect={onSelect} homeLabel={homeLabel} idle="Fewer live searches when the fare memory already knows the way; the loops draw on the globe as they close." />
+    </div>
+  );
+}
+
 export default function TripsPanel(p: TripsPanelProps) {
   const months = useMemo(monthOptions, []);
   // The long-stay form is Globe state (see TripsPanelProps); this is only a short hand.
@@ -737,6 +889,10 @@ export default function TripsPanel(p: TripsPanelProps) {
   // "My own countries" has nothing to set; it puts the cursor in the country box below.
   const wildCountryBox = useRef<HTMLInputElement>(null);
   const setShortForm = (patch: Partial<ShortForm>) => p.onExtra({ ...ex, short: { ...ex.short, ...patch } });
+  const setSmartForm = (patch: Partial<SmartForm>) => p.onExtra({ ...ex, smart: { ...ex.smart, ...patch } });
+  // A far region keeps the classic builder even with the toggle on: the walk could not reach it.
+  const wildWalkOn = ex.wild.walk && p.wildWalkReach;
+  const wildWalking = wildWalkOn && p.walk.source === "wild";
   // Shown on every form that searches with the exclude list, so the visitor knows why a country is missing.
   const beenNote = p.excludedCount > 0 ? <div className="status muted been-note">Only new countries: {p.excludedCount} excluded; layovers still allowed.</div> : null;
 
@@ -753,8 +909,10 @@ export default function TripsPanel(p: TripsPanelProps) {
 
       {p.mode === "short" && (
         <div className="scroll fade" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-          <div className="status">Fly out, hop between cities by train or coach, fly home from the last one. Ranked by countries and cities per euro and hour.</div>
           {beenNote}
+          <SmartLoop form={ex.smart} onForm={setSmartForm} walk={p.walk} onRun={p.onSmartLoop} onSelect={p.onWalkSelect} countries={p.countries} cities={p.cities} homeLabel={p.homeLabel} month={p.month} />
+          <h2>From tonight&apos;s fares</h2>
+          <div className="status">Fly out, hop between cities by train or coach, fly home from the last one. Ranked by countries and cities per euro and hour.</div>
           <div className="chips">
             {SHORT_DAYS.map((d) => (
               <button key={d} className={`chip${p.days === d ? " on" : ""}`} onClick={() => p.onDays(d)}>
@@ -950,13 +1108,30 @@ export default function TripsPanel(p: TripsPanelProps) {
           <h2>When to leave</h2>
           <PeriodPicker value={p.wildPeriod} onChange={p.onWildPeriod} windowDays={WILD_WINDOW_DAYS} />
           <div className="chips">
-            <button className="chip on" onClick={p.onWild} disabled={p.wild.status === "loading"}>
-              {p.wild.status === "loading" ? "Building…" : p.wild.status === "ok" ? "Build again" : "Build the loop"}
+            <button
+              className={`chip ghost${wildWalkOn ? " on" : ""}`}
+              aria-pressed={wildWalkOn}
+              disabled={!p.wildWalkReach}
+              onClick={() => setWildForm({ walk: !ex.wild.walk })}
+              title={p.wildWalkReach ? "Search the way you would by hand: the cheapest places from home, cheap hops between the region's cities by plane, train or coach, the cheapest way home. Up to six stops." : "This region is too far for the walk: it starts from the cheapest fares out of home, and those stay close to home. Build the loop instead."}
+            >
+              Walk the region
             </button>
-            {p.wild.status === "ok" && wt && <PlayButton playing={p.playing} onPlay={p.onPlay} onStop={p.onStopPlay} />}
-            {p.wild.status === "ok" && wt && <ItineraryButton onClick={() => p.onItinerary(skeletonFromWild(wt))} label={itinLabel(skeletonFromWild(wt))} />}
+            {wildWalkOn ? (
+              <button className="chip on" onClick={p.onWildWalk} disabled={wildWalking && p.walk.status === "loading"}>
+                {wildWalking && p.walk.status === "loading" ? "Walking…" : wildWalking && p.walk.status === "ok" ? "Walk again" : "Find the loop"}
+              </button>
+            ) : (
+              <button className="chip on" onClick={p.onWild} disabled={p.wild.status === "loading"}>
+                {p.wild.status === "loading" ? "Building…" : p.wild.status === "ok" ? "Build again" : "Build the loop"}
+              </button>
+            )}
+            {!wildWalkOn && p.wild.status === "ok" && wt && <PlayButton playing={p.playing} onPlay={p.onPlay} onStop={p.onStopPlay} />}
+            {!wildWalkOn && p.wild.status === "ok" && wt && <ItineraryButton onClick={() => p.onItinerary(skeletonFromWild(wt))} label={itinLabel(skeletonFromWild(wt))} />}
           </div>
-          {p.wild.status === "loading" && (
+          {wildWalkOn && <WalkStatus walk={p.walk} mine={wildWalking} onSelect={p.onWalkSelect} homeLabel={p.homeLabel} idle="The walk keeps to the region's countries after the way in, which may land in a big hub outside them. Up to six stops; the loops draw on the globe as they are found." />}
+          {ex.wild.walk && !p.wildWalkReach && <div className="status muted">This region is too far for the walk, which starts from the cheapest fares out of home. The loop is built the classic way.</div>}
+          {!wildWalkOn && p.wild.status === "loading" && (
             <div className="answer">
               {p.wild.lines.map((l, i) => (
                 <p key={i} className={i === p.wild.lines.length - 1 ? "" : "muted"}>
@@ -966,9 +1141,9 @@ export default function TripsPanel(p: TripsPanelProps) {
               {p.wild.lines.length === 0 && <p className="muted">Starting the search: about forty live fare searches, one to two minutes.</p>}
             </div>
           )}
-          {p.wild.status === "error" && <div className="status">{p.wild.note}</div>}
-          {p.wild.status === "idle" && <div className="status muted">The first build of a loop takes a minute or two; the next visitor asking the same gets it at once.</div>}
-          {p.wild.status === "ok" && wt && (
+          {!wildWalkOn && p.wild.status === "error" && <div className="status">{p.wild.note}</div>}
+          {!wildWalkOn && p.wild.status === "idle" && <div className="status muted">The first build of a loop takes a minute or two; the next visitor asking the same gets it at once.</div>}
+          {!wildWalkOn && p.wild.status === "ok" && wt && (
             <div className="tripview">
               <HeroNumbers
                 items={[

@@ -8,6 +8,7 @@
 //   atlas Brasov to Bucharest
 //   atlas to Lisbon 14 Nov 4 nights
 //   atlas events february --live-cap 0
+//   atlas loop from Brasov 20 to 30 Oct 5 to 6 nights 2 nights a stop
 //   atlas itinerary Lisbon 3 nights from 2026-11-14
 //   atlas ask "is Porto nice in October"
 //   atlas help
@@ -103,10 +104,26 @@ function notes(r: Record<string, unknown>) {
   for (const k of ["corrected", "note", "unplaced", "beenFilter"]) if (typeof r[k] === "string") out(dim(`${k}: ${String(r[k]).replace(/,? say so$/, "")}`));
 }
 
-async function call(name: string, input: unknown): Promise<Record<string, unknown>> {
+/** A tool's answer: a streaming tool (walk_trips) is an async generator whose every yield before the last is
+ * progress ({ running: true, progress }); those lines go to `onProgress` and the last yield is the answer. */
+async function drain(r: unknown, onProgress?: (line: string) => void): Promise<unknown> {
+  if (!r || typeof (r as AsyncIterable<unknown>)[Symbol.asyncIterator] !== "function") return r;
+  let last: unknown;
+  // A walk also yields when only its live lines for the globe are new; the same progress line prints once.
+  let said = "";
+  for await (const item of r as AsyncIterable<unknown>) {
+    const p = item as { running?: boolean; progress?: unknown };
+    if (p && p.running === true && typeof p.progress === "string") {
+      if (p.progress !== said) onProgress?.(p.progress);
+      said = p.progress;
+    } else last = item;
+  }
+  return last;
+}
+async function call(name: string, input: unknown, onProgress?: (line: string) => void): Promise<Record<string, unknown>> {
   const t = tools[name];
   if (!t?.execute) return { error: `the tool ${name} is not available here (a key may be missing)` };
-  const r = await t.execute(input, { toolCallId: `cli-${name}`, messages: [] });
+  const r = await drain(await t.execute(input, { toolCallId: `cli-${name}`, messages: [] }), onProgress);
   return r && typeof r === "object" ? (r as Record<string, unknown>) : { error: `answered ${String(r)}` };
 }
 /** Prints the raw answer for --json and says whether the caller should stop there. */
@@ -152,6 +169,57 @@ async function runRoute(c: Extract<Command, { kind: "route" }>) {
   });
   out("");
   if (Array.isArray(r.considered) && r.considered.length) out(dim(`considered: ${(r.considered as string[]).join(", ")}`));
+  out(dim(`source: ${r.source}, ${r.searched} live searches`));
+  notes(r);
+}
+
+type WalkLegRow = { kind: string; from: string; to: string; date: string; depart?: string; minutes: number; price: number; estimated?: boolean; carrier?: string; source: string; url?: string };
+type WalkLoopRow = { title: string; route: string; start: string; end: string; nights: number; total: number; hours: number; stops: { name: string; country: string; nights: number; arrive: string }[]; legs: WalkLegRow[]; why: string[] };
+const KIND_WORD: Record<string, string> = { fly: "fly", train: "train", coach: "coach", ferry: "ferry", road: "drive" };
+const span = (min: number) => (min >= 90 ? `${Math.round(min / 6) / 10} h` : `${Math.round(min)} min`);
+
+/** A loop of cheap hops (walk_trips, lib/graph-walk.ts), printed as a tree: the route line, then each leg with the
+ * stay it leads to, the booking link under each flight, and the why lines. Progress lines print as the walk runs. */
+async function runWalk(c: Extract<Command, { kind: "walk" }>) {
+  const nps = c.nightsPerStop;
+  const input = {
+    ...(c.origin ? { origin: c.origin } : {}),
+    ...(c.from ? { from: c.from } : {}),
+    ...(c.to ? { to: c.to } : {}),
+    ...(c.minNights ? { minNights: c.minNights } : {}),
+    ...(c.maxNights ? { maxNights: c.maxNights } : {}),
+    ...(nps != null ? (Array.isArray(nps) ? { nightsPerStop: nps[0], nightsPerStopMax: nps[1] } : { nightsPerStop: nps }) : {}),
+    ...(c.maxStops ? { maxStops: c.maxStops } : {}),
+    ...(c.mustInclude?.length ? { mustInclude: c.mustInclude } : {}),
+    ...(c.countries?.length ? { countries: c.countries } : {}),
+    ...(c.avoid?.length ? { avoid: c.avoid } : {}),
+    ...(c.style ? { style: c.style } : {}),
+  };
+  const r = await call("walk_trips", input, JSON_OUT ? undefined : (line) => out(dim(`  ... ${line}`)));
+  if (json(r) || failed(r)) return;
+  out(bold(`Loops from ${String(r.from ?? "here")}, ${String(r.window ?? "")}, ${String(r.nights ?? "")} nights, ${String(r.nightsPerStop ?? "")} a stop`));
+  const loops = (r.loops as WalkLoopRow[] | undefined) ?? [];
+  if (!loops.length) out("No loop closed.");
+  loops.forEach((l, i) => {
+    out("");
+    out(`${i + 1}. ${bold(l.title)}  ${euro(l.total)}  ${l.hours} h of travel  ${l.start} to ${l.end}, ${l.nights} nights`);
+    out(`   ${l.route}`);
+    // Each hop that is not a drive leads to the next stop, in order; the last one goes home.
+    let stop = 0;
+    const rows: string[] = [];
+    for (const g of l.legs) {
+      rows.push(`${KIND_WORD[g.kind] ?? g.kind}  ${g.from} to ${g.to}, ${g.date}${g.depart ? ` ${g.depart}` : ""}, ${span(g.minutes)}, ${euro(g.price)}${g.estimated ? " (estimate)" : ""}${g.carrier ? `, ${g.carrier}` : ""}  ${dim(g.source)}`);
+      if (g.url) rows.push(dim(`  book: ${cut(g.url, 110)}`));
+      if (g.kind !== "road" && stop < l.stops.length) {
+        const s = l.stops[stop++];
+        rows.push(`stay  ${s.name}, ${s.country}, ${s.nights} night${s.nights === 1 ? "" : "s"} from ${s.arrive}`);
+      }
+    }
+    rows.forEach((row, k) => out(`   ${k === rows.length - 1 ? "└─" : "├─"} ${row}`));
+    for (const w of l.why ?? []) out(dim(`   why: ${w}`));
+  });
+  out("");
+  if (Array.isArray(r.considered) && r.considered.length) out(dim(`considered: ${(r.considered as string[]).join("; ")}`));
   out(dim(`source: ${r.source}, ${r.searched} live searches`));
   notes(r);
 }
@@ -323,7 +391,7 @@ async function main() {
   if (/^ask\b/i.test(text)) return runAsk(text.replace(/^ask\s*/i, ""));
   // The words after `atlas` read like the top bar's line; "itinerary ..." and "events ..."
   // work as they are, and a leading verb that names a slash command is read as one.
-  const line = /^(route|events|getaways|wild|stay|place|itinerary)\b/i.test(text) && !/^(events|itinerary)\b/i.test(text) ? `/${text}` : text;
+  const line = /^(route|events|getaways|wild|stay|place|itinerary|loop|walk)\b/i.test(text) && !/^(events|itinerary)\b/i.test(text) ? `/${text}` : text;
   const list = parseCommand(line, today);
   if (flags.has("all")) {
     out(dim("suggestions:"));
@@ -347,6 +415,8 @@ async function main() {
       return runPlace(c);
     case "itinerary":
       return runItinerary(c);
+    case "walk":
+      return runWalk(c);
     case "ask":
       return runAsk(c.text);
   }

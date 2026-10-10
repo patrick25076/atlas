@@ -52,7 +52,8 @@ const BUDGETS: { id: BudgetTier; label: string }[] = [
   { id: "mid", label: "Mid" },
   { id: "comfort", label: "Comfort" },
 ];
-const SOURCE_LABEL: Record<Skeleton["source"], string> = {
+// Keyed by string so a new source kind (the graph walk's) only needs a label, never a type change here.
+const SOURCE_LABEL: Partial<Record<Skeleton["source"] | "walk", string>> = {
   deal: "A deal",
   route: "A to B",
   loop: "A short loop",
@@ -60,6 +61,7 @@ const SOURCE_LABEL: Record<Skeleton["source"], string> = {
   longstay: "A long stay",
   group: "A group trip",
   event: "Worth flying for",
+  walk: "A smart loop",
   custom: "Your trip",
 };
 const SLOT_LABEL: Record<ItinBlock["slot"], string> = {
@@ -1080,7 +1082,7 @@ export default function Itinerary(props: ItineraryProps) {
         )}
         <div className={s.heroText}>
           <span className={s.kicker}>
-            {SOURCE_LABEL[view.source] ?? "A trip"} from {view.origin.name}
+            {SOURCE_LABEL[view.source as Skeleton["source"] | "walk"] ?? "A trip"} from {view.origin.name}
           </span>
           <h1 className={s.title}>{view.title}</h1>
           {view.subtitle && <p className={s.subtitle}>{view.subtitle}</p>}

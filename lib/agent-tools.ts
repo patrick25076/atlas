@@ -1,5 +1,6 @@
 // Server-only. Everything Atlas can do, as tools the chat agent calls: the boards, the
-// period search, the month-by-month scan, live re-pricing, combos, wild trips and their day
+// period search, the month-by-month scan, live re-pricing, combos, the graph walk (a loop of
+// the cheapest hops, lib/graph-walk.ts), wild trips and their day
 // plans, long stays, group trips, climate, the fare memory, sights, events, rated
 // restaurants, hotels, one-way fares, trains and coaches, facts, the live web, and one
 // widget question. Each answer is compact (a dozen items) so the model reads it whole; the
@@ -56,6 +57,8 @@ import { beenLine, cleanCodes, countryAllowed, excludedCountries, filterByCountr
 import { expandWeather, visaFor, type Airport, type City, type CityPlaces, type CountryInfo, type Deal, type VisaFile, type WeatherCompact } from "./types";
 import { generateItinerary, hasItineraryModel, ItineraryInputError, normaliseSkeleton, skeletonFromStops } from "./itinerary-server";
 import { itineraryKey, skeletonFromDeal, skeletonFromRoute, skeletonFromWild, type BudgetTier, type ItinDay, type Itinerary, type ItinPlace, type Pace, type Skeleton } from "./itinerary";
+import { walkTrips, type WalkEvent, type WalkLeg, type WalkLoop, type WalkResult } from "./graph-walk";
+import { walkQuery, walkWindow, type WalkLiveLine } from "./chat-widgets";
 
 const CITIES = citiesJson as unknown as Record<string, City>;
 const COUNTRIES = countriesJson as unknown as Record<string, CountryInfo>;
@@ -268,6 +271,8 @@ const compactDeal = (d: Deal) => ({
   airline: d.carriers[0],
   flightMinutes: d.outMin,
   homeVia: d.backTo,
+  // The ticket lands in `city` and flies home from another city nearby: a two-city trip.
+  ...(d.backFromCity ? { homeFrom: d.backFromCity, between: d.gapMin ? `about ${Math.round((d.gapMin / 60) * 10) / 10} h by road, train or ferry, not on the ticket` : "not on the ticket" } : {}),
   trick: d.trick,
   url: d.url,
 });
@@ -314,6 +319,17 @@ const ROUTE_DEADLINE_MS = 90_000;
  * back as a partial itinerary (the view can finish it). Never past the turn's own clock. */
 const ITINERARY_MS = Math.max(30_000, Number(process.env.CHAT_ITINERARY_MS) || 150_000);
 const ROUTE_DEADLINE_HARDER_MS = 150_000;
+/** Searches walk_trips may spend from the turn's budget: the owner's own case (beam 2, three stops) needs
+ * about ten (one "anywhere" from home, one per expanded stop, the ways home); the engine stops at this. */
+const WALK_SEARCHES = 12;
+/** States followed at each depth of the walk in the chat: two, the owner's case (docs/plans/graph-walk.md). */
+const WALK_BEAM = 2;
+/** The walk's own limit (the engine's default); always cut to what is left of the turn. */
+const WALK_DEADLINE_MS = 90_000;
+/** The live lines (nodes, edges, loops) a chat walk sends the globe, and how often: a walk sees a few hundred edges,
+ * past this only the chosen ones and the loops go on. */
+const WALK_LIVE_MAX = 600;
+const WALK_LIVE_MS = 250;
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 /** Big countries where the way home from another city is worth pricing in the same scan. */
 export const OPEN_JAW_COUNTRIES = ["United States", "Canada", "Brazil", "Australia", "China", "India", "Japan", "Indonesia", "Mexico", "Argentina", "Russia"];
@@ -513,6 +529,17 @@ const withoutRaw = ({ output }: { output: unknown }): { type: "json"; value: JSO
   if (output && typeof output === "object" && "raw" in output) {
     const { raw: _raw, ...rest } = output as Record<string, unknown>;
     void _raw;
+    return { type: "json", value: rest as JSONValue };
+  }
+  return { type: "json", value: (output ?? null) as JSONValue };
+};
+/** walk_trips' answer for the model: no raw WalkResult and no query object (both only draw the globe and
+ * run the walk again in the browser); the compact loops say the same. */
+const withoutClientFields = ({ output }: { output: unknown }): { type: "json"; value: JSONValue } => {
+  if (output && typeof output === "object") {
+    const { raw: _raw, params: _params, ...rest } = output as Record<string, unknown>;
+    void _raw;
+    void _params;
     return { type: "json", value: rest as JSONValue };
   }
   return { type: "json", value: (output ?? null) as JSONValue };
@@ -1021,20 +1048,18 @@ export function atlasTools(ctx: AgentContext) {
         const toCountry = placeCountry(to);
         if (toCountry && !countryAllowed(toCountry, exclude)) return { searched: 0, source: "none" as Source, options: [], note: excludedNote([toCountry]) };
         // The engine spends from the turn's budget: at most ROUTE_SEARCHES (twice that when
-        // the traveller asked to look harder), fewer when the turn has less left (the engine
-        // floors its budget at one, so a spent turn is answered with the usual note before it
-        // runs). When live prices are off the budget of one is never sent: Kiwi's gate refuses
+        // the traveller asked to look harder), fewer when the turn has less left. A spent turn
+        // is no refusal: the engine runs at budget 0 (the fare memory and the ground graph
+        // alone) and the note says live prices were not searched. When live prices are off the
+        // budget of one is never sent: Kiwi's gate refuses
         // it inside the process (or the engine skips it while the breaker is open), and the
         // engine answers from the fare memory and the ground graph alone; the tool's own note
         // then says so (the engine's note for an empty answer under a budget of one reads
         // "no way found", which is not what happened).
         const offBefore = liveOff();
-        if (!offBefore) {
-          const over = exhausted();
-          if (over) return { ...plain(`${over.error}; cheapest_way needs at least one live search`), options: [] };
-        }
+        const spentTurn = !offBefore && !!exhausted();
         const harder = a.harder === true;
-        const budgetNow = offBefore ? 1 : Math.min(harder ? ROUTE_SEARCHES_HARDER : ROUTE_SEARCHES, searchesLeft());
+        const budgetNow = offBefore ? 1 : spentTurn ? 0 : Math.min(harder ? ROUTE_SEARCHES_HARDER : ROUTE_SEARCHES, searchesLeft());
         // The engine's clock: its usual limit (longer when asked to look harder), and never
         // past what is left of the turn, so the tool cannot outlast the turn it runs in.
         const deadlineMs = Math.max(10_000, Math.min(harder ? ROUTE_DEADLINE_HARDER_MS : ROUTE_DEADLINE_MS, turnLeftMs() - DEADLINE_MARGIN_MS));
@@ -1084,7 +1109,9 @@ export function atlasTools(ctx: AgentContext) {
         const offReason = offBefore ? (kiwiThrottled() ? "Kiwi is throttling this address for a few minutes" : "today's live search budget is spent") : "every live search was refused";
         const note = fallback
           ? `${offReason}; ${RATE_NOTE}; ${r.options.length ? "the fares shown are remembered ones and ground estimates, no live search was made" : "nothing stored between these places yet"}. Offer to try again in a few minutes.`
-          : (r.note ?? (!r.options.length ? `no way found between ${fromLabel} and ${r.to.label} around ${depart}; try another date or a nearby city` : live ? (r.failed ? `${r.failed} of ${r.searched} live searches failed (Kiwi refused); some options may be missing` : undefined) : memoHit ? "the same question was answered within the hour, no new search was made" : "answered from the fare memory and the ground graph, no live search was needed"));
+          : spentTurn
+            ? `${TURN_NOTE}; live prices were not searched, ${r.options.length ? "the options shown are remembered fares and ground estimates" : "nothing stored between these places yet"}`
+            : (r.note ?? (!r.options.length ? `no way found between ${fromLabel} and ${r.to.label} around ${depart}; try another date or a nearby city` : live ? (r.failed ? `${r.failed} of ${r.searched} live searches failed (Kiwi refused); some options may be missing` : undefined) : memoHit ? "the same question was answered within the hour, no new search was made" : "answered from the fare memory and the ground graph, no live search was needed"));
         return {
           from: fromLabel,
           to: r.to.label,
@@ -1106,6 +1133,256 @@ export function atlasTools(ctx: AgentContext) {
         };
       }),
       toModelOutput: withoutRaw,
+    }),
+
+    walk_trips: tool({
+      description:
+        "A loop of several cities, searched the way the traveller does it by hand with Skyscanner Explore: one 'anywhere' one-way search from where they are (the cheapest places to fly to), then from each stop the cheapest next hops by plane, train or coach, then the cheapest way home to any of their airports, a beam of the best few at each depth, the fare memory first. Use it ONCE for any trip with more than one city, a loop, 'go from X and come back from Y', 'plane then train', 'cheapest loop', 'N cities in N days', or a chain of hops the traveller wrote out; never price such legs one by one with reprice_route or cheapest_way. from/to is the window the whole trip lies in (YYYY-MM-DD or words such as '20 Oct'; default a week out); minNights/maxNights the trip's length (N days is N-1 to N nights); nightsPerStop the nights in each city (default 2, nightsPerStopMax for a range); maxStops (default 3); mustInclude the cities they named; avoid countries or cities they dislike ('not Germany' is DE, 'countries like Germany' is like:DE, or a group word: dach, benelux, nordics, baltics, balkans, iberia); prefer countries to favour; countries to keep to; style their words ('unique' for hidden gems, not touristy, smaller places); origin a city to start from when it is not where they are. Returns the loops ranked: the route as a line (Brasov, plane, Warsaw, train, Gdansk, plane, Bucharest), stops with nights, legs with kind, price, minutes and the booking link of each flight, the total, the hours and why lines, plus considered and searched. At most 12 Kiwi searches from the turn's budget, about a minute; with the budget spent it still walks the fare memory and the ground graph.",
+      inputSchema: jsonSchema<{ origin?: string; from?: string; to?: string; minNights?: number; maxNights?: number; nightsPerStop?: number; nightsPerStopMax?: number; maxStops?: number; beam?: number; tradeoff?: Tradeoff; mustInclude?: string[]; avoid?: string[]; prefer?: string[]; countries?: string[]; style?: string; exclude?: string[]; allow?: string[] }>({
+        type: "object",
+        properties: {
+          origin: { type: "string", description: "a city to start and end at; default where the traveller is" },
+          from: { type: "string", description: "the first day the trip may start, YYYY-MM-DD; default a week out" },
+          to: { type: "string", description: "the last day the trip may end, YYYY-MM-DD; default the start plus the nights plus a week" },
+          minNights: { type: "number", description: "the fewest nights away in all; default 5" },
+          maxNights: { type: "number", description: "the most nights away in all; default 6" },
+          nightsPerStop: { type: "number", description: "nights in each city, default 2" },
+          nightsPerStopMax: { type: "number", description: "with nightsPerStop, a range: 2 to 3 nights a city" },
+          maxStops: { type: "number", description: "the most cities, 1 to 6, default 3" },
+          beam: { type: "number", description: "how many of the cheapest states are followed at each depth, 1 to 5, default 2; more finds more but costs more searches" },
+          tradeoff: { type: "string", enum: ["price", "balanced", "comfort"], description: "how much an hour of travel is worth against a euro; default balanced" },
+          mustInclude: { type: "array", items: { type: "string" }, description: "cities every loop passes through, by name or code" },
+          avoid: { type: "array", items: { type: "string" }, description: "countries or cities never to stop in: ISO2 codes, names, like:DE for countries like Germany, or a group word (dach, benelux, nordics, baltics, balkans, iberia)" },
+          prefer: { type: "array", items: { type: "string" }, description: "countries to favour" },
+          countries: { type: "array", items: { type: "string" }, description: "keep the stops to these countries" },
+          style: { type: "string", description: "the traveller's words for the kind of places; 'unique' for hidden gems, not touristy, smaller cities" },
+          ...BEEN_PROPS,
+        },
+      }),
+      // A generator: every yield before the last is a preliminary result the chat shows on the tool's chip
+      // while the walk runs (the AI SDK streams them as preliminary tool outputs); the last one is the answer.
+      execute: async function* (a, opts) {
+        try {
+          // Where the loop starts and ends: the traveller's place, airports and home from the context, or a
+          // named city with its own nearest airports.
+          const given = String(a.origin ?? "").trim();
+          const ctxLabel = ctx.origin?.label?.trim() ?? "";
+          const here = ctx.origin ?? (() => {
+            const g = resolveGateway(gateways[0]);
+            return g ? { lat: g.lat, lon: g.lon, label: g.label } : null;
+          })();
+          let start: { lat: number; lon: number; label: string; gateways: string[]; home: string } | null = here ? { ...here, gateways, home: ctx.home } : null;
+          if (given && fold(given) !== fold(ctxLabel)) {
+            const hit = findCity(given);
+            if (!hit) {
+              yield { ...unknownPlace("start", given), loops: [] };
+              return;
+            }
+            const [, c] = hit;
+            const near = here ? haversineKm(here.lat, here.lon, c.lat, c.lon) : Infinity;
+            // A city within 40 km of the traveller is where they are (Brasov typed while in Brasov).
+            if (near > 40) {
+              const gws = nearestGateways(AIRPORTS, c.lat, c.lon, { maxKm: 250, limit: 3 }).map((g) => g.airport.iata);
+              if (!gws.length) {
+                yield { ...plain(`no airport within 250 km of ${c.name}; name a bigger city nearby to start from`), loops: [] };
+                return;
+              }
+              // The home country stays the traveller's own: the engine never stops in it, and a start city's
+              // country as home would ban every city of that country ("start from Warsaw, train to Gdansk").
+              start = { lat: c.lat, lon: c.lon, label: c.name, gateways: gws, home: ctx.home };
+            }
+          }
+          if (!start) {
+            yield { ...plain("the traveller's place is unknown and so are their airports; ask where they start from"), loops: [] };
+            return;
+          }
+          // The window: words read with parseDay, then the same defaults the command line uses (lib/chat-widgets.ts).
+          const corrections: string[] = [];
+          const dayOf = (v: unknown, what: string): string | null | { error: string } => {
+            if (v == null || !String(v).trim()) return null;
+            const d = readDay(v, ctx.today, what);
+            if (!d.day) return { error: d.note! };
+            if (d.note) corrections.push(d.note);
+            return d.day;
+          };
+          const f = dayOf(a.from, "the start");
+          const t = dayOf(a.to, "the end");
+          if (f && typeof f === "object") {
+            yield f;
+            return;
+          }
+          if (t && typeof t === "object") {
+            yield t;
+            return;
+          }
+          const win = walkWindow({ from: f, to: t, minNights: a.minNights, maxNights: a.maxNights }, ctx.today);
+          corrections.push(...win.notes);
+          const int = (v: unknown, lo: number, hi: number, dflt: number) => (Number.isFinite(Number(v)) && v != null && String(v).trim() !== "" ? Math.min(hi, Math.max(lo, Math.round(Number(v)))) : dflt);
+          // nightsPerStop may come as a number or as "2-3" written by the model.
+          const npsRaw = String(a.nightsPerStop ?? "").match(/^\s*(\d{1,2})\s*(?:-|to)\s*(\d{1,2})\s*$/);
+          const nMin = npsRaw ? int(npsRaw[1], 1, 14, 2) : int(a.nightsPerStop, 1, 14, 2);
+          const nMax = npsRaw ? int(npsRaw[2], nMin, 14, nMin) : int(a.nightsPerStopMax, nMin, 14, nMin);
+          const nightsPerStop: number | [number, number] = nMax > nMin ? [nMin, nMax] : nMin;
+          const maxStops = int(a.maxStops, 1, 6, 3);
+          const beam = int(a.beam, 1, 5, WALK_BEAM);
+          const tradeoff: Tradeoff = (["price", "balanced", "comfort"] as Tradeoff[]).includes(a.tradeoff as Tradeoff) ? a.tradeoff! : "balanced";
+          const words = (v: unknown, max = 20): string[] => (Array.isArray(v) ? v : typeof v === "string" ? v.split(",") : []).map((x) => String(x ?? "").trim()).filter(Boolean).slice(0, max);
+          // The start itself is no stop to pass through (the model sometimes lists it): a city within 40 km of it goes.
+          const mustInclude = words(a.mustInclude, 6).filter((m) => {
+            const c = findCity(m)?.[1];
+            return !c || haversineKm(start!.lat, start!.lon, c.lat, c.lon) > 40;
+          });
+          // A city to pass through in the home country can never be a stop (the walk never stops at home): say so
+          // now, before a search is spent on a loop that cannot close.
+          const homeCode = start.home.trim().toUpperCase();
+          const atHome = mustInclude.filter((m) => findCity(m)?.[1].country === homeCode);
+          if (atHome.length) {
+            const country = COUNTRIES[homeCode]?.name ?? homeCode;
+            yield { ...plain(`${atHome.join(" and ")} ${atHome.length === 1 ? "is" : "are"} in ${country}, the home country, and a loop never stops there; to start from ${atHome[0]}, pass it as origin, or name cities abroad`), loops: [] };
+            return;
+          }
+          const avoid = words(a.avoid);
+          const prefer = words(a.prefer);
+          const countries = words(a.countries, 30);
+          const style = typeof a.style === "string" ? a.style.trim().slice(0, 120) : "";
+          const exclude = excludeOf(a.exclude, a.allow);
+          // The budget: twelve searches from the turn at most. With the turn's budget spent, or live prices
+          // off, the walk still runs at budget 0: the fare memory, the boards and the ground graph alone.
+          const offBefore = liveOff();
+          const spentTurn = !offBefore && budget.used >= budget.max;
+          const budgetNow = offBefore || spentTurn ? 0 : Math.min(WALK_SEARCHES, searchesLeft());
+          // The engine's clock never reaches past what is left of the turn (it floors it at ten seconds).
+          const deadlineMs = Math.max(10_000, Math.min(WALK_DEADLINE_MS, turnLeftMs() - DEADLINE_MARGIN_MS));
+          const query = { origin: { lat: start.lat, lon: start.lon, label: start.label }, gateways: start.gateways, home: start.home, from: win.from, to: win.to, minNights: win.minNights, maxNights: win.maxNights, nightsPerStop, maxStops, beam, budget: budgetNow, deadlineMs, tradeoff, exclude, mustInclude, avoid, prefer, allowedCountries: countries, ...(style ? { style } : {}) };
+          trace("walkTrips", query);
+          const params = walkQuery({ gateways: start.gateways, home: start.home, lat: start.lat, lon: start.lon, label: start.label, from: win.from, to: win.to, minNights: win.minNights, maxNights: win.maxNights, nightsPerStop, maxStops, beam, budget: budgetNow, tradeoff, exclude, mustInclude, avoid, prefer, countries, style });
+
+          // The walk runs on its own; its progress lines wake this generator, which yields them as they come.
+          const lines: string[] = [];
+          // The walk's nodes, edges and loops, in the order they came, for the globe to draw while the walk runs
+          // (ChatPanel sends them on as atlas:walk-live). Bounded: past the cap only the chosen edges and the loops
+          // are kept, the ones that make the picture.
+          const live: WalkLiveLine[] = [];
+          let loopsSoFar = 0;
+          let edges = 0;
+          let finished = false;
+          let pending = false;
+          let wake: (() => void) | null = null;
+          const poke = () => {
+            pending = true;
+            const w = wake;
+            wake = null;
+            w?.();
+          };
+          const onEvent = (e: WalkEvent) => {
+            if (e.type === "progress") lines.push(e.text);
+            else if (e.type === "loop") {
+              loopsSoFar++;
+              lines.push(`A loop closed: ${e.loop.title}, €${Math.round(e.loop.total)}`);
+              live.push({ loop: e.loop });
+            } else if (e.type === "edge") {
+              edges++;
+              if (live.length < WALK_LIVE_MAX || e.chosen || e.home) {
+                const { type: _t, ...edge } = e;
+                void _t;
+                live.push({ edge });
+              }
+            } else if (e.type === "node") {
+              if (live.length < WALK_LIVE_MAX) {
+                const { type: _t, ...node } = e;
+                void _t;
+                live.push({ node });
+              }
+            } else return;
+            poke();
+          };
+          const before = kiwiStats().today;
+          // Settled into a value at once, so a failure is never an unhandled rejection while this waits for a line.
+          const run = walkTrips({ ...query, signal: opts?.abortSignal, onEvent })
+            .then((r) => ({ r, err: null as unknown }), (err: unknown) => ({ r: null, err }))
+            .finally(() => {
+              finished = true;
+              poke();
+            });
+          // Each preliminary yield carries the live lines since the one before it, and that one's again: the browser
+          // may fold two quick updates into one render, so a batch is sent twice and the panel keeps the ones it has
+          // not sent on yet (by `at`, the index of the first line). At most one yield per WALK_LIVE_MS.
+          let shown = 0;
+          let sentTo = 0;
+          let prevFrom = 0;
+          let lastYield = 0;
+          while (!finished) {
+            if (!pending) await new Promise<void>((res) => (wake = res));
+            pending = false;
+            if (finished || (lines.length === shown && live.length === sentTo)) continue;
+            const wait = WALK_LIVE_MS - (Date.now() - lastYield);
+            if (wait > 0) await sleep(wait);
+            if (finished) break;
+            shown = lines.length;
+            const end = live.length;
+            const at = prevFrom;
+            prevFrom = sentTo;
+            sentTo = end;
+            lastYield = Date.now();
+            yield { running: true as const, progress: lines[lines.length - 1] ?? "Walking the cheapest hops", lines: lines.slice(-4), loops: loopsSoFar, edges, searched: Math.max(0, kiwiStats().today - before), live: { at, lines: live.slice(at, end) }, params };
+          }
+          const done = await run;
+          const sentNow = Math.max(0, kiwiStats().today - before);
+          spend(sentNow);
+          if (!done.r) throw done.err instanceof Error ? done.err : new Error(String(done.err ?? "the walk failed"));
+          const r: WalkResult = done.r;
+          const loops = r.loops;
+          const remembered = loops.some((l) => l.legs.some((g) => g.source === "memory"));
+          const source: Source = sentNow > 0 ? "live" : r.searched > 0 ? "memo" : remembered || r.fromMemory > 0 ? "memory" : loops.length ? "data" : "none";
+          const offReason = kiwiThrottled() ? "Kiwi is throttling this address for a few minutes" : "today's live search budget is spent";
+          // The engine refusing the request itself (it expanded nothing: a bad place, nights that cannot fit) is the
+          // reason, whatever the budget; a walk that ran and closed nothing keeps the engine's note after the budget's.
+          const refused = !loops.length && !!r.note && r.expanded === 0;
+          const budgetNote = offBefore
+            ? `${offReason}; ${RATE_NOTE}; ${loops.length ? "the loops come from the fare memory and the ground graph, no live search was made" : "nothing remembered closes a loop for these dates"}. Offer to try again in a few minutes.`
+            : spentTurn
+              ? `${TURN_NOTE}; live prices were not searched, ${loops.length ? "the loops come from the fare memory and ground estimates" : "nothing remembered closes a loop for these dates"}`
+              : "";
+          const note = refused ? r.note : budgetNote ? (!loops.length && r.note ? `${budgetNote}; ${r.note}` : budgetNote) : r.note;
+          const label = start.label;
+          const word: Record<WalkLeg["kind"], string> = { fly: "plane", train: "train", coach: "coach", ferry: "ferry", road: "car" };
+          const end = (code: string, name: string) => (code === "HOME" ? label : name);
+          const compact = (l: WalkLoop) => ({
+            title: l.title,
+            route: [label, ...l.legs.filter((g) => g.kind !== "road").flatMap((g) => [word[g.kind], end(g.to, g.toName)])].join(", "),
+            start: l.start,
+            end: l.end,
+            nights: l.nights,
+            total: Math.round(l.total),
+            hours: Math.round(l.hours),
+            stops: l.stops.map((s) => ({ name: s.name, country: s.country, nights: s.nights, arrive: s.arrive })),
+            legs: l.legs.map((g) => ({ kind: g.kind, from: end(g.from, g.fromName), to: end(g.to, g.toName), date: g.date, ...(g.depart ? { depart: g.depart } : {}), minutes: g.minutes, price: Math.round(g.price), ...(g.estimated ? { estimated: true } : {}), ...(g.carrier ? { carrier: g.carrier } : {}), source: g.source, ...(g.url ? { url: g.url } : {}) })),
+            why: l.why.slice(0, 4),
+          });
+          yield {
+            from: label,
+            window: `${win.from} to ${win.to}`,
+            nights: win.minNights === win.maxNights ? `${win.minNights}` : `${win.minNights} to ${win.maxNights}`,
+            nightsPerStop: Array.isArray(nightsPerStop) ? `${nightsPerStop[0]} to ${nightsPerStop[1]}` : `${nightsPerStop}`,
+            searched: sentNow,
+            source,
+            count: loops.length,
+            ...(corrections.length ? { corrected: corrections.join("; ") } : {}),
+            ...excludedSummary(exclude, [], a.exclude),
+            ...(note ? { note } : {}),
+            ...(r.partial ? { partial: true } : {}),
+            considered: r.considered.slice(0, 12),
+            loops: loops.slice(0, 4).map(compact),
+            params,
+            raw: r,
+          };
+        } catch (err) {
+          // The same rule as safe(): a throw caused by Kiwi's throttle is a note, anything else one line of error.
+          const msg = err instanceof Error ? err.message : String(err);
+          yield isRateLimit(msg) ? { ...plain(`${msg}; ${RATE_NOTE}. Offer to try again in a few minutes.`), loops: [] } : { error: msg.slice(0, 200) || "the walk failed" };
+        }
+      },
+      toModelOutput: withoutClientFields,
     }),
 
     two_city_combos: tool({
@@ -2199,22 +2476,23 @@ Defaults when the traveller does not say:
 - When: open or "anytime" means a price calendar, the next 6 months month by month (scan_cheapest). A period of dates means find_getaways with those dates. A single month means that month.
 - How long: 2 to 4 nights for a weekend, 3 to 7 nights inside Europe, 7 to 14 nights long-haul (another continent), 14 nights for a wild loop, 2 months for a long stay. The tools pick these by distance when you leave nights out.
 - Where from: all their nightly airports at once (the tools take several origins). Mention a nearby airport only when it beats theirs by a clear margin.
+- More than one city, a loop, "go from X and come back from Y", "plane then train", "cheapest loop", "3 cities in 6 days", or a chain of hops the traveller writes out ("Brasov to Warsaw by plane, Warsaw to Gdansk by train, then another city and back to Brasov or Bucharest"): walk_trips ONCE. It searches the way they do it by hand with Skyscanner Explore: one 'anywhere' search from where they are, the cheapest next hops by plane, train or coach from each stop, the cheapest way home to any of their airports. Never price such legs one by one with reprice_route or cheapest_way, and never call walk_trips twice in a turn unless its note asks for a change. Cities they name go in mustInclude (Warsaw, Gdansk), the first city they fly to too; a way home they name (Brasov, Sibiu, Otopeni) is their airports already. origin is only a start away from where they are ("loop from Cluj"); "fly to Warsaw then train to Gdansk" or "Brasov-Warsaw plane" while in Brasov has no origin. Places they dislike go in avoid: "not Germany" is DE, "countries like Germany" or "I don't like countries like Germany" is like:DE (a group word works too: dach, benelux, nordics, baltics, balkans, iberia). "Unique", "not touristy", "hidden gems", "smaller places" is style 'unique'. N days is N-1 to N nights (minNights, maxNights); "2 days a city" is nightsPerStop 2. With no dates, leave from and to out and say the assumed window from its corrected line. Then explain the best loop in their terms: its route line, the cheapest edge out of each stop and where a train or coach beat a flight, the nights per stop, the total and the hours, a booking link per flight; name the second loop in one line. To plan its days, call make_itinerary with the loop's stops (places with nights, in order) and its start day. reprice_route stays for one named leg the traveller asks to check.
 - Two places named ("Brasov to Lisbon", "from Cluj to Paris"), how to get from one place to another, or the cheapest way somewhere ("cheapest way to Lisbon", "how do I get from Brasov to Vienna"): cheapest_way FIRST; it already checks nearby airports, trains to a bigger airport, hubs on two tickets and open-jaw, so never rebuild that by hand with reprice_route calls. Say what was considered (its considered list) in one line, name the cheapest and the fastest, and the tradeoff between them. When the traveller says "search harder", "look harder", "exhaust", "every option", call it again with harder: true (twice the searches). An option's kind "direct" means the nearest airports, not a nonstop flight: say nonstop only when its nonstop field is true. When placed says an end could not be placed, do not write "from X" or "to X" for it; say the place was not found and ask for the nearest city or airport.
 - What is on, something to go to, festivals, carnivals, marathons, concerts, "worth flying for": events_worth_travelling_for with the window they gave (default the next three months; a single month means that month), kinds as their words. Say which events are within reach: the ones priced from their airports, cheapest first, with the dates and the fare; the unpriced ones in one line.
 - "Anywhere", "the cheapest possible", "wherever is cheapest": find_getaways with exhaustive=true (it goes through many more targets and nearby origins).
 - Named destination not on the boards (San Francisco, Tokyo, Bali, a country): ONE scan_cheapest call. When the destination is in a big country (${OPEN_JAW_COUNTRIES.join(", ")}) set openJawFrom to that country in that same single call, so coming home from another big city is priced too; never a second scan_cheapest for the open-jaw. Then reprice_route on the best month if a precise day matters.
 - Where is cheap to stay, hotel deals, hotels in general with no city named: hotel_deals (instant, from the nightly hotel snapshots). When it says it is warming up, say plainly that the hotel history is not there yet and how many nights it has; for a named city and dates use hotels_near.
 - "Return from another city": open-jaw via openJawFrom (a country or city), not a question.
-- A region word (Southeast Asia, the Balkans), "a loop", "a trip through": wild_trip with 14 nights unless told; named countries go in countries, and the trip is then keyed as region custom (the key it returns says so, pass it on unchanged). A month or more somewhere: long_stay.
+- A far region word (Southeast Asia, South America, Central Asia), a loop of two weeks or more, "a trip through" a far country, backpacking, overland: wild_trip with 14 nights unless told; a loop of a few cities over a week or so, in Europe or nearby, is walk_trips; named countries go in countries, and the trip is then keyed as region custom (the key it returns says so, pass it on unchanged). A month or more somewhere: long_stay.
 - Several people from different cities: group_trip at once with what is known, each person from their OWN city or airport; when a person's dates or airport are missing or the tool says a place is unknown, show the result for the others and ask with ONE people widget prefilled with what you know.
 - Open "where could I go": cheapest_deals (tonight's boards, instant), then follow with find_getaways only when they give dates.
 - Cool autumn, warm winter, beaches, food: pick the countries yourself (where as a comma list of at most four) rather than asking; use best_months when the traveller is flexible on when.
 
 Itineraries:
-- After you show a way from A to B, deals or a wild loop, close with one short line offering to make it an itinerary (the cards also carry a "Make an itinerary" button). Offer it once per result, not on every message.
+- After you show a way from A to B, deals, a walk loop or a wild loop, close with one short line offering to make it an itinerary (the cards also carry a "Make an itinerary" button). Offer it once per result, not on every message.
 - When the traveller asks to plan the days, wants a day-by-day plan, an itinerary, or says "make it an itinerary", call make_itinerary: from 'last_route', 'last_deal' or 'last_wild' (option for which one, 1 = the first shown) for what was shown, or stops (places with nights, in order) plus start when they name places ("3 nights in Lisbon from 14 November"). Pass their wishes in their words, and pace or budget when they say. For a wild trip prefer make_itinerary over plan_days unless they ask for a month's rent per city.
 - After make_itinerary, say the shape in two or three lines (the days' highlights, the estimated total) and that the full itinerary opens in the app, where they can change the pace, regenerate, save and share it. Never offer to save it yourself.
-- The app has a command line: "/" in the top bar opens it and runs things like "Brasov to Lisbon", "events in february", "/wild sea 21" or "itinerary Lisbon 3 nights from 14 Nov" directly. Mention it once in a thread, in one line, when the request was exactly such a shape; never again after that.
+- The app has a command line: "/" in the top bar opens it and runs things like "Brasov to Lisbon", "loop from Brasov 20 to 30 Oct 6 days", "events in february", "/wild sea 21" or "itinerary Lisbon 3 nights from 14 Nov" directly. Mention it once in a thread, in one line, when the request was exactly such a shape; never again after that.
 
 Working with results:
 - Rank by price per night for comparable trips, and say why the winner wins (price, direct, better dates, the right airport). Show the best three, never ten.
@@ -2232,9 +2510,9 @@ Working with results:
 - Dates: write them as YYYY-MM-DD when you can; the tools also read "tomorrow", "next friday", "14 November", "Nov 14 2026" and say how they read them. Vague words ("this weekend", "Christmas", "end of October") are not dates: pick the day yourself and state it.
 - plan_days takes the key object wild_trip returned, unchanged.
 
-Searches cost: every live tool says how many Kiwi searches it makes, and a turn has ${TURN_SEARCH_BUDGET} in all; when a tool says the budget is used up, answer with what you have. Prefer one scan over many reprices; never call the same live tool twice with the same input in one turn.
+Searches cost: every live tool says how many Kiwi searches it makes, and a turn has ${TURN_SEARCH_BUDGET} in all; when a tool says the budget is used up, answer with what you have. Prefer one scan over many reprices and one walk over many legs; never call the same live tool twice with the same input in one turn.
 
-Before a slow tool (scan_cheapest, find_getaways, cheapest_way, wild_trip, long_stay, group_trip, plan_days, make_itinerary) write one short line saying what you are searching and the assumption you made, then call it. A long build (wild_trip, long_stay, group_trip) may answer with what it had when its time ran out: partial: true with the engine's note (a shorter loop, bases or windows not priced in time), or a stored copy under a note (undated: true means that copy was built for no particular dates, so never present its days as the ones asked; its key is its own, pass it to plan_days as is); say so in one line and offer to ask again in two minutes.
+Before a slow tool (scan_cheapest, find_getaways, cheapest_way, walk_trips, wild_trip, long_stay, group_trip, plan_days, make_itinerary) write one short line saying what you are searching and the assumption you made, then call it. A long build (wild_trip, long_stay, group_trip) may answer with what it had when its time ran out: partial: true with the engine's note (a shorter loop, bases or windows not priced in time), or a stored copy under a note (undated: true means that copy was built for no particular dates, so never present its days as the ones asked; its key is its own, pass it to plan_days as is); say so in one line and offer to ask again in two minutes.
 
 Style: plain words, short paragraphs, no bullet symbols, no headings, no em dashes (use commas or full stops), links as [text](url). Name the city, the price, the dates and the airport. End with the one question, if any, through the ask tool, and nothing after it.`;
 }

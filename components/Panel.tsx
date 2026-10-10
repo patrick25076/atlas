@@ -190,17 +190,23 @@ function DealCard({ d, active, photo, gem, been, warm, why, event, onClick, onHo
       <div className="cardbody">
         <div className="cardtop">
           <span className="cardtitle">
-            {d.city}
+            {d.backFromCity ? `${d.city} → ${d.backFromCity}` : d.city}
             <span className="sub">{countryName(d.country)}</span>
           </span>
           <span className="price">
             €{d.price}
-            <span className="sub">return</span>
+            <span className="sub">{d.backFromCity ? "two cities" : "return"}</span>
           </span>
         </div>
         <div className="sub">
           {dateRange(d.out, d.back)} · {d.nights} nights · from {d.gw}
         </div>
+        {d.backFromCity && (
+          <div className="sub splitnote">
+            In to {d.city}, home from {d.backFromCity}
+            {d.gapMin ? `: about ${formatDuration(d.gapMin)} between them by land or ferry` : ""}
+          </div>
+        )}
         <div className="sub">
           {d.carriers[0]} · {formatDuration(d.outMin)}
           {d.stops ? ` · ${stops(d.stops)}` : ""}
@@ -415,7 +421,7 @@ export default function Panel(p: Props) {
             </button>
             <div className="title">
               <h3>
-                {p.deal.city}
+                {p.deal.backFromCity ? `${p.deal.city} → ${p.deal.backFromCity}` : p.deal.city}
                 <small>
                   {countryName(p.deal.country)} · {dateRange(p.deal.out, p.deal.back)} · {p.deal.nights} nights
                 </small>
@@ -435,8 +441,15 @@ export default function Panel(p: Props) {
               </div>
             ) : (
               <a className="book" href={p.deal.url} target="_blank" rel="noreferrer">
-                Book on Kiwi.com <small>€{p.deal.price} return ↗</small>
+                Book on Kiwi.com <small>€{p.deal.price} {p.deal.backFromCity ? `in to ${p.deal.city}, home from ${p.deal.backFromCity}` : "return"} ↗</small>
               </a>
+            )}
+            {p.deal.backFromCity && (
+              <div className="fact wide">
+                This ticket lands in {p.deal.city} and flies home from {p.deal.backFromCity}
+                {p.deal.gapKm != null ? `, ${p.deal.gapKm} km away` : ""}
+                {p.deal.gapMin ? `, roughly ${formatDuration(p.deal.gapMin)} by road, train or ferry` : ""}. That trip between the two is not on the ticket; plan a night or two in each.
+              </div>
             )}
             <div className="chips">
               <ItineraryButton onClick={() => p.deal && p.caps.onItinerary(skeletonFromDeal(p.deal, p.caps.originPlace))} />

@@ -18,6 +18,7 @@ import type { Trip, TripLeg } from "./trips";
 import type { WildLeg, WildTrip } from "./wild";
 import type { LongStayBase } from "./longstay";
 import type { GroupOption } from "./group";
+import type { WalkLeg, WalkLoop } from "./graph-walk";
 
 export type ItinPlace = { name: string; code?: string; country?: string; lat: number; lon: number; img?: string };
 export type ItinLeg = { kind: "fly" | "train" | "coach" | "ferry" | "road" | "walk"; from: ItinPlace; to: ItinPlace; date?: string; depart?: string; arrive?: string; minutes?: number; price?: number | null; estimated?: boolean; carrier?: string; url?: string; note?: string };
@@ -143,13 +144,30 @@ export function skeletonFromDeal(d: Deal, origin?: ItinPlace): Skeleton {
   const oneWay = !back;
   const dest: ItinPlace = { ...byCode(d.city, d.dstCity || d.dst, d.country), ...(photo(d.img) ? { img: photo(d.img) } : {}) };
   const nights = oneWay ? 0 : Math.max(0, daysBetween(out, back));
+  // backTo is the home airport the flight back lands at when it is not the one the trip left
+  // from (an open-jaw home); the flight back always leaves the destination side.
+  const homeAirport = d.backTo ? byCode(d.backTo, d.backTo) : gateway;
+  const carrier = d.carriers.join(", ") || undefined;
+  const backNote = d.url2 ? "booked separately, included in the price above" : "on the same ticket";
+  const legs: ItinLeg[] = [{ kind: "fly", from: gateway, to: dest, date: out, minutes: d.outMin || undefined, price: d.price, url: d.url, carrier, note: d.stops ? `${d.stops} stop${d.stops > 1 ? "s" : ""}` : "direct" }];
+  // A ticket that lands in one city and flies home from another nearby (Thessaloniki in, Corfu
+  // out) is a two-city trip: the nights are shared and the trip between is a ground leg.
+  if (!oneWay && d.backFrom && d.backFromCity && nights >= 2) {
+    const second = byCode(d.backFromCity, d.backFrom);
+    const firstNights = Math.ceil(nights / 2);
+    const hop = addDays(out, firstNights);
+    const stops: ItinStop[] = [
+      { ...dest, arrive: out, leave: hop, nights: firstNights },
+      { ...second, arrive: hop, leave: back, nights: nights - firstNights, why: `the ticket flies home from ${d.backFromCity}` },
+    ];
+    legs.push({ kind: "road", from: dest, to: second, date: hop, ...(d.gapMin ? { minutes: d.gapMin } : {}), price: d.gapKm != null ? Math.max(3, Math.round(d.gapKm * 0.1)) : null, estimated: true, note: `${d.gapKm != null ? `about ${d.gapKm} km ` : ""}by road, train or ferry, not on the ticket` });
+    legs.push({ kind: "fly", from: second, to: homeAirport, date: back, minutes: d.backMin || undefined, price: null, url: d.url2 ?? d.url, carrier, note: backNote });
+    return finish({ title: `${d.city} and ${d.backFromCity}`, subtitle: `${d.price} euros, in to ${d.city} and home from ${d.backFromCity}${origin ? `, from ${origin.name}` : ""}`, origin: home, stops, legs: withAccess(legs, origin), source: "deal" });
+  }
   const stop: ItinStop = { ...dest, arrive: out, leave: oneWay ? out : back, nights, ...(d.trick ? { why: `the ticket continues past ${d.city}; one way, cabin bag only` } : {}) };
-  const legs: ItinLeg[] = [
-    { kind: "fly", from: gateway, to: dest, date: out, minutes: d.outMin || undefined, price: d.price, url: d.url, carrier: d.carriers.join(", ") || undefined, note: d.stops ? `${d.stops} stop${d.stops > 1 ? "s" : ""}` : "direct" },
-  ];
   if (!oneWay) {
-    const backFrom = d.backTo ? byCode(d.backTo, d.backTo) : dest;
-    legs.push({ kind: "fly", from: backFrom, to: gateway, date: back, minutes: d.backMin || undefined, price: null, url: d.url2 ?? d.url, carrier: d.carriers.join(", ") || undefined, note: d.url2 ? "booked separately, included in the price above" : "on the same ticket" });
+    const leaveFrom = d.backFrom && d.backFromCity ? byCode(d.backFromCity, d.backFrom) : dest;
+    legs.push({ kind: "fly", from: leaveFrom, to: homeAirport, date: back, minutes: d.backMin || undefined, price: null, url: d.url2 ?? d.url, carrier, note: backNote });
   }
   return finish({ title: oneWay ? `One way to ${d.city}` : `${nightsWords(nights)} in ${d.city}`, subtitle: `${d.price} euros ${oneWay ? "one way" : "return"}${origin ? ` from ${origin.name}` : ""}`, origin: home, stops: [stop], legs: withAccess(legs, origin), source: "deal" });
 }
@@ -327,6 +345,42 @@ export function skeletonFromEvent(e: { name: string; city: string; country: stri
       ]
     : [];
   return finish({ title: `${e.name} in ${e.city}`, subtitle: nightsWords(nights).toLowerCase(), origin: origin ?? place, stops: [{ ...place, arrive, leave, nights, why: `for ${e.name}` }], legs, source: "event" });
+}
+
+/** The walk's name for the traveller's own point in its legs (lib/graph-walk.ts HOME). */
+const WALK_HOME = "HOME";
+
+function walkLeg(l: WalkLeg, end: (code: string, name: string) => ItinPlace): ItinLeg {
+  const from = end(l.from, l.fromName);
+  const to = end(l.to, l.toName);
+  if (l.kind === "fly") {
+    // A remembered fare was a real Kiwi itinerary seen in the last day; a board fare is half a return, an estimate.
+    const note = l.source === "memory" ? "fare seen in the last day; check the link" : l.source === "boards" ? "about half a return fare on tonight's board" : undefined;
+    return { kind: "fly", from, to, date: l.date, ...(l.depart ? { depart: l.depart } : {}), ...(l.arrive ? { arrive: l.arrive } : {}), minutes: l.minutes, price: l.price, ...(l.estimated ? { estimated: true } : {}), ...(l.carrier ? { carrier: l.carrier } : {}), ...(l.url ? { url: l.url } : {}), ...(note ? { note } : {}) };
+  }
+  // The drive between the door and a home airport is the access leg every converter adds: the server drops it when
+  // the airport is in the traveller's own city and keeps the walk's minutes and fare otherwise.
+  if (l.kind === "road") return { kind: "road", from, to, date: l.date, minutes: l.minutes, price: l.price, estimated: true, note: ACCESS_NOTE };
+  // Trains, coaches and ferries come from the ground graph: real minutes, a fare estimated from the distance.
+  return { kind: l.kind, from, to, date: l.date, minutes: l.minutes, price: l.price, estimated: true, note: `${l.kind}, fare estimated from the distance` };
+}
+
+/**
+ * A loop from the graph walk (lib/graph-walk.ts) as it was walked: its stops with their nights, its legs in order
+ * (each flight with its booking link and times, each train or coach with its minutes and an estimated fare, the
+ * drive to and from the home airport when there is one). The walk's HOME is the traveller's own point, `origin`;
+ * a flight's ends are its airports, placed by their codes on the server; a ground leg's ends are the stops.
+ */
+export function skeletonFromWalk(loop: WalkLoop, origin: ItinPlace): Skeleton {
+  const places = new Map<string, ItinPlace>(loop.stops.map((s) => [s.code, { name: s.name, code: s.code, country: s.country, lat: s.lat, lon: s.lon, ...(photo(s.img) ? { img: photo(s.img) } : {}) }]));
+  const end = (code: string, name: string): ItinPlace => (code === WALK_HOME ? origin : (places.get(code) ?? byCode(name, code)));
+  const stops: ItinStop[] = loop.stops.map((s) => ({ ...places.get(s.code)!, arrive: s.arrive, leave: s.leave, nights: s.nights }));
+  const legs = loop.legs.map((l) => walkLeg(l, end));
+  const overland = loop.legs.filter((l) => l.kind === "train" || l.kind === "coach" || l.kind === "ferry").length;
+  const subtitle = `${nightsWords(loop.nights).toLowerCase()} from ${origin.name}, about ${loop.total} euros of travel${overland ? `, ${overland === 1 ? "one leg" : `${overland} legs`} overland` : ""}`;
+  // Source "loop" for now, not a new "walk": a new member of the union breaks the label map in components/Itinerary.tsx
+  // and lib/itinerary-server.ts turns an unknown source into "custom". Switch to "walk" when both list it.
+  return finish({ title: listWords(loop.stops.map((s) => s.name)), subtitle, origin, stops, legs, nights: loop.nights, source: "loop" });
 }
 
 // ---------------------------------------------------------------------------------------

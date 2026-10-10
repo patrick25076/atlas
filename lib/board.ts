@@ -9,7 +9,7 @@ import citiesJson from "@/public/data/cities.json";
 import airportsJson from "@/public/data/airports.json";
 import routesJson from "@/public/data/routes-openflights.json";
 import countriesJson from "@/public/data/countries.json";
-import { haversineKm } from "./geo";
+import { driveMinutes, haversineKm } from "./geo";
 import { kiwiDate, nightsOf, searchFlight, type KiwiItinerary } from "./kiwi";
 import type { Airport, City, CountryInfo, Deal, Route } from "./types";
 
@@ -146,11 +146,57 @@ export function windowFor(month?: string): { from: string; to: string } {
   return { from: earliest.toISOString().slice(0, 10), to: new Date(earliest.getTime() + WINDOW_DAYS * 86_400_000).toISOString().slice(0, 10) };
 }
 
+/**
+ * Kiwi sells "returns" that land in one city and fly home from another: for Greece, 13 of 15
+ * answers on 10 October 2026. That is a fine two-city trip when the two are a few hours apart by
+ * land (Thessaloniki in, Corfu out: 280 km by road and ferry, about five hours; Chania in,
+ * Heraklion out) and nonsense when they are not (Chania in, Corfu out: 587 km across the sea).
+ * Past this straight-line distance between the two airports the ticket is not a getaway; below
+ * it the deal carries both cities and the trip between, which the card must show.
+ */
+export const OPEN_JAW_MAX_KM = 300;
+
+/** Where the ticket lands, where it flies home from, and how far apart those are. */
+export function ticketGap(it: KiwiItinerary): { land: string; leave: string; landCity: string; leaveCity: string; km: number } | null {
+  if (!it.inbound) return null;
+  const land = it.outbound.to;
+  const leave = it.inbound.from;
+  const landCity = cityOf.get(land) ?? land;
+  const leaveCity = cityOf.get(leave) ?? leave;
+  if (land === leave || landCity === leaveCity) return { land, leave, landCity, leaveCity, km: 0 };
+  const a = airportByIata.get(land);
+  const b = airportByIata.get(leave);
+  // Two airports our data cannot place: trust the ticket only when they share a city name.
+  if (!a || !b) return { land, leave, landCity, leaveCity, km: Number.POSITIVE_INFINITY };
+  return { land, leave, landCity, leaveCity, km: haversineKm(a.lat, a.lon, b.lat, b.lon) };
+}
+
+/** A one-way, a plain return, or a return whose two ends are close enough to travel between by land. */
+export function sensibleTicket(it: KiwiItinerary): boolean {
+  const g = ticketGap(it);
+  return !g || g.km <= OPEN_JAW_MAX_KM;
+}
+
 export function toDeal(gw: string, it: KiwiItinerary, nights: number): Deal {
   const dst = it.outbound.to;
   const last = it.outbound.segments.at(-1);
   const city = cityOf.get(dst) ?? dst;
   const carriers = [...new Set([...it.outbound.segments, ...(it.inbound?.segments ?? [])].map((s) => s.carrierName || s.carrier))];
+  const gap = ticketGap(it);
+  // Lands in one city, flies home from another: say so on the deal, with the trip between.
+  const split =
+    gap && gap.km > 0
+      ? {
+          backFrom: gap.leave,
+          backFromCity: CITIES[gap.leaveCity]?.name ?? it.inbound?.segments[0]?.fromCity ?? gap.leave,
+          gapKm: Number.isFinite(gap.km) ? Math.round(gap.km) : undefined,
+          gapMin: Number.isFinite(gap.km) ? driveMinutes(gap.km) : undefined,
+        }
+      : {};
+  // The flight home lands at another of the traveller's airports than the one it left from.
+  const homeFrom = cityOf.get(it.outbound.from) ?? it.outbound.from;
+  const homeTo = it.inbound ? (cityOf.get(it.inbound.to) ?? it.inbound.to) : homeFrom;
+  const backTo = it.inbound && homeTo !== homeFrom ? { backTo: it.inbound.to } : {};
   return {
     gw,
     dst,
@@ -168,6 +214,8 @@ export function toDeal(gw: string, it: KiwiItinerary, nights: number): Deal {
     url: it.bookingUrl,
     bags: it.baggage ? `${it.baggage.cabinBag ? "cabin bag" : "personal item"}` : undefined,
     img: it.imageId,
+    ...split,
+    ...backTo,
   };
 }
 
@@ -227,6 +275,8 @@ export async function buildBoard(gatewayCode: string, opts: BuildOptions = {}): 
         const found = r.itineraries
           .map((it) => ({ it, nights: nightsOf(it) }))
           .filter((x): x is { it: KiwiItinerary; nights: number } => x.nights != null && x.nights >= MIN_NIGHTS && x.nights <= MAX_NIGHTS)
+          // In one city and home from another one far away (Chania in, Corfu out) is not a getaway.
+          .filter(({ it }) => sensibleTicket(it))
           .map(({ it, nights }) => toDeal(gw.code, it, nights))
           // Not home, and no domestic hop with a connection (a 7-hour way to cross one country).
           .filter((d) => d.dstCity !== own && !(d.country === gw.country && d.stops > 0));

@@ -23,10 +23,12 @@ train, Gdańsk to another city, then back to Brașov, Sibiu or Otopeni.
 - **State**: city code (`HOME` for the traveller's door), the day they arrived, depth, the
   cities and countries visited, the legs and stops so far, money, hours, worth, and `cost`
   (money plus hours at the tradeoff's euro per hour minus the worth taken off) plus a
-  heuristic for the way home: the cheapest one-way into a home airport the fare memory saw
-  from that city in the last day, else half of tonight's board return fare to it, else a
-  cheap one-way by distance (20 euro plus 0.04 per km). A state that cannot still pass
-  through every must city in the depth left never joins the frontier.
+  heuristic for the way home, in the units a loop is scored in (fare, plus hours with airport
+  time at the way home's rate, plus the stops penalty): the cheapest one-way into a home
+  airport the fare memory saw from that city in the last day, else half of tonight's board
+  return fare to it, else a cheap direct one-way by distance (20 euro plus 0.04 per km, half
+  an hour plus 800 km an hour in the air). A state that cannot still pass through every must
+  city in the depth left never joins the frontier.
 - **Edges from a state**:
   1. Flights: the fare memory first (every one-way fare anyone saw in the last day out of the
      city's airports in the hop window; its own read in `graph-walk.ts`, since `lib/db.ts`
@@ -72,6 +74,11 @@ train, Gdańsk to another city, then back to Brașov, Sibiu or Otopeni.
 - **Allowed countries** (Wild's region): stops keep to them from depth 2; the way in may land
   in a hub (60+ destinations) outside them, so a cheap far-away entry through a hub stays
   possible.
+- **Taste, diversity and the lookahead** (2026-10-10, night): see the section of that name
+  below. In short: an easy train or coach is charged at three quarters of the hour value, the
+  beam keeps one city per slot plus at least one overland and one flying branch, the
+  heuristic looks one free ground hop ahead, `style=unique` weights hidden gems up and the
+  biggest hubs down, and `avoid` takes country groups ("dach", "like:DE").
 - **Beam**: depth by depth. Every open state of a depth is sorted by cost plus heuristic and
   the best `beam` are expanded (default 3), depth up to `maxStops` (default 3). Depth by
   depth rather than one global queue, so a cheap deep branch cannot take the slots of a
@@ -112,6 +119,135 @@ callers asking the same thing share one walk (the second gets only the done line
 the breaker refused or tripped, the deadline or the caller cut, or whose searches all failed,
 is not kept. `logSearch("walk", ...)`,
 fire and forget, codes and numbers only.
+
+## Taste, diversity and the lookahead (2026-10-10, night)
+
+The owner, after the first walks: "it does not think like me: I would have done Brasov-Warsaw
+plane, then Warsaw-Gdansk train, then Gdansk to another city and that back to Brasov or Sibiu
+or Otopeni", and earlier "I need to find the cheapest thing but also more unique; I don't like
+Germany, I don't like countries like Germany".
+
+- **Ground hours** (`chargedHours`): a train, coach or ferry of up to 6 h counts its hours at
+  0.75 of the tradeoff's euro per hour (no security queue, centre to centre, usable time); a
+  flight keeps its 90 minutes of airport time; a drive or a longer overland day counts in full.
+  One rule for every edge (`offer`, the ground ranking, `child`, the ground way home), so a
+  ground hop and a flight to the same city are compared on the same terms. Real hours (the
+  loop's `hours`) are counted apart. A flight never lands in a country already visited, so
+  Warsaw to Gdansk is overland by construction; Vienna to Bratislava is where the two compete.
+- **The beam** (`pickBeam`) keeps its size, so the search count does not move, with these
+  rules: one state per city (three ways into Prague all ask the same way home); from depth 2,
+  at most `beam - 1` children of one parent (a slot this leaves empty goes to the next state
+  in order, so the beam never shrinks); the state with the cheapest known way to close
+  (`bestKnown`: a remembered way home inside its own window, one ground hop away, or a train or
+  coach to the door) is always walked, replacing its own costliest sibling when its parent has
+  its share; at least one state that arrived overland when the depth has one (flights are
+  nearly always cheaper on paper, so "plane, train, plane" was never walked unless asked for);
+  at least one that arrived by air when the depth has one (ground hops are known before any
+  search and flights are not). Each swap is a `considered` line.
+- **The lookahead** (`homeAfter`): a first stop is rarely the city the traveller flies home
+  from. Before a depth that can still go deeper is cut to the beam, its 30 cheapest states that
+  can still leave by date get the cheaper of their own way home and the best ground hop out of
+  them (fare and hours at the rate) plus that city's way home, counted only when that way home
+  is known: a remembered fare leaving inside the window the neighbour could fly home in, a
+  board, or a train or coach to the door. Never a distance guess: with guesses, a city ringed
+  by towns nobody has a fare for (Katowice, with Krakow, Rzeszow and Ostrava) outranked Naples,
+  whose coach to Rome and Rome's remembered way home are the cheapest loop the memory holds;
+  its children filled the next beam and nothing closed (the review's finding, 0 loops where the
+  morning engine closed 3). The next city's worth is left out of it: with the worth in it,
+  every city with towns around it looked cheap and the beam filled with coaches.
+- **No search left** (budget 0, spent, the breaker open, the caller gone): a way home nobody
+  knows can never be found, so a state whose way home rests on a distance guess, for itself and
+  for every ground neighbour, is ranked behind every state that can close (`BLIND_PENALTY`, on
+  the beam's order only; the early stop reads the honest priority). Boards do not count here:
+  half a return says a route exists, but only a remembered fare, a live search or the ground
+  graph closes a loop.
+- **`style=unique`** (also "hidden gems", "off the beaten path", "underrated", "smaller
+  cities", "small towns", "less crowded", "not touristy", "avoid the touristy places";
+  `wantsUnique`, read clause by clause like `wishTilt`, so "not unique, big cities" and "no
+  hidden gems" do not turn it on): a hidden gem as the globe marks it (`lib/gems.ts isGem` on
+  `fame.json` views and listings, World Heritage within 40 km, `city-places.json`; a city
+  served from 30 or more places with under 40,000 views is a bad fame row and never a gem,
+  which keeps Krakow, at 8,880 views in the file, out) +45 worth points, a city below hub size (under 60 destinations) +20, a country new to the traveller
+  +15 more, one of the 25 biggest hubs by `hubDegree` (Frankfurt, Paris, Amsterdam, Istanbul,
+  Munich, Moscow, London, Barcelona, Madrid, Rome, Dusseldorf, Brussels, Manchester and the big
+  American and Asian ones) -50, and the hub-size part of `worth` (up to 30) taken back. Points
+  are halved into euros like every bonus. The style is in the route's memo key already.
+- **Country groups in `avoid`** (`countryGroup`): "dach" or "germanic" (DE, AT, CH, LI),
+  "benelux" (BE, NL, LU), "nordics" or "scandinavia" (DK, NO, SE, FI, IS), "baltics" (EE, LV,
+  LT), "balkans" (AL, BA, BG, HR, XK, ME, MK, RS), "iberia" (ES, PT, AD), "british isles" (GB,
+  IE, IM, JE, GG), written as people write them ("the Balkans", "Benelux countries", "Baltic
+  states", "the Iberian peninsula"), and "like:DE", "like:Germany", "like Germany", "countries
+  like Germany", "places like Germany" or "somewhere like Germany" (the group the country is
+  in, else the country alone; "countries like Germany and Austria" joins the groups). The walk
+  names the group in `considered`. An unknown "like" target falls through to the plain place
+  lookup and its note.
+- **The itinerary** (`lib/itinerary.ts skeletonFromWalk(loop, origin)`): the loop's stops with
+  their nights and Kiwi photos, its legs in order (each flight with its booking link, times,
+  carrier and a note when the fare came from the memory or a board; each train, coach or ferry
+  with its minutes and an estimated fare; the drive to and from the home airport as the usual
+  access leg), titled in plain words ("Gdansk, Bydgoszcz and Warsaw"). Its `source` is
+  `"loop"` for now: a new `"walk"` member breaks the label map in `components/Itinerary.tsx`
+  (TS2741) and `lib/itinerary-server.ts` turns an unknown source into `"custom"`. Switch to
+  `"walk"` in the same change that adds it to both.
+- **The route** keeps an answer only when it lost fewer searches than it made (before: only
+  when not every search failed), and logs `unique` as a boolean.
+
+### Tested 2026-10-10, night (10 searches reached Kiwi)
+
+Through `GET /api/walk` in-process, a test wrapper refusing any Kiwi search past 10. The
+owner's case, `g=GHV,SBZ,OTP&home=RO&lat=45.657&lon=25.601&label=Brasov&from=2026-10-20&to=2026-10-30&minNights=5&maxNights=6&nightsPerStop=2&maxStops=3&beam=3&budget=10`,
+with the ground hours and the overland rule but before the lookahead and the city and air
+rules: 10 searches, 4 loops, every one with a coach leg: Naples → Rome 123 euro (Ghimbav to
+Naples 17, coach to Rome, Rome to Otopeni 74, drive home 13), Naples → Bari 185, Naples →
+Salerno → Bari 186, Naples → Salerno 188. The same URL again: one `done` line in 0 ms. With
+`style=unique&avoid=dach` in the same process the cap refused 7 of its searches: Naples →
+Tirana 138 and Naples → Bratislava 150, no German, Austrian or Swiss edge (Berlin, Munich,
+Vienna and the rest dropped out of the explore's usable list).
+
+After the lookahead and the beam rules, from the fare memory alone (`budget=0`, 0 searches):
+the owner's case walks Naples, Thessaloniki and Katowice, then Ostrava and Rzeszow overland
+from Katowice and Bratislava by air from Naples, and closes Naples → Bratislava → Warsaw 221
+and Naples → Bratislava 150 (the overland branches need live ways home it was not allowed).
+`style=unique&avoid=dach` walks Katowice, Naples, Thessaloniki, then Ostrava, Rzeszow and
+Tirana, and closes Naples → Tirana 138. `avoid=like:DE&mustInclude=Gdansk` closes Gdansk →
+Bydgoszcz → Warsaw 198 (drive, fly Otopeni to Gdansk 40, train, train, fly Warsaw to Otopeni
+95, drive): the owner's own shape. Repeats of each answered one `done` line in 1 ms. A
+nonsense `avoid` is a plain note. Not measured: the final engine with a live budget (see the
+review fixes below).
+
+### Review fixes 2026-10-10, late night (6 searches reached Kiwi)
+
+The review found the lookahead above a regression: on the same fare memory, at `budget=0`, the
+morning engine closed Naples → Rome 123, Naples → Tirana 137 and Naples → Bratislava 150; this
+one closed nothing, for the owner's case, for `nightsPerStop=2-3` and for
+`style=unique&avoid=DE,AT,CH`. Reproduced with both engines side by side on one memory. Fixed by
+the known-only lookahead, the per-parent cap, the no-search ranking, `bestKnown`, and a heuristic
+in score units (the sections above). Measured after the fix, all on the same memory:
+
+- Owner's case at `budget=0` (GET /api/walk in-process, 0 searches): 5 loops, Naples → Rome 123
+  (fly Ghimbav to Naples 17, coach to Rome 19, Ciampino to Otopeni 74, drive 13), Naples → Rome
+  → Tirana 178, Naples → Rome → Malta 190, Budapest → Graz → Bratislava 170, Budapest → Kerkyra
+  251. The same URL again: one `done` line in 1 ms.
+- `style=unique&avoid=like:DE`, `budget=0`: Naples → Tirana 137, Gdansk → Bydgoszcz → Warsaw
+  198 (plane, train, train, plane), Naples → Foggia → Bari 161.
+- `avoid=like:DE&mustInclude=Gdansk`, `budget=0`: Gdansk → Bratislava → Budapest 193 (score
+  151), Poznan → Gdansk 180, Gdansk → Prague → Bratislava 199; `bestKnown` took Bydgoszcz's
+  slot, so the plane, train, train shape of the night run is not among them at beam 3.
+- The owner's case at `budget=6` with every search refused by the test (searches left, so the
+  board-based lookahead and the guesses rank): Naples → Rome 123 kept by `bestKnown` ("Rome kept
+  in the beam in place of Salerno"), then Naples → Bratislava → Budapest 154 and three more.
+- Live, `budget=6`, 6 searches reached Kiwi, on the engine before `bestKnown` and the score-unit
+  heuristic: 4 loops, best Naples → Bratislava 150 and Naples → Bratislava → Budapest 154;
+  Rome was not walked (Katowice → Ostrava took a slot and its live way home came back at 242).
+  That run is why `bestKnown` exists. The final engine with live searches was not run: the
+  fix round's cap was 6 searches.
+- Words: "Benelux countries", "countries like Germany and Austria", "places like Germany",
+  "balkan countries", "scandinavian countries", "iberian peninsula" each resolve to a group;
+  `wantsUnique` is false for "not unique, big cities please" and "no hidden gems", true for
+  "small towns", "less crowded", "not touristy" and "avoid the touristy places".
+- A walk whose searches all fail (February, nothing remembered, 3 refused) says "3 of 3 live
+  searches failed and nothing remembered closes a loop for these dates; try again in a few
+  minutes", and the count line reads "3 searches through the gate: 0 answered, 3 failed".
 
 ## Where it is used (to wire)
 

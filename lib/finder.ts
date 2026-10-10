@@ -12,7 +12,7 @@
 import citiesJson from "@/public/data/cities.json";
 import countriesJson from "@/public/data/countries.json";
 import { countryAllowed } from "./been";
-import { countryLabel, hubDegree, targetsFor, resolveGateway, toDeal, trimDeals } from "./board";
+import { countryLabel, hubDegree, targetsFor, resolveGateway, sensibleTicket, toDeal, trimDeals } from "./board";
 import { kiwiDate, nightsOf, searchFlight, type KiwiItinerary } from "./kiwi";
 import { airportsByGround } from "./route-finder";
 import type { City, CountryInfo, Deal } from "./types";
@@ -224,6 +224,8 @@ export async function findDeals(p: FinderParams): Promise<FinderResult> {
       if (!fits(out, back, nightsOf(it))) continue;
       if (p.direct && (it.outbound.stops > 0 || (it.inbound?.stops ?? 0) > 0)) continue;
       if (p.maxHours && hoursOf(it) > p.maxHours) continue;
+      // Kiwi's "return" into one city and home from a far one (Chania in, Corfu out) is no getaway.
+      if (!sensibleTicket(it)) continue;
       const d = toDeal(it.outbound.from, it, nightsOf(it)!);
       if (!domesticOk && d.country === home) continue;
       // An "anywhere" search may land in a visited country: the deal is dropped, the

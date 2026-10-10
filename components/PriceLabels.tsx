@@ -8,8 +8,12 @@ import { haversineKm } from "@/lib/geo";
 // and placed greedily (hot ones first, then in list order) so that tags never overlap. They
 // follow the map on every frame through the map's own events, without touching React state.
 // Kinds: a price on a deal city, a numbered stop of a trip, a region to pick, a long-stay base,
-// an event worth flying for (the Events layer).
-export type LabelKind = "price" | "stop" | "region" | "base" | "event";
+// an event worth flying for (the Events layer), a city the graph walk is thinking about
+// ("walk": its name and the money so far) and the price of an edge it just looked at
+// ("walkedge": pops in and fades by itself, see globals.css; the globe drops it after a few
+// seconds). A tag animates in when it mounts (a new deal arriving from a live search); the
+// animation runs on the CSS scale and filter properties, never on transform, which places it.
+export type LabelKind = "price" | "stop" | "region" | "base" | "event" | "walk" | "walkedge";
 export type LabelItem = { key: string; lon: number; lat: number; text: string; hot?: boolean; cheap?: boolean; kind?: LabelKind; sub?: string };
 
 type Props = {

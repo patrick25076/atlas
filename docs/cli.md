@@ -27,6 +27,7 @@ the research behind an itinerary). Nothing else is needed: Kiwi has no key.
 | `to Lisbon 14 Nov 4 nights`, `OTP to LIS 2 weeks`, `Brasov to Lisbon 20 Dec to 3 Jan` | the same, from where you are, on a day, for a stay | up to 12 |
 | `events in february`, `carnival`, `jazz festivals in march`, `what's on in Lisbon in november`, `Christmas in Vienna` | events worth the trip (`events_worth_travelling_for`), each with the cheapest fare from your airports; a named place also lists the curated events near it | up to 4 (0 with `--live-cap 0`) |
 | `lisbon in november`, `weekend in Rome`, `getaways under 3h this weekend`, `anywhere warm in december` | getaways: a live period search (`find_getaways`) when the cap allows 20 searches, else tonight's boards (`cheapest_deals`) | 0 or about 20 |
+| `loop from Brasov 20 to 30 Oct 5 to 6 nights 2 nights a stop`, `3 cities in 6 days`, `Brasov to Warsaw then train then home`, `cheap unique loop next month not germany`, `/loop Brasov 6 days` | a loop of the cheapest hops (`walk_trips`, the graph walk of lib/graph-walk.ts): one "anywhere" search from home, the cheapest next hops by plane, train or coach from each stop, the cheapest way home; printed as a tree of legs and stays | at most 12 (the cap); 0 still walks the fare memory |
 | `wild sea 21`, `/wild southeast asia 3 weeks`, `Balkans loop 10 nights` | a wild loop (`wild_trip`): served from the store; a new build only with `--live-cap 60` | 0 or about 60 |
 | `stay thailand 2 months`, `2 months in Bali` | long-stay bases (`long_stay`): live only with `--live-cap 16` | 0 or about 16 |
 | `place Porto`, `Porto` | facts, the guide's sights, the best months, events worth the trip there | 0 |
@@ -34,9 +35,41 @@ the research behind an itinerary). Nothing else is needed: Kiwi has no key.
 | `ask is Porto nice in October` | one turn with the agent, the same prompt and tools as the chat; prints the answer and the tools it used | what the agent spends, under the cap |
 | `help` | the list of examples | 0 |
 
+A loop is the graph walk unless a far region is named or the words say weeks overland
+("Balkans loop 10 nights", "/loop sea 21", "loop through Vietnam 3 weeks" stay Wild).
+"Through", "across", "around" or "in" a European country for less than two weeks is a walk
+kept to that country (`loop through Poland 6 days`). What a walk line reads: `from X`
+(where it starts; default where you are), a window (`20 to 30 Oct`, `next month`), the
+length (`5 to 6 nights`; `6 days` is 5 to 6 nights, `3 cities in 6 days` too), nights a stop
+(`2 nights a stop`, `2-3 nights each`), the number of cities (`3 cities`, `4 stops`), cities
+to pass through, places to avoid and the style.
+
+Cities to pass through come from a chain written out (`Brasov to Warsaw by plane, Warsaw to
+Gdansk by train, then another city and back to Brasov or Bucharest`), from A-B pairs
+(`Brasov-Warsaw plane, then Warsaw-Gdansk train`, with or without spaces round the hyphen;
+`Cluj-Napoca` stays one place), from `come back from X`, `with X`, `via X`, and from names
+joined by `and` (`multi city trip Warsaw and Gdansk`). The first place of a chain is the
+start only when the chain begins with a place: `fly to Warsaw then train to Gdansk` and
+`Warsaw by plane then train to Gdansk` start where you are and pass through both, since a
+loop never stops in its own start country. `back to Brasov or Sibiu` names the ways home,
+which are your airports already.
+
+Places to avoid: `not Germany`, `no Austria or Switzerland`, `not via Munich` (Munich),
+`nothing like Germany` and `countries like Germany` as `like:DE`, and the group words
+`dach`, `germanic`, `benelux`, `nordics`, `baltics`, `balkans`, `iberia` and `british isles`
+(`the dach countries` works too). `not by plane` is a way to travel, not a place, and is
+left out. The style: `unique`, `hidden gems`, `not touristy`, `off the beaten track` all
+mean style unique.
+
+In the browser the shell runs a walk line through `walkFromCommand` in components/Globe.tsx,
+which dispatches `atlas:walk` with the /api/walk query. `walkCommandQuery` in
+lib/chat-widgets.ts is the same rule as a pure function, and the one `pnpm check:tools`
+tests; the shell builds its query on its own for now, so a change to one is not a change to
+the other.
+
 A plain question ("is Porto nice in October") is handed to the agent; so is anything the
 parser does not read as one of the shapes above. A leading verb (`route`, `wild`, `stay`,
-`place`, `getaways`) is read as the slash command of the same name.
+`place`, `getaways`, `loop`, `walk`) is read as the slash command of the same name.
 
 Dates: `14 Nov`, `Nov 14`, `14/11`, `2026-11-14`, `today`, `tomorrow`, `next friday`,
 `this weekend`, `next week`, `next month`, `in 2 weeks`, a month name (`november`, `early
@@ -73,6 +106,22 @@ $ pnpm atlas Brasov to Bucharest
      train Brasov to Bucharest, 2.5 h, €17 (estimate)
 considered: ... 140 km apart: ground only, no flight searched
 Kiwi searches this run: 0 (cap 12)
+
+$ pnpm atlas loop from Brasov 20 to 30 Oct 5 to 6 nights 2 nights a stop --live-cap 3
+> A loop from Brasov, 20 to 30 Oct, 5 to 6 nights, 2 nights a stop
+  ... Walking from Brașov (GHV, SBZ, OTP), 2026-10-20 to 2026-10-30, 5 to 6 nights, 2 a stop, up to 3 stops, beam 2, budget 3.
+  ... Done: 2 loops, 3 live searches, 7 states expanded.
+1. Naples → Rome  €123  12 h of travel  2026-10-21 to 2026-10-26, 5 nights
+   Brașov, plane, Naples, coach, Rome, plane, Bucharest
+   ├─ fly  Brasov to Naples, 2026-10-21 12:55, 2.2 h, €17, Wizz Air Malta  live
+   ├─   book: https://kiwi.com/u/...
+   ├─ stay  Naples, IT, 2 nights from 2026-10-21
+   ├─ coach  Naples to Rome, 2026-10-23, 2.6 h, €19 (estimate)  ground
+   ├─ stay  Rome, IT, 3 nights from 2026-10-23
+   ├─ fly  Rome to Bucharest, 2026-10-26, 2.1 h, €74, Ryanair  memory
+   └─ drive  Bucharest to Brașov, 2026-10-26, 2.2 h, €13 (estimate)  ground
+   why: coach Naples to Rome 2.6 h instead of a flight
+Kiwi searches this run: 3 (cap 3)
 
 $ pnpm atlas events february --live-cap 0
 > Events worth the trip, February 2027

@@ -317,6 +317,96 @@ not tabs. The chat's part of that:
 - **The command line** (lib/command.ts) is pure and runs in the browser and in the terminal
   (`scripts/atlas.ts`, docs/cli.md).
 
+## The graph walk in the chat, the command line and the terminal (added 2026-10-10, evening)
+
+The owner, after a chat priced seven legs one by one with `reprice_route` (about forty
+searches): "it does not think like me: I would have done Brasov-Warsaw plane, then
+Warsaw-Gdansk train, then Gdansk to another city and that back to Brasov or Sibiu or
+Otopeni; how I do it manually is use the Skyscanner explore from that location".
+
+- **`walk_trips`** (lib/agent-tools.ts) runs `walkTrips` (lib/graph-walk.ts) once: the
+  traveller's point, airports and home from the context (or `origin`, a named city with its
+  own nearest airports), the window read with `parseDay` and defaulted by `walkWindow`
+  (lib/chat-widgets.ts, shared with the command line: a week out, 5 to 6 nights, a week of
+  slack, each assumption a `corrected` line), `nightsPerStop` (a number, a range with
+  `nightsPerStopMax`, or "2-3"), `maxStops` (3), `beam` (2, the owner's case),
+  `mustInclude`, `avoid` (codes, names, `like:DE`, group words), `prefer`, `countries`,
+  `style` ("unique"), the Been filter as everywhere. Budget: twelve searches at most, never
+  more than the turn has left; the engine's clock is cut to the turn. The answer: the loops
+  (the route as a line, "Brasov, plane, Warsaw, train, Gdansk, plane, Bucharest", stops with
+  nights, legs with kind, price, minutes, source and the booking url, total, hours, why),
+  `considered`, `searched` (what left the process now), `source`, plus `raw` (the
+  WalkResult) and `params` (the /api/walk query) for the browser only (`toModelOutput`
+  strips both).
+- **It streams.** `execute` is an async generator: every progress line and every closed loop
+  of the engine is yielded as a preliminary output (`{ running: true, progress, loops, edges,
+  searched }`), which the AI SDK sends to the browser as a preliminary tool output; the last
+  yield is the answer. The chat panel shows the latest line on the tool's chip with the
+  seconds, and treats a preliminary part as still running (a thread stopped mid-walk is
+  settled to "stopped before it finished", never replayed to the model as an answer). The
+  terminal and the harness drain the generator (`drain`) and print the lines.
+- **A spent budget is never a refusal.** `walk_trips` and `cheapest_way` with the turn's
+  budget spent run their engine at budget 0 (the fare memory, the boards, the ground graph)
+  and say `this turn's search budget is spent ...; live prices were not searched`; with
+  live prices off (breaker, daily budget) the note is the rate-limit sentence instead.
+- **The prompt**: any trip with more than one city, a loop, "go from X and come back from
+  Y", "plane then train", "cheapest loop", or a chain the traveller writes out is ONE
+  walk_trips call, never legs priced one by one; "not Germany" is `avoid: [DE]`, "countries
+  like Germany" is `like:DE`; "unique", "not touristy", "hidden gems" is style unique; the
+  answer explains the best loop in his terms (the cheapest edge out of each stop, where a
+  train or coach beat a flight, nights per stop, a booking link per flight). wild_trip keeps
+  far regions and loops of weeks; reprice_route keeps one named leg.
+- **The chat panel** draws a walk the moment it arrives (`atlas:walk-result` with the raw
+  result and the query), shows each loop as a card (the route as hops with icons, the total,
+  nights per stop, why lines, the legs folded with a booking link per flight), "Show on the
+  map" (`atlas:walk-result` with that loop first; a restored thread without the raw result
+  sends `atlas:walk` with the stored query at budget 0, see the review fixes below) and "Make an
+  itinerary" (`skeletonFromWalk`, `atlas:itinerary`; restored: asked of the agent).
+- **The command line** (lib/command.ts) has a `walk` kind: `{ kind: "walk"; origin?; from?;
+  to?; minNights?; maxNights?; nightsPerStop?: number | [number, number]; maxStops?;
+  mustInclude?: string[]; style?; avoid?: string[]; label }`. A far region or weeks overland
+  stays Wild. The terminal runs it through walk_trips and prints a tree (docs/cli.md).
+- **CHAT_TURN_SEARCHES** (env, optional) lowers the searches one chat turn may spend.
+
+Tested 2026-10-10 (10 Kiwi searches in all): the harness's command (19 walk lines among
+them), dispatch and walk sections, 124 checks, 0 failed after one fix of its own regex; the
+budget-0 walk sent nothing and closed Naples → Tirana from the fare memory; one live walk at
+a cap of 2. `atlas loop from Brasov 20 to 30 Oct 5 to 6 nights 2 nights a stop --live-cap 3`
+closed Naples → Rome at 123 euro (fly GHV to NAP 17, coach to Rome, FCO to OTP 74) with 3
+searches. The owner's sentence through `atlas ask --live-cap 5` (the chat's prompt and tools)
+called walk_trips once (and price_insight, no search) and answered Gdańsk → Warsaw → Tirana
+at about 189 euro. Not done: the same sentence through `curl POST /api/chat` (the only dev
+server running belonged to another session and has no turn cap, so a walk there could spend
+twelve more searches, past the test's limit of ten).
+
+### Review fixes (2026-10-10, night)
+
+- **The command line reads the owner's chain.** An A-B pair is two places (`Brasov-Warsaw
+  plane`, `Brasov - Warsaw`; `Cluj-Napoca` stays one), so his sentence is a loop from Brasov
+  through Warsaw and Gdansk. A chain that begins with a hop (`fly to Warsaw then train to
+  Gdansk`, `Warsaw by plane then ...`) has no origin: it starts where the traveller is, since
+  a loop that started in Warsaw could never stop in Poland. `come back from X`, `with X`,
+  `via X` and `X and Y` are stops; `back to Brasov or Sibiu` is the way home. `not by plane`
+  is no avoid entry, `not via Munich` is Munich, `the dach countries` is `dach`, and
+  `balkans`, `iberia`, `germanic`, `british isles` are group words too. `loop through Poland
+  6 days` is a walk with `countries: ["Poland"]` (a new optional field of the walk command);
+  two weeks or more, or a country outside Europe, stays Wild.
+- **walk_trips keeps the traveller's home country for a named start.** Before, a start in
+  Warsaw made Poland the home country and banned Gdansk. A city to pass through that lies in
+  the home country now gets a plain note before any search; the start itself is dropped from
+  `mustInclude`. With the turn's budget spent, a request the engine refuses (nights that do
+  not fit, an unknown place) shows the engine's reason, not "ask again".
+- **A chat walk is drawn while it runs.** Each preliminary output carries the walk's newest
+  nodes, edges and loops (`live: { at, lines }`, each batch sent twice so a render that folds
+  two updates loses nothing) and the query; ChatPanel sends the ones not yet sent as
+  `atlas:walk-live { id, params?, lines }` (lib/chat-widgets.ts). The globe has to listen for
+  it (the shell's part, in the handoff): until it does, the chat walk appears when it ends.
+- **"Show on the map" on a restored thread** reruns the walk at budget 0 (no memo exists for
+  it: the chat's walk never went through /api/walk) and rests once the window's first day
+  has passed.
+- **walkWindow** writes its notes from the window it really searched; an end in the past is
+  dropped, not swapped.
+
 ## What cannot be guaranteed
 
 - **Kiwi's throttle.** The public search has no key, no SLA and no published terms. After a

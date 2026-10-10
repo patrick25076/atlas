@@ -11,7 +11,8 @@ const isAbort = (err: unknown) => (err as Error | undefined)?.name === "AbortErr
 export async function fetchBoard(
   gateway: string,
   month: string | null,
-  on: { deals: (deals: Deal[]) => void; done: (meta: BoardMeta, source: "stored" | "live") => void; error: (note: string) => void },
+  // live: the deals came from a live search line by line (the globe draws each one arriving), not a stored board read whole.
+  on: { deals: (deals: Deal[], live: boolean) => void; done: (meta: BoardMeta, source: "stored" | "live") => void; error: (note: string) => void },
   signal?: AbortSignal,
 ): Promise<void> {
   const url = `/api/board?from=${gateway}${month ? `&month=${month}` : ""}`;
@@ -35,7 +36,7 @@ export async function fetchBoard(
       if (!isAbort(err)) on.error("the board could not be read");
       return;
     }
-    on.deals(board.deals);
+    on.deals(board.deals, false);
     const { deals: _deals, ...meta } = board;
     void _deals;
     on.done(meta, "stored");
@@ -66,7 +67,7 @@ export async function fetchBoard(
         } catch {
           continue;
         }
-        if (msg.deals) on.deals(msg.deals);
+        if (msg.deals) on.deals(msg.deals, true);
         if (msg.done) {
           finished = true;
           on.done(msg.done, "live");

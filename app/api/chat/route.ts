@@ -1,6 +1,6 @@
 import { convertToModelMessages, hasToolCall, stepCountIs, streamText, type UIMessage } from "ai";
 import { createAmazonBedrock } from "@ai-sdk/amazon-bedrock";
-import { atlasTools, chatContext, chatSystem, rememberOutput, type AgentContext } from "@/lib/agent-tools";
+import { atlasTools, chatContext, chatSystem, rememberOutput, TURN_SEARCH_BUDGET, type AgentContext } from "@/lib/agent-tools";
 import { TtlLru } from "@/lib/memo";
 
 // POST /api/chat { messages: UIMessage[], context: { origin, gateways, home, month, today, been } }
@@ -9,6 +9,8 @@ import { TtlLru } from "@/lib/memo";
 // The loop stops after ten steps, or as soon as the agent asks the traveller a question with
 // the ask tool: the widget needs the traveller's answer before anything else makes sense.
 // One turn may spend TURN_SEARCH_BUDGET Kiwi searches in all (lib/agent-tools.ts counts them).
+// walk_trips (the graph walk) streams its progress lines to the browser as preliminary tool
+// outputs; only its last answer reaches the model, without the raw result.
 export const maxDuration = 300;
 /** The browser posts the whole thread; past this many bytes it is not a thread but a payload. */
 const MAX_BODY_BYTES = 512 * 1024;
@@ -75,6 +77,11 @@ export async function POST(request: Request) {
   // The context (origin, airports, Been list, the traveller's day) and the system prompt are
   // shared with the terminal CLI (scripts/atlas.ts): lib/agent-tools.ts builds both.
   const ctx: AgentContext = chatContext(body.context as Record<string, unknown> | undefined);
+  // CHAT_TURN_SEARCHES lowers the Kiwi searches one turn may spend (never raises it past
+  // TURN_SEARCH_BUDGET): a knob for a test server or a day Kiwi is touchy. Every live tool,
+  // walk_trips included, spends from this one budget, and a spent turn still answers from memory.
+  const turnCap = Number(process.env.CHAT_TURN_SEARCHES);
+  if (process.env.CHAT_TURN_SEARCHES?.trim() && Number.isFinite(turnCap) && turnCap >= 0) ctx.budget = { used: 0, max: Math.min(TURN_SEARCH_BUDGET, Math.round(turnCap)) };
   // The thread's latest route, deals and wild trip, replayed from the history before the
   // raw payloads are slimmed away, so "make it an itinerary" in a later turn plans what the
   // traveller saw (make_itinerary's from: last_route, last_deal, last_wild).

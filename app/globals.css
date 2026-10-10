@@ -3205,3 +3205,193 @@ textarea.search.wishes {
     height: 104px;
   }
 }
+
+/* ---------- the graph walk on the globe and in its card ---------- */
+/* A tag pops in when it mounts: a deal a live search just found, a city the walk reached.
+   The animation runs on scale and filter, never on transform, which PriceLabels uses to place the tag. */
+@keyframes tagpop {
+  from {
+    scale: 0.55;
+  }
+  65% {
+    scale: 1.08;
+  }
+  to {
+    scale: 1;
+  }
+}
+/* An edge's price: pops in, holds, fades; the globe drops it from the list a moment later. */
+@keyframes tagfleet {
+  0% {
+    scale: 0.55;
+    filter: opacity(0);
+  }
+  10% {
+    scale: 1.06;
+    filter: opacity(1);
+  }
+  18% {
+    scale: 1;
+  }
+  70% {
+    filter: opacity(1);
+  }
+  100% {
+    scale: 0.9;
+    filter: opacity(0);
+  }
+}
+.tag.price,
+.tag.walk {
+  animation: tagpop 0.32s ease-out;
+}
+.tag.walk {
+  height: auto;
+  padding: 3px 9px 2px;
+  line-height: 15px;
+  font-size: 12px;
+  border-color: rgba(124, 196, 255, 0.5);
+}
+.tag.walk small {
+  margin: 0 0 2px;
+  color: var(--mint);
+}
+.tag.walkedge {
+  height: 19px;
+  padding: 0 6px;
+  font-size: 11px;
+  line-height: 17px;
+  font-weight: 650;
+  color: var(--sky);
+  border-color: rgba(124, 196, 255, 0.3);
+  background: rgba(9, 12, 22, 0.78);
+  pointer-events: none;
+  animation: tagfleet 3.5s ease-out forwards;
+}
+.tag.walkedge.cheap {
+  color: var(--mint);
+  border-color: rgba(111, 240, 196, 0.35);
+}
+.walkcard .mapcardbody {
+  gap: 10px;
+}
+.walklines p {
+  font-size: 13px;
+  line-height: 1.4;
+}
+.walkloops {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.walkloop {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 100%;
+  padding: 9px 11px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--ink);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+.walkloop:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+.walkloop.on {
+  background: rgba(111, 240, 196, 0.08);
+  border-color: rgba(111, 240, 196, 0.45);
+}
+.walkloop:focus-visible {
+  outline: 2px solid var(--sky);
+  outline-offset: 2px;
+}
+.walkloophead {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+}
+.walktotal {
+  flex: 0 0 auto;
+  font-size: 16px;
+  font-weight: 760;
+  font-variant-numeric: tabular-nums;
+  color: var(--mint);
+}
+.walkline {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 6px;
+  min-width: 0;
+  font-size: 13.5px;
+  font-weight: 600;
+  line-height: 1.35;
+}
+.walkhop {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.legicon {
+  flex: 0 0 auto;
+  color: var(--ink-3);
+}
+.legicon.fly {
+  color: var(--sky);
+}
+.legicon.train,
+.legicon.coach,
+.legicon.ferry {
+  color: var(--amber);
+}
+.walkloop .sub {
+  font-size: 12px;
+  color: var(--ink-3);
+}
+.walkwhy {
+  margin: 2px 0 0;
+  padding-left: 16px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--ink-2);
+}
+.smartloop {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border-radius: 16px;
+  border: 1px solid rgba(111, 240, 196, 0.22);
+  background: linear-gradient(135deg, rgba(111, 240, 196, 0.06), rgba(124, 196, 255, 0.04));
+}
+.smartloop h2 {
+  margin: 0;
+}
+@media (prefers-reduced-motion: reduce) {
+  .tag.price,
+  .tag.walk,
+  .tag.walkedge {
+    animation: none;
+  }
+}
+/* On a phone the walk's card stays short, so the globe above the sheet shows the walk thinking; the rows scroll inside it. */
+@media (max-width: 720px) {
+  .walkcard .mapcardbody {
+    max-height: 22vh;
+  }
+  .walkcard .walklines p:not(:last-child) {
+    display: none;
+  }
+}
+
+/* a deal that lands in one city and flies home from another: say so on the card */
+.card .splitnote {
+  color: var(--mint);
+}
+

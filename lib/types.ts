@@ -54,9 +54,19 @@ export type Deal = {
   bags?: string;
   /** Kiwi destination photo id: https://images.kiwi.com/photos/600x600/{img}.jpg */
   img?: string;
-  /** Open-jaw: the flight home lands at this airport, booked separately (url2). */
+  /** Open-jaw: the flight home lands at this airport (on the same ticket, or booked separately when url2 is set). */
   backTo?: string;
   url2?: string;
+  /**
+   * The ticket flies home from another city than the one it lands in (Kiwi sells these as one
+   * "return"): the airport and city the traveller leaves from, and the trip between the two by
+   * road, train, coach or ferry, estimated. Only kept when that trip is short; Chania in and
+   * Corfu out, two islands 450 km apart, is not a getaway and never becomes a deal.
+   */
+  backFrom?: string;
+  backFromCity?: string;
+  gapKm?: number;
+  gapMin?: number;
   /** A hidden-city one-way: the ticket continues past this city; one way, cabin bag only, against airline rules. */
   trick?: string;
 };

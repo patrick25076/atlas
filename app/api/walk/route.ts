@@ -1,6 +1,6 @@
 import { parseExclude } from "@/lib/been";
 import { logSearch } from "@/lib/db";
-import { walkTrips, type WalkEvent, type WalkResult } from "@/lib/graph-walk";
+import { walkTrips, wantsUnique, type WalkEvent, type WalkResult } from "@/lib/graph-walk";
 import { InFlight, keepAlive, TtlLru } from "@/lib/memo";
 import { bad, iataList, intIn, iso2, isoDay, latLon, oneOf } from "@/lib/params";
 import { parseCities, parseCountries, parseNightsRange } from "@/lib/wild";
@@ -8,6 +8,10 @@ import { parseCities, parseCountries, parseNightsRange } from "@/lib/wild";
 // GET /api/walk?g=GHV,SBZ,OTP&home=RO&lat=45.657&lon=25.601&label=Brasov&from=2026-10-20&to=2026-10-30
 //     &minNights=5&maxNights=6[&nightsPerStop=2|2-3][&maxStops=3][&beam=2][&budget=12][&ground=330]
 //     [&tradeoff=balanced][&exclude=HU][&mustInclude=Gdansk][&avoid=DE,Berlin][&prefer=PL][&countries=PL,CZ][&style=street+food]
+// style=unique (or "hidden gems", "off the beaten path") weights hidden gems and smaller cities up and the 25 biggest
+// hubs down ("not unique" or "no hidden gems" does not); avoid also takes a group ("dach", "germanic", "nordics",
+// "benelux countries", "baltic states", "the balkans", "iberian peninsula", "british isles") or "like:DE",
+// "like:Germany", "places like Germany", which avoids every country of the group DE is in ("countries like Germany").
 // The graph walk (lib/graph-walk.ts): loops from the traveller's door, out through a home
 // airport, a few cities by air or by train, and home, inside [from, to] with minNights to
 // maxNights away. Streamed as NDJSON, one object a line: {"node":..} when a state is
@@ -19,8 +23,8 @@ import { parseCities, parseCountries, parseNightsRange } from "@/lib/wild";
 // arrives inside maxDuration. An answer is kept for an hour per normalised question and
 // served as one {"done"} line; two visitors asking the same thing share one walk (the second
 // gets the done line only). A partial walk (the breaker refused or tripped, the deadline or the
-// caller cut it) or one whose searches all failed is not
-// kept, so the next ask gets a fresh try.
+// caller cut it) or one that lost as many searches as it made is not kept, so the next ask gets
+// a fresh try.
 export const maxDuration = 120;
 
 const MEMO_TTL_MS = 60 * 60_000;
@@ -120,10 +124,11 @@ export async function GET(request: Request) {
         );
         if (!mine) say({ progress: "The same walk is running for someone else; waiting for it." });
         const result = await promise;
-        // A walk the breaker refused or that lost every search is a partial answer and must not stand for an hour.
-        if (mine && !result.partial && !(result.failed > 0 && result.searched === 0)) memo.set(key, result);
+        // A walk the breaker refused, or that lost as many searches as it made, is a weak answer and must not stand
+        // for an hour: the next ask gets a fresh try (and the fare memory keeps what this one did find).
+        if (mine && !result.partial && !(result.failed > 0 && result.failed >= result.searched)) memo.set(key, result);
         // The usage log, never awaited and never personal: codes and numbers, no label or coordinates.
-        if (mine) void logSearch("walk", { g: gateways, home, from, to, minNights, maxNights, nps: nightsPerStop ?? [2, 2], maxStops, beam, budget, ground: maxGroundMin, tradeoff, excluded: exclude.length, must: must.codes.length, avoid: avoid.length, countries: countries.codes.length, searched: result.searched, failed: result.failed, fromMemory: result.fromMemory, expanded: result.expanded, loops: result.loops.length }, result.loops.length, Date.now() - t0).catch(() => null);
+        if (mine) void logSearch("walk", { g: gateways, home, from, to, minNights, maxNights, nps: nightsPerStop ?? [2, 2], maxStops, beam, budget, ground: maxGroundMin, tradeoff, excluded: exclude.length, must: must.codes.length, avoid: avoid.length, countries: countries.codes.length, unique: wantsUnique(style), searched: result.searched, failed: result.failed, fromMemory: result.fromMemory, expanded: result.expanded, loops: result.loops.length }, result.loops.length, Date.now() - t0).catch(() => null);
         say({ done: result });
       } catch (err) {
         say({ error: err instanceof Error ? err.message : "the walk failed" });

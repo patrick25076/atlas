@@ -10,18 +10,23 @@
 // drawn at once (atlas:route-result, no second search), any route option, deal, wild trip or
 // event can become an itinerary (atlas:itinerary with a skeleton from lib/itinerary.ts), a
 // written itinerary opens in the itinerary view, and an event can be shown on the map
-// (atlas:command) or reached (atlas:route). The event details are built in lib/chat-widgets.ts.
+// (atlas:command) or reached (atlas:route). A graph walk (walk_trips) is drawn while it runs
+// (its nodes, edges and loops go on as atlas:walk-live) and again the moment it arrives
+// (atlas:walk-result); its loops are cards with the route as a line of hops, and its progress
+// lines show on the tool's chip while it runs (preliminary tool outputs). The event details
+// are built in lib/chat-widgets.ts.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport, type UIMessage } from "ai";
 import type { Deal } from "@/lib/types";
 import type { WildTrip } from "@/lib/wild";
 import type { RouteResult } from "@/lib/route-finder";
-import { skeletonFromDeal, skeletonFromEvent, skeletonFromRoute, skeletonFromWild, type BudgetTier, type Itinerary, type ItinPlace, type Pace, type Skeleton } from "@/lib/itinerary";
+import type { WalkResult } from "@/lib/graph-walk";
+import { skeletonFromDeal, skeletonFromEvent, skeletonFromRoute, skeletonFromWalk, skeletonFromWild, type BudgetTier, type Itinerary, type ItinPlace, type Pace, type Skeleton } from "@/lib/itinerary";
 import { countryName, dateRange, monthLabel, monthOptions } from "@/lib/format";
 import { formatDuration } from "@/lib/geo";
 import { WILD_REGIONS } from "@/lib/ui-types";
-import { FOLLOWUPS, ISO_DAY_RE, LOCAL_DAY, LONG_TOOLS, NIGHT_OPTIONS, ROUTE_KIND_LABEL, TOOL_LABEL, addDays, dispatchAtlas, eventCommand, eventDays, eventRoute, eventTripDays, quickDateRanges, routeDetail, routeResultDetail, toolProgress, widgetAnswer, type ChatEvent, type PersonRow, type WidgetKind, type WidgetSpec } from "@/lib/chat-widgets";
+import { FOLLOWUPS, ISO_DAY_RE, LOCAL_DAY, LONG_TOOLS, NIGHT_OPTIONS, ROUTE_KIND_LABEL, TOOL_LABEL, addDays, dispatchAtlas, eventCommand, eventDays, eventRoute, eventTripDays, quickDateRanges, routeDetail, routeResultDetail, toolProgress, walkResultDetail, widgetAnswer, type ChatEvent, type PersonRow, type WalkLiveLine, type WalkQuery, type WidgetKind, type WidgetSpec } from "@/lib/chat-widgets";
 import s from "./ChatPanel.module.css";
 
 export type ChatContext = { origin?: { lat: number; lon: number; label: string }; gateways: string[]; home: string; month?: string; today?: string; been?: { countries: string[]; newOnly: boolean } };
@@ -37,7 +42,7 @@ type Props = {
 
 type Thread = { id: string; title: string; updated: number; messages: UIMessage[] };
 type Store = { active: string; threads: Thread[] };
-type ToolPart = { type: string; toolCallId?: string; state?: string; input?: unknown; output?: unknown; errorText?: string };
+type ToolPart = { type: string; toolCallId?: string; state?: string; input?: unknown; output?: unknown; errorText?: string; preliminary?: boolean };
 type ScanRow = { month: string; cheapest: number | null; out?: string; back?: string; nights?: number; perNight?: number; stops?: number; airline?: string; from?: string; homeFrom?: string; url?: string; url2?: string; failed?: boolean };
 type ScanOut = { to: string; nights: string; oneWay: boolean; searched: number; failed?: number; note?: string; best: ScanRow | null; months: ScanRow[]; openJaw: ScanRow[]; raw?: Deal[] };
 type BaseOut = { base: string; country: string; flightIn: string; flightOut: string; rentPerMonth: number; livingPerMonth: number; total: number; perDay: number; why: string[]; sideTrips: string[]; visa?: string | null; urlIn?: string; urlOut?: string };
@@ -52,6 +57,15 @@ type RouteOut = { from: string; to: string; depart?: string; flex?: number; nigh
 type ItinDayOut = { day: number; date: string; where: string; title: string; plan: string; travel?: string; weather?: string };
 type ItinOut = { title: string; start: string; end: string; nights: number; stops: string[]; days: ItinDayOut[]; costs?: { total: number; perDay: number; estimated: boolean }; status?: string; note?: string; skeleton?: Skeleton; wishes?: string; pace?: Pace; budget?: BudgetTier; raw?: Itinerary };
 type EventOut = ChatEvent & { kind?: string; note?: string; cheapestTrip: { price: number; dates?: string; from?: string; key?: string } | null };
+/** One leg and one loop of walk_trips as the tool compacts them (the names are already the traveller's words). */
+type WalkLegOut = { kind: "fly" | "train" | "coach" | "ferry" | "road"; from: string; to: string; date: string; depart?: string; minutes: number; price: number; estimated?: boolean; carrier?: string; source: string; url?: string };
+type WalkLoopOut = { title: string; route: string; start: string; end: string; nights: number; total: number; hours: number; stops: { name: string; country: string; nights: number; arrive: string }[]; legs: WalkLegOut[]; why: string[] };
+type WalkOut = { from: string; window?: string; nights?: string; nightsPerStop?: string; searched: number; source?: string; count: number; note?: string; corrected?: string; partial?: boolean; considered?: string[]; loops: WalkLoopOut[]; params?: WalkQuery; raw?: WalkResult };
+/** walk_trips while it runs: each preliminary output is the walk's latest progress line, and its newest lines for
+ * the globe (`live`, from index `at`) with the query that draws them. */
+type WalkProgress = { running: true; progress: string; lines?: string[]; loops?: number; edges?: number; searched?: number; live?: { at: number; lines: WalkLiveLine[] }; params?: WalkQuery };
+/** A tool part still at work: the input is streaming or waiting, or the output so far is a preliminary one. */
+const isRunning = (p: ToolPart) => p.state === "input-streaming" || p.state === "input-available" || (p.state === "output-available" && p.preliminary === true);
 /** The traveller's own point as an itinerary place, when the browser knows it. */
 const herePlace = (c: ChatContext): ItinPlace | undefined => (c.origin ? { name: c.origin.label, lat: c.origin.lat, lon: c.origin.lon } : undefined);
 /** Opens the itinerary view on a skeleton (it generates there). */
@@ -127,9 +141,12 @@ function settle(messages: UIMessage[]): UIMessage[] {
     if (m.role !== "assistant") return m;
     let changed = false;
     const parts = m.parts.map((p) => {
-      if (!isToolPart(p) || (p.state !== "input-streaming" && p.state !== "input-available")) return p;
+      if (!isToolPart(p) || !isRunning(p)) return p;
       changed = true;
-      return { ...p, state: "output-error", errorText: "stopped before it finished", input: p.input ?? {} } as unknown as typeof p;
+      const { preliminary: _pre, output: _out, ...rest } = p as ToolPart;
+      void _pre;
+      void _out;
+      return { ...rest, state: "output-error", errorText: "stopped before it finished", input: p.input ?? {} } as unknown as typeof p;
     });
     return changed ? { ...m, parts } : m;
   });
@@ -300,6 +317,7 @@ function DealCards({ deals, onOpen, origin }: { deals: Deal[]; onOpen: (key: str
             <span className={s.sub}>
               {d.back ? dateRange(d.out, d.back) : d.out}
               {d.nights ? ` · ${d.nights}n` : ""} · {d.gw}
+              {d.backFromCity ? ` · home from ${d.backFromCity}` : ""}
               {d.backTo ? ` → ${d.backTo}` : ""} · {d.stops ? `${d.stops} stop` : "direct"}
               {d.outMin ? ` · ${formatDuration(d.outMin)}` : ""}
             </span>
@@ -589,6 +607,116 @@ function Itineraries({ items }: { items: Itin[] }) {
           </span>
         </a>
       ))}
+    </div>
+  );
+}
+
+const HOP_ICON: Record<WalkLegOut["kind"], string> = { fly: "✈", train: "🚆", coach: "🚌", ferry: "⛴", road: "🚗" };
+const HOP_WORD: Record<WalkLegOut["kind"], string> = { fly: "plane", train: "train", coach: "coach", ferry: "ferry", road: "car" };
+const hoursOf = (min: number) => (min >= 90 ? `${Math.round(min / 6) / 10} h` : `${Math.round(min)} min`);
+
+/** A walk's loops as cards: the route as a line of hops with their icons (Brasov, plane, Warsaw, train, Gdansk,
+ * plane, Bucharest), the total and the hours, the nights per stop, the why lines, the legs with a booking link per
+ * flight, and two buttons: "Show on the map" (atlas:walk-result with this loop first) and "Make an itinerary"
+ * (skeletonFromWalk, atlas:itinerary). A restored thread has no raw result: the map then runs the same walk again
+ * through /api/walk at budget 0 (the chat's walk never went through that route, so there is no memo to hit; the
+ * fare memory and the ground graph redraw it without a live search), and only while its window has not begun to
+ * pass. The itinerary is then asked of the agent. */
+function WalkCards({ out, origin, onAsk }: { out: WalkOut; origin?: ItinPlace; onAsk: (text: string) => void }) {
+  const loops = out.loops ?? [];
+  const raw = out.raw && Array.isArray(out.raw.loops) && out.raw.loops.length ? out.raw : null;
+  // The compact loops are the engine's first ones, in its order, so index i is raw loop i.
+  // The window of a restored walk is stale once its first day is past: /api/walk refuses it, so the button rests.
+  const stale = !raw && !!out.params && String(out.params.from) < LOCAL_DAY(new Date());
+  const show = (i: number) => {
+    if (raw) dispatchAtlas("atlas:walk-result", walkResultDetail(raw, i, out.params));
+    else if (out.params && !stale) dispatchAtlas("atlas:walk", { params: { ...out.params, budget: 0 } });
+  };
+  const plan = (i: number) => {
+    const loop = raw?.loops[i];
+    if (!loop) return onAsk(`Make loop ${i + 1} an itinerary`);
+    // The start is the traveller's own point when the loop starts there, else the place the walk started from.
+    const p = out.params;
+    const start: ItinPlace = origin && (!p || p.label === origin.name) ? origin : p ? { name: p.label, lat: p.lat, lon: p.lon } : (origin ?? { name: out.from, lat: 0, lon: 0 });
+    openSkeleton(skeletonFromWalk(loop, start));
+  };
+  return (
+    <div className={s.cards}>
+      {loops.slice(0, 4).map((l, i) => {
+        const hops = l.legs.filter((g) => g.kind !== "road");
+        const flights = l.legs.filter((g) => g.kind === "fly" && g.url);
+        return (
+          <div key={i} className={s.base}>
+            <div className={s.row}>
+              <b>{l.title}</b>
+              <span className={s.price}>{euro(l.total)}</span>
+            </div>
+            <div className={s.hops} aria-label={l.route}>
+              <span className={s.hopPlace}>{out.from}</span>
+              {hops.map((g, k) => (
+                <span key={k} className={s.hop}>
+                  <span className={s.hopKind} title={`${HOP_WORD[g.kind]}, ${hoursOf(g.minutes)}, ${euro(g.price)}${g.estimated ? " (estimate)" : ""}`}>
+                    {HOP_ICON[g.kind]} {HOP_WORD[g.kind]}
+                  </span>
+                  <span className={s.hopPlace}>{g.to}</span>
+                </span>
+              ))}
+            </div>
+            <span className={s.sub}>
+              {dateRange(l.start, l.end)} · {l.nights} night{l.nights === 1 ? "" : "s"} · {l.hours} h of travel · {l.stops.map((st) => `${st.name} ${st.nights}n`).join(", ")}
+            </span>
+            {l.why?.length > 0 && (
+              <ul className={s.why}>
+                {l.why.slice(0, 3).map((w, k) => (
+                  <li key={k}>{w}</li>
+                ))}
+              </ul>
+            )}
+            <details className={s.legs}>
+              <summary>The legs</summary>
+              <ol>
+                {l.legs.map((g, k) => (
+                  <li key={k}>
+                    {HOP_ICON[g.kind]} {g.from} to {g.to}, {g.date}
+                    {g.depart ? ` ${g.depart}` : ""}, {hoursOf(g.minutes)}, {euro(g.price)}
+                    {g.estimated ? " (estimate)" : ""}
+                    {g.carrier ? `, ${g.carrier}` : ""}
+                    {g.source === "memory" ? ", a remembered fare" : ""}
+                    {g.url ? (
+                      <>
+                        {" "}
+                        <a href={g.url} target="_blank" rel="noreferrer">
+                          book
+                        </a>
+                      </>
+                    ) : null}
+                  </li>
+                ))}
+              </ol>
+            </details>
+            <div className={s.actions}>
+              <button className={s.mini} onClick={() => show(i)} disabled={!raw && (!out.params || stale)} title={stale ? "These dates have passed; ask again for new ones" : undefined}>
+                Show on the map
+              </button>
+              <button className={s.mini} onClick={() => plan(i)}>
+                Make an itinerary
+              </button>
+              {flights.slice(0, 3).map((g, k) => (
+                <a key={k} className={s.mini} href={g.url} target="_blank" rel="noreferrer">
+                  Book {g.from} to {g.to}
+                </a>
+              ))}
+            </div>
+          </div>
+        );
+      })}
+      {(out.considered?.length || out.note || out.corrected) && (
+        <p className={s.caption}>
+          {out.corrected ? `${out.corrected}. ` : ""}
+          {out.searched ? `${out.searched} live search${out.searched === 1 ? "" : "es"}. ` : "No live search. "}
+          {out.note ?? ""}
+        </p>
+      )}
     </div>
   );
 }
@@ -889,8 +1017,10 @@ export default function ChatPanel(p: Props) {
   // When each running tool call was first seen, so a long tool's chip can say "48 s"; a
   // once-a-second tick redraws the chips only while a tool is running.
   const startedAt = useRef(new Map<string, number>());
+  /** A running walk's live lines already sent to the globe, per tool call: the index of the next one to send. */
+  const liveSent = useRef(new Map<string, number>());
   const [, setTick] = useState(0);
-  const anyRunning = busy && messages.some((m) => m.role === "assistant" && m.parts.some((part) => isToolPart(part) && (part.state === "input-streaming" || part.state === "input-available")));
+  const anyRunning = busy && messages.some((m) => m.role === "assistant" && m.parts.some((part) => isToolPart(part) && isRunning(part)));
   useEffect(() => {
     if (!anyRunning) return;
     const id = setInterval(() => setTick((t) => t + 1), 1000);
@@ -951,8 +1081,22 @@ export default function ChatPanel(p: Props) {
   useEffect(() => {
     for (const m of messages) {
       for (const part of m.parts) {
-        if (isToolPart(part) && part.toolCallId && (part.state === "input-streaming" || part.state === "input-available") && !startedAt.current.has(part.toolCallId)) startedAt.current.set(part.toolCallId, Date.now());
-        if (!isToolPart(part) || part.state !== "output-available" || !part.toolCallId || applied.current.has(part.toolCallId)) continue;
+        if (isToolPart(part) && part.toolCallId && isRunning(part) && !startedAt.current.has(part.toolCallId)) startedAt.current.set(part.toolCallId, Date.now());
+        // A walk the chat runs is drawn on the globe while it thinks: each preliminary output holds its newest
+        // nodes, edges and loops (with some overlap, by index), and only the ones not yet sent go on the bus.
+        if (isToolPart(part) && part.type === "tool-walk_trips" && part.toolCallId && part.state === "output-available" && part.preliminary && !applied.current.has(part.toolCallId)) {
+          const pre = part.output as Partial<WalkProgress> | undefined;
+          if (pre?.live && Array.isArray(pre.live.lines)) {
+            const next = liveSent.current.get(part.toolCallId);
+            const skip = Math.max(0, (next ?? 0) - pre.live.at);
+            const fresh = pre.live.lines.slice(skip);
+            if (fresh.length || next == null) {
+              liveSent.current.set(part.toolCallId, pre.live.at + pre.live.lines.length);
+              dispatchAtlas("atlas:walk-live", { id: part.toolCallId, ...(next == null && pre.params ? { params: pre.params } : {}), lines: fresh });
+            }
+          }
+        }
+        if (!isToolPart(part) || part.state !== "output-available" || part.preliminary || !part.toolCallId || applied.current.has(part.toolCallId)) continue;
         const name = part.type.slice(5);
         const out = part.output as { raw?: unknown } | undefined;
         if (RAW_DEAL_TOOLS.has(name) && Array.isArray(out?.raw) && out!.raw.length) {
@@ -968,6 +1112,10 @@ export default function ChatPanel(p: Props) {
         if (name === "cheapest_way" && out?.raw && typeof out.raw === "object" && Array.isArray((out.raw as RouteResult).options) && (out.raw as RouteResult).options.length) {
           applied.current.add(part.toolCallId);
           dispatchAtlas("atlas:route-result", routeResultDetail(out.raw as RouteResult));
+        }
+        if (name === "walk_trips" && out?.raw && typeof out.raw === "object" && Array.isArray((out.raw as WalkResult).loops) && (out.raw as WalkResult).loops.length) {
+          applied.current.add(part.toolCallId);
+          dispatchAtlas("atlas:walk-result", walkResultDetail(out.raw as WalkResult, undefined, (out as { params?: WalkQuery }).params));
         }
       }
     }
@@ -1086,7 +1234,7 @@ export default function ChatPanel(p: Props) {
   const renderTool = (tp: ToolPart, i: number, answered: boolean, skipCalendar = false) => {
     const name = tp.type.slice(5);
     const out = tp.output as Record<string, unknown> | undefined;
-    const running = tp.state === "input-streaming" || tp.state === "input-available";
+    const running = isRunning(tp);
     const failed = tp.state === "output-error";
     const soft = tp.state === "output-available" && out && typeof out === "object" && typeof out.error === "string";
     if (name === "ask") {
@@ -1103,7 +1251,8 @@ export default function ChatPanel(p: Props) {
     // plainly why there is no card; a tick is only for a result with something underneath.
     const noted = tp.state === "output-available" && !soft && !!out && typeof out.note === "string" && (count === 0 || (count == null && !payload));
     const secs = running && tp.toolCallId && startedAt.current.has(tp.toolCallId) ? Math.round((Date.now() - startedAt.current.get(tp.toolCallId)!) / 1000) : 0;
-    const progress = running ? `${toolProgress(name, tp.input).replace(/\.\.\.$/, "")}${LONG_TOOLS.has(name) && secs >= 3 ? `, ${secs} s` : "..."}` : "";
+    const live = running && tp.preliminary && out && typeof (out as Partial<WalkProgress>).progress === "string" ? (out as unknown as WalkProgress) : null;
+    const progress = running ? `${live ? live.progress.replace(/[.…]+$/, "") : toolProgress(name, tp.input).replace(/\.\.\.$/, "")}${LONG_TOOLS.has(name) && secs >= 3 ? `, ${secs} s` : "..."}` : "";
     return (
       <div key={tp.toolCallId ?? i} className={s.toolwrap}>
         <div className={`${s.toolchip} ${failed ? s.fail : soft || noted ? s.warn : running ? "" : s.done}`} title={!running && out && typeof out.note === "string" ? out.note : undefined}>
@@ -1116,7 +1265,14 @@ export default function ChatPanel(p: Props) {
             {failed ? `: ${tp.errorText === "stopped before it finished" ? "stopped" : tp.errorText ?? "failed"}` : soft ? `: ${String(out!.error)}` : noted ? `: ${String(out!.note).slice(0, 120)}` : ""}
           </span>
         </div>
-        {tp.state === "output-available" && out && !soft && (
+        {live && (live.loops || live.searched) ? (
+          <p className={s.caption}>
+            {live.loops ? `${live.loops} loop${live.loops === 1 ? "" : "s"} closed so far` : "No loop closed yet"}
+            {live.edges ? `, ${live.edges} edges looked at` : ""}
+            {live.searched ? `, ${live.searched} live search${live.searched === 1 ? "" : "es"}` : ""}
+          </p>
+        ) : null}
+        {tp.state === "output-available" && !running && out && !soft && (
           <>
             {name === "scan_cheapest" && !skipCalendar && <Calendar out={out as unknown as ScanOut} />}
             {name === "long_stay" && Array.isArray(out.bases) && <Bases bases={out.bases as BaseOut[]} />}
@@ -1124,6 +1280,7 @@ export default function ChatPanel(p: Props) {
             {name === "reprice_route" && Array.isArray(out.itineraries) && <Itineraries items={out.itineraries as Itin[]} />}
             {name === "best_months" && Array.isArray(out.months) && <MonthStrip out={out as unknown as MonthsOut} />}
             {name === "cheapest_way" && Array.isArray(out.options) && <RouteCards out={out as unknown as RouteOut} onAsk={send} />}
+            {name === "walk_trips" && Array.isArray(out.loops) && out.loops.length > 0 && <WalkCards out={out as unknown as WalkOut} origin={herePlace(p.context)} onAsk={send} />}
             {name === "make_itinerary" && Array.isArray(out.days) && <ItineraryCard out={out as unknown as ItinOut} />}
             {name === "wild_trip" && out.raw && typeof out.raw === "object" && Array.isArray((out.raw as WildTrip).stops) && (
               <div className={s.actions}>

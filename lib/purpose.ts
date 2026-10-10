@@ -7,7 +7,7 @@ import { eventsAt, eventsInWindow, type PlaceEvent, type PurposeEvent } from "./
 import { dealsFor } from "./deals-source";
 import { kiwiDate, nightsOf, searchFlight } from "./kiwi";
 import { haversineKm } from "./geo";
-import { resolveGateway } from "./board";
+import { resolveGateway, sensibleTicket } from "./board";
 import citiesJson from "@/public/data/cities.json";
 import type { City, Deal } from "./types";
 
@@ -86,7 +86,7 @@ export async function purposeTrips(gateways: string[], from: string, to: string,
         searched++;
         const it = r.itineraries
           .map((x) => ({ it: x, n: nightsOf(x) }))
-          .filter((x) => x.n != null && x.n >= 2 && x.n <= 6 && x.it.outbound.departureTime.slice(0, 10) <= e.end && (x.it.inbound?.departureTime.slice(0, 10) ?? "") >= e.start)
+          .filter((x) => x.n != null && x.n >= 2 && x.n <= 6 && x.it.outbound.departureTime.slice(0, 10) <= e.end && (x.it.inbound?.departureTime.slice(0, 10) ?? "") >= e.start && sensibleTicket(x.it))
           .sort((a, b) => a.it.price - b.it.price)[0];
         if (!it) return;
         const d: Deal = {
@@ -106,6 +106,14 @@ export async function purposeTrips(gateways: string[], from: string, to: string,
           url: it.it.bookingUrl,
           img: it.it.imageId,
         };
+        // A ticket home from a nearby airport of another city (Milan in, Bergamo out) says so.
+        if (it.it.inbound && it.it.inbound.from !== it.it.outbound.to) {
+          const back = cityOf.get(it.it.inbound.from) ?? it.it.inbound.from;
+          if (back !== d.dstCity) {
+            d.backFrom = it.it.inbound.from;
+            d.backFromCity = CITIES[back]?.name ?? it.it.inbound.segments[0]?.fromCity ?? it.it.inbound.from;
+          }
+        }
         t.deal = d;
         t.source = "live";
       } catch {

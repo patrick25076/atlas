@@ -5,6 +5,7 @@ import * as maplibregl from "maplibre-gl";
 import { MapLibreOverlay } from "@deck.gl/maplibre";
 import { ArcLayer, PathLayer, ScatterplotLayer } from "@deck.gl/layers";
 import { TripsLayer } from "@deck.gl/geo-layers";
+import { PathStyleExtension } from "@deck.gl/extensions";
 import type { Layer, PickingInfo } from "@deck.gl/core";
 import { flightMinutes, formatDuration, haversineKm, nearestGateways } from "@/lib/geo";
 import { combinePlaces, type Place } from "@/lib/places";
@@ -13,9 +14,9 @@ import type { PlaceSummary } from "@/app/api/place/route";
 import { fetchBoard, readNdjson } from "@/lib/boards-client";
 import { greatCircle, latitudeLines, routePath, type RouteLeg } from "@/lib/arc";
 import { isGem, type FameFile } from "@/lib/gems";
-import { addDays, countryName, dateRange, daysBetween, localIso, todayIso } from "@/lib/format";
+import { addDays, countryName, dateRange, daysBetween, localIso, shortDate, todayIso } from "@/lib/format";
 import { EMPTY_BEEN, countryAllowed, excludedCountries, excludeParam, filterByCountry, loadBeen, saveBeen, type BeenPrefs } from "@/lib/been";
-import { BANDS, dealKey, REGION_CENTROIDS, TRIP_MODES, WILD_REGIONS, type AskState, type Band, type BoardState, type DealNights, type EventSpot, type EventsLayer, type GroupForm, type GroupState, type LiveSearch, type LongStayForm, type LongStayResult, type LongStayState, type Origin, type Period, type PickMode, type PickedDetail, type PlacePage, type Sheet, type TripMode, type View } from "@/lib/ui-types";
+import { BANDS, dealKey, REGION_CENTROIDS, TRIP_MODES, WILD_REGIONS, type AskState, type Band, type BoardState, type DealNights, type EventSpot, type EventsLayer, type GroupForm, type GroupState, type LiveSearch, type LongStayForm, type LongStayResult, type LongStayState, type Origin, type Period, type PickMode, type PickedDetail, type PlacePage, type Sheet, type TripMode, type View, EMPTY_WALK, WALK_MAX_EDGES, WALK_PARAM_KEYS, WILD_REGION_COUNTRIES, walkQueryString, type WalkEdgeView, type WalkNodeView, type WalkQuery, type WalkSource, type WalkState } from "@/lib/ui-types";
 import type { Airport, City, CityPlaces, CountryInfo, Deal, Destination, FaresResponse, Gateway, HeritageRow, Holiday, Manifest, ReachResponse, ReachStation, Route, VisaFile, WeatherCompact, WeatherFile } from "@/lib/types";
 import { expandWeather, visaFor } from "@/lib/types";
 import Panel, { MODE_LABEL, type Capabilities, type CombosState, type PlanState, type WildState } from "./Panel";
@@ -23,9 +24,11 @@ import { countryIndexOf, EMPTY_LONGSTAY_FORM, EMPTY_TRIPS_EXTRA, emptyGroupForm,
 import RouteCard, { emptyRouteForm, EventsCard, eventsHere, optionKey, ROUTE_BUDGET, ROUTE_BUDGET_FREE, ROUTE_BUDGET_HARDER, routeParams, toEventSpot, type RawEvent, type RouteForm, type RouteLeg as AbLeg, type RouteOption, type RouteResult, type RouteState } from "./RouteFinder";
 import { eventsInWindow } from "@/lib/purpose-events";
 import { parseCommand, type Command } from "@/lib/command";
-import { skeletonFromDeal, skeletonFromEvent, skeletonFromGroup, skeletonFromLongStay, skeletonFromRoute, skeletonFromTrip, skeletonFromWild, type BudgetTier, type ItinLeg, type ItinPlace, type Itinerary as Itin, type Pace, type Skeleton } from "@/lib/itinerary";
+import type { WalkLoop, WalkResult } from "@/lib/graph-walk";
+import WalkCard, { WALK_MORE_BUDGET } from "./WalkCard";
+import { skeletonFromDeal, skeletonFromEvent, skeletonFromGroup, skeletonFromLongStay, skeletonFromRoute, skeletonFromTrip, skeletonFromWalk, skeletonFromWild, type BudgetTier, type ItinLeg, type ItinPlace, type Itinerary as Itin, type Pace, type Skeleton } from "@/lib/itinerary";
 import { existingOwnerId } from "@/lib/owner";
-import Itinerary from "./Itinerary";
+import Itinerary, { type SavedItinerary } from "./Itinerary";
 import MyTrips from "./MyTrips";
 
 /**
@@ -64,7 +67,45 @@ import type { Intel } from "./PlaceIntel";
 // route card and the Events layer instead (see the first effect).
 const TRIP_MODE_KEYS: TripMode[] = TRIP_MODES.map((m) => m.key);
 /** What the itinerary view was opened with: a skeleton to generate, or an itinerary already written (a saved one). n keys the component, so a new open starts fresh. */
-type ItinOpen = { skeleton?: Skeleton; itinerary?: Itin; wishes?: string; pace?: Pace; budget?: BudgetTier; n: number };
+type ItinOpen = { skeleton?: Skeleton; itinerary?: Itin; wishes?: string; pace?: Pace; budget?: BudgetTier; savedId?: string; n: number };
+
+/** One line of the /api/walk stream. */
+type WalkLine = {
+  node?: Omit<WalkNodeView, "at" | "money">;
+  edge?: Omit<WalkEdgeView, "at" | "path">;
+  loop?: { loop: WalkLoop } | WalkLoop;
+  progress?: string;
+  done?: WalkResult;
+  error?: string;
+};
+/** Something a live search just found, drawn growing from where it leaves and fading out (deals, route options). */
+type Arrival = { path: [number, number][]; at: number; color: RGBA; ground?: boolean };
+/** How long an arrival or a walk edge's price tag stays lit, in milliseconds. */
+const ARRIVAL_MS = 2600;
+const EDGE_TAG_MS = 3500;
+/** The walk's edges grow from their node over this long, then fade to a faint line over EDGE_FADE_MS. */
+const EDGE_GROW_MS = 650;
+const EDGE_FADE_MS = 3200;
+const NODE_PULSE_MS = 2400;
+const dashExt = new PathStyleExtension({ dash: true });
+/** The first part of a path, so an arc can draw itself from where it leaves: t from 0 to 1. */
+function growPath(path: [number, number][], t: number): [number, number][] {
+  if (t >= 1 || path.length < 2) return path;
+  const f = Math.max(0, t) * (path.length - 1);
+  const i = Math.floor(f);
+  const a = path[i];
+  const b = path[Math.min(i + 1, path.length - 1)];
+  const k = f - i;
+  return [...path.slice(0, i + 1), [a[0] + (b[0] - a[0]) * k, a[1] + (b[1] - a[1]) * k]];
+}
+/** A straight ground line as points, so it can grow like an arc and dash evenly on the globe. */
+function straightPath(a: [number, number], b: [number, number], n = 12): [number, number][] {
+  return Array.from({ length: n + 1 }, (_, i) => [a[0] + ((b[0] - a[0]) * i) / n, a[1] + ((b[1] - a[1]) * i) / n] as [number, number]);
+}
+const reducedMotion = () => typeof window !== "undefined" && !!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/;
+/** How far the walk's "anywhere" explore reaches from home: the Balkans and the Caucasus from Brasov, not South East Asia. */
+const WALK_REACH_KM = 2000;
 /** The curated event kinds (lib/purpose-events.ts): a command-line word naming one filters by kind. */
 const EVENT_KINDS = new Set(["festival", "sport", "culture", "season", "music", "food"]);
 /** "Brașov" and "brasov" are one key for a place typed on the command line. */
@@ -349,6 +390,28 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
   const [trips, setTrips] = useState<TripsResult | null>(null);
   const [selectedTrip, setSelectedTrip] = useState<string | null>(null);
   const [days, setDays] = useState(5);
+  // The graph walk (GET /api/walk): its stream as state for the card and the tags, the request
+  // in flight, and what the animation loop draws every frame (walkDrawRef, set from the state).
+  const [walk, setWalk] = useState<WalkState>(EMPTY_WALK);
+  const walkCtrl = useRef<AbortController | null>(null);
+  /** Where each city the walk expanded sits, and the money its chosen way in cost so far: edges start from these points. */
+  const walkNodesRef = useRef(new Map<string, { p: [number, number]; money?: number }>());
+  /** Whether the visitor picked a loop in the card: a better loop arriving then does not take the stage from it. */
+  const walkPickedRef = useRef<string | null>(null);
+  const walkDrawRef = useRef<{ fly: WalkEdgeView[]; ground: WalkEdgeView[]; nodes: WalkNodeView[]; done: boolean; best: Set<string>; v: number } | null>(null);
+  // A clock for the tags that come and go (an edge's price shows for a few seconds): ticks only while a walk streams.
+  const [walkClock, setWalkClock] = useState(0);
+  // Deals and route options arriving from a live search, drawn growing in by the animation loop.
+  const arrivalsRef = useRef<Arrival[]>([]);
+  const reducedRef = useRef(false);
+  useEffect(() => {
+    const mq = window.matchMedia?.("(prefers-reduced-motion: reduce)");
+    if (!mq) return;
+    reducedRef.current = mq.matches;
+    const on = () => (reducedRef.current = mq.matches);
+    mq.addEventListener?.("change", on);
+    return () => mq.removeEventListener?.("change", on);
+  }, []);
   sheetRef.current = sheet;
   viewRef.current = view;
   citiesRef.current = cities;
@@ -370,7 +433,13 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
       // A full sheet leaves no map to frame into (globals.css: 100vh minus the top bar); the
       // callers drop it to half through revealMap() first, so "full" pads like "half" here
       // rather than asking MapLibre for a padding larger than the viewport.
-      return { left: 16, right: 16, top: 140, bottom: (s === "peek" ? 150 : Math.round(window.innerHeight * 0.56)) + 24 };
+      const sheetBottom = (s === "peek" ? 150 : Math.round(window.innerHeight * 0.56)) + 24;
+      // A card floating above the sheet (the walk, the route) covers the globe too: frame above it,
+      // but always leave a strip of at least 160 px to frame into.
+      const cards = document.querySelector(".mapcards");
+      const r = cards && cards.children.length ? cards.getBoundingClientRect() : null;
+      const above = r && r.height > 0 ? window.innerHeight - r.top + 12 : 0;
+      return { left: 16, right: 16, top: 140, bottom: Math.min(Math.max(sheetBottom, above), window.innerHeight - 140 - 160) };
     }
     // The route or event card floats over the right of the map: frame clear of it too. The
     // panel's width and the top bar's height come from globals.css (narrower on tablets, where
@@ -601,14 +670,16 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
         g.iata,
         month,
         {
-          deals: (ds) =>
+          deals: (ds, live) => {
+            if (live) arriveDealsRef.current(ds);
             setBoards((b) => {
               const cur = b[g.iata];
               if (!cur) return b;
               const seen = new Set(cur.deals.map(dealKey));
               const add = ds.filter((d) => !seen.has(dealKey(d)));
               return add.length ? { ...b, [g.iata]: { ...cur, deals: [...cur.deals, ...add] } } : b;
-            }),
+            });
+          },
           done: (meta, source) => setBoards((b) => (b[g.iata] ? { ...b, [g.iata]: { ...b[g.iata], status: "ok", source, meta } } : b)),
           error: (note) => setBoards((b) => (b[g.iata] ? { ...b, [g.iata]: { ...b[g.iata], status: "error", note } } : b)),
         },
@@ -771,6 +842,7 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
           try {
             const msg = JSON.parse(line) as { progress?: string; deals?: Deal[]; done?: { searched: number; count: number; note?: string }; error?: string };
             if (msg.progress) setFinder((f) => ({ ...f, lines: [...f.lines, msg.progress!] }));
+            if (msg.deals) arriveDealsRef.current(msg.deals);
             if (msg.deals) setFinder((f) => { const seen = new Set(f.deals.map(dealKey)); return { ...f, deals: [...f.deals, ...msg.deals!.filter((d) => !seen.has(dealKey(d)))] }; });
             // done.note is the route's explanation of an empty answer (rate-limited); the panel shows it where the deals would be.
             if (msg.done) { finished = true; setFinder((f) => ({ ...f, status: "ok", searched: msg.done!.searched, note: msg.done!.note })); }
@@ -806,6 +878,23 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
     },
     [cities, byIata],
   );
+  /**
+   * Deals that a live search just found (the finder's stream, a live board) draw an arc from
+   * their home airport that grows in and fades, while the price tag pops in at the city. A
+   * ref, so the stream handlers registered earlier always use the coordinates of now.
+   */
+  const arriveDealsRef = useRef<(ds: Deal[]) => void>(() => {});
+  arriveDealsRef.current = (ds: Deal[]) => {
+    const now = performance.now();
+    const list = arrivalsRef.current;
+    ds.slice(0, 40).forEach((d, i) => {
+      const g = gwCoord(d.gw);
+      const c = dealCoord(d);
+      // Staggered a little, so a batch of fifteen reads as fifteen arrivals rather than one flash.
+      if (g && c) list.push({ path: greatCircle(g, c, 40), at: now + i * 70, color: priceColor(d.price) });
+    });
+    if (list.length > 120) list.splice(0, list.length - 120);
+  };
   const heritageCache = useRef(new Map<string, number>());
   const heritageNear = useCallback(
     (code: string, lat: number, lon: number): number => {
@@ -1245,13 +1334,22 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
       setGroup({ status: "error", note: "network" });
     }
   }
-  function framePoints(pts: [number, number][], maxZoom: number) {
+  /**
+   * The padding to hand fitBounds for a wanted padding. MapLibre adds fitBounds' padding to the
+   * padding an earlier flyTo left on the map, so only the difference is asked for; otherwise on
+   * a phone the two together leave no room and the camera does not move ("Map cannot fit within canvas").
+   */
+  function fitPadding(map: maplibregl.Map, want: { left: number; right: number; top: number; bottom: number }) {
+    const p0 = map.getPadding();
+    return { left: Math.max(0, want.left - (p0.left ?? 0)), right: Math.max(0, want.right - (p0.right ?? 0)), top: Math.max(0, want.top - (p0.top ?? 0)), bottom: Math.max(0, want.bottom - (p0.bottom ?? 0)) };
+  }
+  function framePoints(pts: [number, number][], maxZoom: number, duration = 1500) {
     const map = mapRef.current;
     if (!map || pts.length === 0) return;
     revealMap();
     const bounds = new maplibregl.LngLatBounds(pts[0], pts[0]);
     for (const q of pts) bounds.extend(q);
-    map.fitBounds(bounds, { padding: panelPadding(), maxZoom, duration: 1500 });
+    map.fitBounds(bounds, { padding: fitPadding(map, panelPadding()), maxZoom, duration });
   }
   function frameDeals(ds: Deal[]) {
     const pts = ds.map(dealCoord).filter((c): c is [number, number] => !!c);
@@ -1329,8 +1427,11 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
   // drawn underneath (deals, loops, bases) comes back when they close or fold.
   const itinShowing = !!itin && !!itinShape;
   const cardShown = routeCard.open && !routeCard.collapsed;
-  const abShowing = cardShown && !itinShowing;
-  const covered = itinShowing || abShowing;
+  // The walk's card holds the globe while it is open and unfolded; it and the route card take
+  // turns (opening one folds the other), and an itinerary in front of both wins.
+  const walkShowing = walk.open && !walk.collapsed && walk.status !== "idle" && !itinShowing;
+  const abShowing = cardShown && !itinShowing && !walkShowing;
+  const covered = itinShowing || abShowing || walkShowing;
   function openRouteCard() {
     // Read at once by panelPadding: the card covers the right of the map from this frame on.
     if (!isPhone()) cardOpenRef.current = true;
@@ -1340,6 +1441,7 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
       setSheet("peek");
     }
     setRouteCard({ open: true, collapsed: false });
+    setWalk((w) => (w.open && !w.collapsed ? { ...w, collapsed: true } : w));
   }
   function cancelRoute() {
     abCtrl.current?.abort();
@@ -1385,6 +1487,11 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
         (msg) => {
           if (msg.progress) setAb((a) => ({ ...a, lines: [...a.lines, msg.progress!] }));
           // An option already on show (a bigger budget re-streams the stored ones) is not listed twice.
+          if (msg.option) {
+            const legs = optionLegs(msg.option, undefined);
+            const now = performance.now();
+            for (const l of legs) arrivalsRef.current.push({ path: l.kind === "fly" ? greatCircle(l.from, l.to, 40) : straightPath(l.from, l.to), at: now, color: l.kind === "fly" ? [124, 196, 255, 230] : [255, 180, 84, 230], ground: l.kind !== "fly" });
+          }
           if (msg.option) setAb((a) => (a.options.some((o) => optionKey(o) === optionKey(msg.option!)) ? a : { ...a, options: [...a.options, msg.option!] }));
           if (msg.done) {
             finished = true;
@@ -1469,37 +1576,503 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+  // ---- The graph walk: GET /api/walk streams the search as it thinks ({node}, {edge}, {loop},
+  // {progress}, {done}); the globe draws every line as it arrives and the card lists the loops.
+  /** Where the traveller is and flies from, the part of every walk the asker does not have to say. */
+  function walkContext(): WalkQuery | null {
+    const o = originRef.current ?? origin;
+    if (!o || !boardGateways.length || !gateways[0]) return null;
+    // The label only names things; the engine reads the point. A city nearby reads better than "your location".
+    const label = (homeCity?.city.name ?? o.label).replace(/[^\p{L}\p{N} ,.'()&-]/gu, " ").trim().slice(0, 60) || "home";
+    return { g: boardGateways.map((g) => g.iata).slice(0, 4), home: gateways[0].airport.country, lat: o.lat.toFixed(3), lon: o.lon.toFixed(3), label, ...(excludeQ ? { exclude: excludeQ } : {}) };
+  }
+  /** The dates a walk searches when the asker gave none: the When month (from tomorrow at the earliest), else the next three weeks; always room for the longest trip. */
+  function walkWindow(maxNights: number, from?: string): { from: string; to: string } {
+    const tomorrow = addDays(todayIso(), 1);
+    let f = from && ISO_DAY.test(from) && from > tomorrow ? from : tomorrow;
+    let t = addDays(f, 21);
+    if (!from && month) {
+      const start = `${month}-01`;
+      f = start > tomorrow ? start : tomorrow;
+      const [y, m] = month.split("-").map(Number);
+      t = localIso(new Date(y, m, 0));
+    }
+    if (daysBetween(f, t) < maxNights + 2) t = addDays(f, maxNights + 4);
+    return { from: f, to: t };
+  }
+  /** The point the walk's HOME node stands for. */
+  function walkHome(q: WalkQuery | undefined): [number, number] | null {
+    if (q?.lat == null || q.lon == null) return null;
+    const lat = Number(q.lat);
+    const lon = Number(q.lon);
+    return Number.isFinite(lat) && Number.isFinite(lon) ? [lon, lat] : null;
+  }
+  /** A loop's points to frame: its stops and the home point. */
+  function frameWalkLoop(loop: WalkLoop | undefined, q: WalkQuery | undefined) {
+    if (!loop) return;
+    const pts: [number, number][] = loop.stops.map((st) => [st.lon, st.lat]);
+    const h = walkHome(q);
+    if (h) pts.push(h);
+    // A margin on top of the panel's padding: on the globe fitBounds lands a few pixels short,
+    // and a stop at the very edge loses its numbered tag to the panel or the card.
+    const map = mapRef.current;
+    if (!map || !pts.length) return;
+    revealMap();
+    const pad = panelPadding();
+    const bounds = new maplibregl.LngLatBounds(pts[0], pts[0]);
+    for (const x of pts) bounds.extend(x);
+    const padding = fitPadding(map, { left: pad.left + 40, right: pad.right + 30, top: pad.top + 30, bottom: pad.bottom + 30 });
+    map.fitBounds(bounds, { padding, maxZoom: 5.5, duration: reducedMotion() ? 0 : 1600 });
+  }
+  /** The edges of finished loops, for an answer that came without its stream (a memo hit, the chat's result): the best loop's legs chosen, the rest faint. */
+  function edgesOfLoops(loops: WalkLoop[], q: WalkQuery | undefined): WalkEdgeView[] {
+    const home = walkHome(q);
+    const out: WalkEdgeView[] = [];
+    const long = performance.now() - 60_000;
+    loops.forEach((loop, k) => {
+      const byCode = new Map(loop.stops.map((st) => [st.code, [st.lon, st.lat] as [number, number]]));
+      const at = (code: string) => (code === "HOME" ? home : (byCode.get(code) ?? wildCoord(code)));
+      for (const l of loop.legs) {
+        if (l.kind === "road") continue;
+        const a = at(l.from);
+        const b = at(l.to);
+        if (!a || !b) continue;
+        out.push({ from: l.from, to: l.to, toName: l.toName, lat: b[1], lon: b[0], kind: l.kind, price: l.price, minutes: l.minutes, source: l.source, chosen: k === 0, home: l.to === "HOME", path: l.kind === "fly" ? greatCircle(a, b, 40) : straightPath(a, b), at: long });
+      }
+    });
+    return out;
+  }
+  /**
+   * Runs a walk and draws it live. given: any of the /api/walk parameters; what is missing
+   * comes from where the traveller is (airports, home country, point, Been list) and the
+   * When window. A newer walk stops the older one, so it spends no more live searches.
+   */
+  async function runWalk(given: WalkQuery, source: WalkSource) {
+    const ctx = walkContext();
+    const q: WalkQuery = { ...(ctx ?? {}) };
+    for (const k of WALK_PARAM_KEYS) {
+      const v = given[k];
+      if (v == null || v === "" || (Array.isArray(v) && !v.length)) continue;
+      q[k] = v;
+    }
+    // The Been list and the asker's own exclusions both hold.
+    if (ctx?.exclude && given.exclude) q.exclude = [...new Set([...String(ctx.exclude).split(","), ...(Array.isArray(given.exclude) ? given.exclude : String(given.exclude).split(","))])].filter(Boolean).join(",");
+    if (!q.g || !q.home || q.lat == null || q.lon == null) {
+      setNotice("Your airports are still loading; try the walk again in a moment.");
+      return;
+    }
+    const maxN = Number(q.maxNights ?? q.minNights ?? 6) || 6;
+    // Only "Back by" given: that date holds, and the window opens early enough for the longest trip.
+    const tomorrow = addDays(todayIso(), 1);
+    if (!q.from && q.to && ISO_DAY.test(String(q.to)) && String(q.to) > tomorrow) {
+      const early = addDays(String(q.to), -(maxN + 4));
+      q.from = early > tomorrow ? early : tomorrow;
+    }
+    if (!q.from || !q.to || !ISO_DAY.test(String(q.from)) || !ISO_DAY.test(String(q.to))) {
+      const w = walkWindow(maxN, typeof q.from === "string" ? q.from : undefined);
+      q.from = w.from;
+      q.to = w.to;
+    }
+    walkCtrl.current?.abort();
+    const ctrl = new AbortController();
+    walkCtrl.current = ctrl;
+    const stale = () => walkCtrl.current !== ctrl;
+    // The walk takes the stage: an itinerary in front closes, the route card folds.
+    if (itin) closeItinerary();
+    setRouteCard((c) => (c.open && !c.collapsed ? { ...c, collapsed: true } : c));
+    if (!isPhone()) cardOpenRef.current = true;
+    else if (sheetRef.current !== "peek") {
+      sheetRef.current = "peek";
+      setSheet("peek");
+    }
+    walkNodesRef.current = new Map();
+    walkPickedRef.current = null;
+    const home = walkHome(q);
+    if (home) walkNodesRef.current.set("HOME", { p: home, money: 0 });
+    setWalk({ ...EMPTY_WALK, status: "loading", params: q, source, open: true });
+    setWalkClock(performance.now());
+    // The fan-out from home is the first thing to see: the camera comes to the door, zoomed out enough for a continent.
+    const map = mapRef.current;
+    let toHome = 0;
+    if (map && home) {
+      spinRef.current = false;
+      // A frame later, so the card has rendered and the padding keeps the fan-out clear of it.
+      // An answer from the memo can land before that: its own framing cancels this one.
+      toHome = window.setTimeout(() => map.flyTo({ center: home, zoom: isPhone() ? 2.4 : 3.3, duration: reducedMotion() ? 0 : 1400, padding: panelPadding(), essential: true }), 60);
+    }
+    let finished = false;
+    const onLine = (msg: WalkLine) => {
+      if (stale()) return;
+      const now = performance.now();
+      if (msg.progress) setWalk((w) => ({ ...w, lines: [...w.lines, msg.progress!].slice(-40) }));
+      if (msg.node) {
+        const n = msg.node;
+        const prev = walkNodesRef.current.get(n.code);
+        walkNodesRef.current.set(n.code, { p: [n.lon, n.lat], money: prev?.money });
+        setWalk((w) => ({ ...w, nodes: [...w.nodes.filter((x) => x.code !== n.code), { ...n, money: prev?.money, at: now }] }));
+      }
+      if (msg.edge) {
+        const e = msg.edge;
+        const a = walkNodesRef.current.get(e.from)?.p ?? (e.from === "HOME" ? home : wildCoord(e.from));
+        const b: [number, number] = [e.lon, e.lat];
+        if (a && Number.isFinite(e.lat) && Number.isFinite(e.lon) && !(e.lat === 0 && e.lon === 0)) {
+          // The money so far at a city: what its chosen way in cost on top of the money at the city it came from.
+          let money: number | undefined;
+          if (e.chosen && !e.home) {
+            money = Math.round((walkNodesRef.current.get(e.from)?.money ?? 0) + e.price);
+            const cur = walkNodesRef.current.get(e.to);
+            walkNodesRef.current.set(e.to, { p: cur?.p ?? b, money });
+          }
+          const view: WalkEdgeView = { ...e, path: e.kind === "fly" ? greatCircle(a, b, 40) : straightPath(a, b), at: now };
+          setWalk((w) => {
+            let edges = w.edges;
+            const same = (x: WalkEdgeView) => x.from === e.from && x.to === e.to && x.kind === e.kind;
+            if (e.chosen && edges.some(same)) edges = edges.map((x) => (same(x) ? { ...x, chosen: true, at: now } : x));
+            else edges = [...edges, view];
+            // Bounded: the oldest edges that were never chosen leave first.
+            if (edges.length > WALK_MAX_EDGES) {
+              let drop = edges.length - WALK_MAX_EDGES;
+              edges = edges.filter((x) => {
+                if (drop > 0 && !x.chosen) {
+                  drop--;
+                  return false;
+                }
+                return true;
+              });
+            }
+            const nodes = money != null ? w.nodes.map((x) => (x.code === e.to ? { ...x, money } : x)) : w.nodes;
+            return { ...w, edges, nodes };
+          });
+        }
+      }
+      if (msg.loop) {
+        const loop = "loop" in msg.loop ? msg.loop.loop : msg.loop;
+        setWalk((w) => {
+          const loops = [...w.loops.filter((x) => x.id !== loop.id && x.title !== loop.title), loop].sort((x, y) => x.score - y.score).slice(0, 6);
+          const picked = walkPickedRef.current ? loops.findIndex((x) => x.id === walkPickedRef.current) : -1;
+          return { ...w, loops, selected: picked >= 0 ? picked : 0 };
+        });
+      }
+      if (msg.done) {
+        finished = true;
+        const r = msg.done;
+        setWalk((w) => {
+          const loops = r.loops.length ? r.loops : w.loops;
+          const picked = walkPickedRef.current ? loops.findIndex((x) => x.id === walkPickedRef.current) : -1;
+          return { ...w, status: "ok", result: r, loops, selected: picked >= 0 ? picked : 0, edges: w.edges.length ? w.edges : edgesOfLoops(loops, q) };
+        });
+        window.clearTimeout(toHome);
+        if (!walkPickedRef.current) frameWalkLoop(r.loops[0], q);
+      }
+      if (msg.error) {
+        finished = true;
+        setWalk((w) => ({ ...w, status: w.loops.length ? "ok" : "error", note: msg.error }));
+      }
+    };
+    try {
+      const r = await fetch(`/api/walk?${walkQueryString(q)}`, { signal: ctrl.signal });
+      if (stale()) return;
+      if (!r.ok) {
+        const j = (await r.json().catch(() => ({}))) as { error?: string };
+        if (!stale()) setWalk((w) => ({ ...w, status: "error", note: j.error ?? `the walk failed (${r.status})` }));
+        return;
+      }
+      const ended = await readNdjson<WalkLine>(r, onLine, ctrl.signal);
+      if (ended && !finished && !stale()) setWalk((w) => ({ ...w, status: w.loops.length ? "ok" : "error", note: w.loops.length ? undefined : "the walk stopped early; try again" }));
+    } catch (err) {
+      if ((err as Error | undefined)?.name === "AbortError" || stale()) return;
+      setWalk((w) => ({ ...w, status: "error", note: "network" }));
+    } finally {
+      if (walkCtrl.current === ctrl) walkCtrl.current = null;
+    }
+  }
+  /** Stop the walk where it is: what it found stays on the globe. */
+  function cancelWalk() {
+    walkCtrl.current?.abort();
+    walkCtrl.current = null;
+    setWalk((w) => (w.status === "loading" ? { ...w, status: w.loops.length ? "ok" : "error", note: w.loops.length ? undefined : "Stopped." } : w));
+  }
+  function closeWalk() {
+    walkCtrl.current?.abort();
+    walkCtrl.current = null;
+    setWalk(EMPTY_WALK);
+  }
+  function selectWalkLoop(i: number) {
+    const loop = walk.loops[i];
+    if (!loop) return;
+    walkPickedRef.current = loop.id;
+    setWalk((w) => ({ ...w, selected: i, collapsed: false }));
+    setRouteCard((c) => (c.open && !c.collapsed ? { ...c, collapsed: true } : c));
+    frameWalkLoop(loop, walk.params);
+  }
+  /** A finished walk handed over (the chat): drawn without a search. */
+  function showWalkResult(r: WalkResult, params?: WalkQuery) {
+    walkCtrl.current?.abort();
+    walkCtrl.current = null;
+    walkPickedRef.current = null;
+    const q: WalkQuery = { ...(walkContext() ?? {}), ...(params ?? {}) };
+    if (itin) closeItinerary();
+    setRouteCard((c) => (c.open && !c.collapsed ? { ...c, collapsed: true } : c));
+    if (!isPhone()) cardOpenRef.current = true;
+    setWalk({ ...EMPTY_WALK, status: "ok", params: q, source: "event", result: r, loops: r.loops, edges: edgesOfLoops(r.loops, q), open: true });
+    frameWalkLoop(r.loops[0], q);
+  }
+  /** The walk's origin as an itinerary place: the traveller's own when it is the same point. */
+  function walkOriginPlace(q: WalkQuery | undefined): ItinPlace | undefined {
+    const h = walkHome(q);
+    if (!h) return originPlace;
+    if (originPlace && Math.abs(originPlace.lat - h[1]) < 0.01 && Math.abs(originPlace.lon - h[0]) < 0.01) return originPlace;
+    return { name: String(q?.label ?? "home"), lat: h[1], lon: h[0] };
+  }
+  /** Short loops' Smart loop: the form in TripsExtra.smart as a walk. */
+  function runSmartLoop() {
+    const f = tripsExtra.smart;
+    void runWalk(
+      {
+        minNights: f.minNights,
+        maxNights: f.maxNights,
+        nightsPerStop: f.perStop,
+        maxStops: f.cities,
+        tradeoff: f.style === "cheapest" ? "price" : "balanced",
+        ...(f.style === "unique" ? { style: "unique" } : {}),
+        // "like:DE" asks the engine for Germany's whole group (Austria, Switzerland), the owner's "countries like Germany".
+        avoid: f.avoidLike ? f.avoid.map((c) => `like:${c}`) : f.avoid,
+        mustInclude: f.mustInclude,
+        budget: f.budget,
+        ...(f.from ? { from: f.from } : {}),
+        ...(f.to ? { to: f.to } : {}),
+      },
+      "short",
+    );
+  }
+  /**
+   * Whether "Walk the region" can reach the Wild region. The walk explores with the cheapest
+   * one-ways "anywhere" from home and from the hubs it lands in, and those are the 15 cheapest
+   * fares, which stay within a short flight of home (from Brasov, all European). A region whose
+   * nearest country lies beyond that comes back empty after spending live searches, so it keeps
+   * the classic builder. Unknown home: true, and runWalk says the airports are still loading.
+   */
+  const wildWalkReach = useMemo(() => {
+    const o = origin;
+    if (!o) return true;
+    const chosen = tripsExtra.wild.countries;
+    if (!chosen.length) {
+      const c = REGION_CENTROIDS[wildRegion];
+      return !c || haversineKm(o.lat, o.lon, c[0], c[1]) <= WALK_REACH_KM;
+    }
+    // Chosen countries: the nearest one's middle (the mean of its cities) decides.
+    const sum = new Map<string, [number, number, number]>();
+    for (const c of Object.values(cities)) {
+      if (!chosen.includes(c.country)) continue;
+      const t = sum.get(c.country) ?? [0, 0, 0];
+      sum.set(c.country, [t[0] + c.lat, t[1] + c.lon, t[2] + 1]);
+    }
+    if (!sum.size) return true;
+    return [...sum.values()].some(([la, lo, n]) => haversineKm(o.lat, o.lon, la / n, lo / n) <= WALK_REACH_KM);
+  }, [origin, tripsExtra.wild.countries, wildRegion, cities]);
+  /** Wild loops' "Walk the region": the region's countries (or the chosen ones) as the allowed stops, up to six of them. */
+  function runWildWalk() {
+    const wf = tripsExtra.wild;
+    // A far region would spend live searches on European fares and find nothing; the panel offers the classic builder instead.
+    if (!wildWalkReach) {
+      setNotice("This region is too far for the walk; build the loop instead.");
+      return;
+    }
+    const countries = wf.countries.length ? wf.countries : (WILD_REGION_COUNTRIES[wildRegion] ?? []);
+    const nights = Math.max(3, Math.min(60, wildNights));
+    // Nights a stop: the form's range, else one that six stops can fill and three stops do not overrun.
+    const lo = wf.stopNights?.[0] ?? Math.max(2, Math.floor(nights / 6));
+    const hi = Math.min(14, wf.stopNights?.[1] ?? Math.max(lo + 1, Math.ceil(nights / 3)));
+    const maxStops = Math.min(6, Math.max(2, Math.ceil(nights / Math.max(1, lo))));
+    const from = wildPeriod.from && wildPeriod.from > todayIso() ? wildPeriod.from : undefined;
+    const minNights = Math.max(1, nights - 1);
+    const maxNights = Math.min(60, nights + 1);
+    // The walk's window holds the whole trip, so it runs past the departure window by the trip's length.
+    const w = from ? { from, to: addDays(wildPeriod.to && wildPeriod.to > from ? wildPeriod.to : from, maxNights + 1) } : walkWindow(maxNights);
+    void runWalk(
+      {
+        countries,
+        minNights,
+        maxNights,
+        nightsPerStop: lo === hi ? String(lo) : `${lo}-${hi}`,
+        maxStops,
+        tradeoff: wildTradeoff,
+        mustInclude: wf.mustInclude.slice(0, maxStops),
+        ...(wf.wishes.trim() ? { style: wf.wishes.replace(/[^\p{L}\p{N} ,.'()&-]/gu, " ").replace(/\s+/g, " ").trim().slice(0, 120) } : {}),
+        // A far region needs an explore from the hub it lands in and from each stop: more live searches than a short loop.
+        budget: WALK_MORE_BUDGET,
+        from: w.from,
+        to: w.to,
+      },
+      "wild",
+    );
+  }
+  /**
+   * The command line's walk (the brain's 'walk' command kind): any field named like a walk
+   * parameter is used, dates only when they are dates (a route's "from" is a place), and the
+   * traveller's own context fills the rest. Its label is the command's display text, never
+   * the walk's place name.
+   */
+  function walkFromCommand(c: Record<string, unknown>) {
+    const q: WalkQuery = {};
+    const skip = new Set<string>(["g", "home", "lat", "lon", "label", "exclude"]);
+    for (const k of WALK_PARAM_KEYS) {
+      if (skip.has(k)) continue;
+      const v = c[k];
+      if (typeof v === "number" || (typeof v === "string" && v.trim())) q[k] = v;
+      else if (Array.isArray(v) && v.length && v.every((x) => typeof x === "string")) q[k] = v as string[];
+      // A range of nights a stop arrives as [2, 3]; the route reads "2-3".
+      else if (Array.isArray(v) && v.length === 2 && v.every((x) => typeof x === "number")) q[k] = v[0] === v[1] ? v[0] : `${v[0]}-${v[1]}`;
+    }
+    if (q.from && !ISO_DAY.test(String(q.from))) delete q.from;
+    if (q.to && !ISO_DAY.test(String(q.to))) delete q.to;
+    // Other names a command may use for the same things.
+    const num = (k: string) => (typeof c[k] === "number" ? (c[k] as number) : undefined);
+    const nights = num("nights");
+    if (q.minNights == null && nights) q.minNights = nights;
+    if (q.maxNights == null && nights) q.maxNights = nights;
+    const stops = num("stops");
+    if (q.maxStops == null && stops) q.maxStops = stops;
+    if (q.mustInclude == null && Array.isArray(c.cities)) q.mustInclude = (c.cities as unknown[]).filter((x): x is string => typeof x === "string");
+    if (!q.from && typeof c.start === "string" && ISO_DAY.test(c.start)) q.from = c.start;
+    if (!q.to && typeof c.end === "string" && ISO_DAY.test(c.end)) q.to = c.end;
+    // "loop from Cluj": a named start is placed through the city table, with the airports near it.
+    const named = typeof c.origin === "string" ? c.origin.trim() : "";
+    if (named && foldName(named) !== foldName(homeCity?.city.name ?? origin?.label ?? "")) {
+      const start = cityByName(named);
+      if (start) {
+        const near = nearestGateways(airports, start.lat, start.lon).filter((g) => g.km <= 250);
+        const real = near.filter((g) => g.airport.size !== "small");
+        const g = (real.length ? real : near).slice(0, 3).map((x) => x.airport.iata);
+        if (g.length) Object.assign(q, { g, home: start.country, lat: start.lat.toFixed(3), lon: start.lon.toFixed(3), label: start.name });
+      } else setNotice(`${named} is not on the map; the loop starts from where you are.`);
+    }
+    clearFront();
+    // Through the window event, the same door the chat uses: the globe draws it as it thinks.
+    window.dispatchEvent(new CustomEvent("atlas:walk", { detail: { params: { ...(walkContext() ?? {}), ...q } } }));
+  }
+  /**
+   * A named start in the city table, or null. The same order lib/agent-tools.ts uses: the exact
+   * name, then a code written in capitals ("GDN"), then a whole leading word of the name ("Cluj"
+   * finds Cluj-Napoca), then a code in any case. cities.json carries no population, so several
+   * cities of one name (London, Ontario; Birmingham, Alabama) are told apart by how many routes
+   * leave their airports, with a lead for the traveller's own country and their part of the
+   * world: someone in Brasov saying "London" means the English one.
+   */
+  function cityByName(name: string): City | null {
+    const raw = name.trim();
+    const q = foldName(raw);
+    if (!q) return null;
+    const list = Object.entries(cities);
+    const o = originRef.current ?? origin;
+    const homeCountry = gateways[0]?.airport.country;
+    const weight = (c: City) => {
+      let w = 0;
+      for (const a of c.airports) w = Math.max(w, routesFrom.get(a)?.length ?? (byIata.get(a)?.size === "large" ? 30 : byIata.get(a)?.size === "medium" ? 10 : 0));
+      if (homeCountry && c.country === homeCountry) w += 1000;
+      else if (o && haversineKm(o.lat, o.lon, c.lat, c.lon) < 3500) w += 300;
+      return w;
+    };
+    const pick = (hits: [string, City][]) => (hits.length ? hits.reduce((b, x) => (weight(x[1]) > weight(b[1]) ? x : b))[1] : null);
+    const byCode = (code: string) => cities[code] ?? list.find(([, c]) => c.airports.includes(code))?.[1] ?? null;
+    const exact = pick(list.filter(([, c]) => foldName(c.name) === q));
+    if (exact) return exact;
+    if (/^[A-Z]{3}$/.test(raw)) {
+      const hit = byCode(raw);
+      if (hit) return hit;
+    }
+    if (q.length >= 4) {
+      const leading = pick(list.filter(([, c]) => {
+        const n = foldName(c.name);
+        return n.startsWith(q) && !/[a-z0-9]/.test(n.charAt(q.length));
+      }));
+      if (leading) return leading;
+    }
+    return /^[a-z]{3}$/i.test(raw) ? byCode(raw.toUpperCase()) : null;
+  }
+  const runWalkRef = useRef(runWalk);
+  runWalkRef.current = runWalk;
+  const showWalkResultRef = useRef(showWalkResult);
+  showWalkResultRef.current = showWalkResult;
+  // atlas:walk {params} runs a walk and draws it live; atlas:walk-result {result, params?} draws a finished one.
+  useEffect(() => {
+    const onWalk = (e: Event) => {
+      const d = (e as CustomEvent<{ params?: WalkQuery }>).detail;
+      void runWalkRef.current(d?.params && typeof d.params === "object" ? d.params : {}, "event");
+    };
+    const onWalkResult = (e: Event) => {
+      const d = (e as CustomEvent<{ result?: WalkResult; params?: WalkQuery }>).detail;
+      if (d?.result && Array.isArray(d.result.loops)) showWalkResultRef.current(d.result, d.params);
+    };
+    window.addEventListener("atlas:walk", onWalk);
+    window.addEventListener("atlas:walk-result", onWalkResult);
+    return () => {
+      window.removeEventListener("atlas:walk", onWalk);
+      window.removeEventListener("atlas:walk-result", onWalkResult);
+    };
+  }, []);
+  // The tags that come and go need a clock while the stream runs, and one last tick after it ends to clear them.
+  useEffect(() => {
+    if (walk.status !== "loading") {
+      const t = window.setTimeout(() => setWalkClock(performance.now()), EDGE_TAG_MS + 200);
+      return () => window.clearTimeout(t);
+    }
+    const id = window.setInterval(() => setWalkClock(performance.now()), 600);
+    return () => window.clearInterval(id);
+  }, [walk.status]);
+  // What the animation loop draws: the edges split by kind, the nodes while the walk runs, and the best loop's legs (the rest dims once it is done).
+  useEffect(() => {
+    if (!walkShowing || !walk.edges.length) {
+      walkDrawRef.current = null;
+      return;
+    }
+    const best = walk.loops[walk.selected];
+    // Streamed edges run between city codes (ROM, WAW) and HOME, a loop's legs between airports
+    // (FCO, WMI): both spellings are keyed, so the best loop's first hop and way home stay lit.
+    const bestKeys = new Set((best?.legs ?? []).map((l) => `${l.from}>${l.to}`));
+    if (best?.stops.length) {
+      const chain = ["HOME", ...best.stops.map((st) => st.code), "HOME"];
+      for (let i = 1; i < chain.length; i++) bestKeys.add(`${chain[i - 1]}>${chain[i]}`);
+    }
+    walkDrawRef.current = { fly: walk.edges.filter((e) => e.kind === "fly"), ground: walk.edges.filter((e) => e.kind !== "fly"), nodes: walk.status === "loading" ? walk.nodes : [], done: walk.status !== "loading", best: bestKeys, v: (walkDrawRef.current?.v ?? 0) + 1 };
+  }, [walkShowing, walk.edges, walk.nodes, walk.status, walk.loops, walk.selected]);
+
   // The option on show, as legs with coordinates: an airport by code, a city by code, the two
   // ends by the engine's own coordinates, a station by the coordinates the engine may attach;
   // a leg whose end is unknown continues from the last known point so the line never breaks.
   const abOption: RouteOption | null = abShowing && abSelected != null ? (ab.options[abSelected] ?? null) : null;
-  const abLegs = useMemo<RouteLeg[]>(() => {
-    if (!abOption) return [];
-    const r = ab.result;
-    const ends = new Map<string, [number, number]>();
-    if (r) {
-      ends.set(r.from.label, [r.from.lon, r.from.lat]);
-      ends.set(r.to.label, [r.to.lon, r.to.lat]);
-      for (const code of r.from.airports) if (!byIata.has(code)) ends.set(code, [r.from.lon, r.from.lat]);
-      for (const code of r.to.airports) if (!byIata.has(code)) ends.set(code, [r.to.lon, r.to.lat]);
-    }
-    const at = (code: string, name: string, lat?: number, lon?: number): [number, number] | null => {
-      if (lat != null && lon != null) return [lon, lat];
-      return wildCoord(code) ?? ends.get(code) ?? ends.get(name) ?? null;
-    };
-    const out: RouteLeg[] = [];
-    let last: [number, number] | null = null;
-    const legs: AbLeg[] = [...abOption.legs, ...(abOption.back ?? [])];
-    legs.forEach((l, i) => {
-      const from = at(l.from, l.fromName, l.fromLat, l.fromLon) ?? last ?? (i === 0 && r ? [r.from.lon, r.from.lat] : null);
-      const to = at(l.to, l.toName, l.toLat, l.toLon) ?? (i === abOption.legs.length - 1 && r ? [r.to.lon, r.to.lat] : null);
-      if (from && to) {
-        out.push({ from, to, kind: l.kind === "fly" ? "fly" : "ground" });
-        last = to;
+  /** An option's legs with coordinates (r: the answer it belongs to, for the two ends; absent while the stream runs). */
+  const optionLegs = useCallback(
+    (o: RouteOption, r: RouteResult | undefined): RouteLeg[] => {
+      const ends = new Map<string, [number, number]>();
+      if (r) {
+        ends.set(r.from.label, [r.from.lon, r.from.lat]);
+        ends.set(r.to.label, [r.to.lon, r.to.lat]);
+        for (const code of r.from.airports) if (!byIata.has(code)) ends.set(code, [r.from.lon, r.from.lat]);
+        for (const code of r.to.airports) if (!byIata.has(code)) ends.set(code, [r.to.lon, r.to.lat]);
       }
-    });
-    return out;
-  }, [abOption, ab.result, byIata, wildCoord]);
+      const at = (code: string, name: string, lat?: number, lon?: number): [number, number] | null => {
+        if (lat != null && lon != null) return [lon, lat];
+        return wildCoord(code) ?? ends.get(code) ?? ends.get(name) ?? null;
+      };
+      const out: RouteLeg[] = [];
+      let last: [number, number] | null = null;
+      const legs: AbLeg[] = [...o.legs, ...(o.back ?? [])];
+      legs.forEach((l, i) => {
+        const from = at(l.from, l.fromName, l.fromLat, l.fromLon) ?? last ?? (i === 0 && r ? [r.from.lon, r.from.lat] : null);
+        const to = at(l.to, l.toName, l.toLat, l.toLon) ?? (i === o.legs.length - 1 && r ? [r.to.lon, r.to.lat] : null);
+        if (from && to) {
+          out.push({ from, to, kind: l.kind === "fly" ? "fly" : "ground" });
+          last = to;
+        }
+      });
+      return out;
+    },
+    [byIata, wildCoord],
+  );
+  const abLegs = useMemo<RouteLeg[]>(() => (abOption ? optionLegs(abOption, ab.result) : []), [abOption, ab.result, optionLegs]);
+  // While the card searches, every option drawn as it arrives (faint), the one picked at the end drawn bold.
+  const abStreamLegs = useMemo<RouteLeg[]>(() => (abShowing && ab.status === "loading" ? ab.options.slice(0, 24).flatMap((o) => optionLegs(o, ab.result)) : []), [abShowing, ab.status, ab.options, ab.result, optionLegs]);
   const abPoints = useMemo<[number, number][]>(() => {
     const pts: [number, number][] = [];
     for (const l of abLegs) {
@@ -1538,8 +2111,29 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
   }, [itinShowing, itinShape, placeCoord]);
   const itinPoints = useMemo<[number, number][]>(() => (itinRoute ? itinRoute.stops.map((st) => [st.lon, st.lat] as [number, number]) : []), [itinRoute]);
   // The legs and points the overlay layers draw: the itinerary's, else the route card's.
-  const overlayLegs = itinRoute ? itinRoute.legs : abLegs;
-  const overlayPoints = itinRoute ? itinPoints : abPoints;
+  // ---- The walk's loop on show, through the same mechanism as a trip: numbered stops, legs
+  // drawn from coordinates (HOME is the walk's own point), the trail running along them.
+  const walkLoop = walkShowing ? (walk.loops[walk.selected] ?? null) : null;
+  const walkRoute = useMemo<{ stops: WildStop[]; legs: RouteLeg[]; points: [number, number][]; home: [number, number] | null } | null>(() => {
+    if (!walkLoop) return null;
+    const home = walkHome(walk.params);
+    const byCode = new Map(walkLoop.stops.map((st) => [st.code, [st.lon, st.lat] as [number, number]]));
+    const at = (code: string) => (code === "HOME" ? home : (byCode.get(code) ?? wildCoord(code)));
+    const legs: RouteLeg[] = [];
+    for (const l of walkLoop.legs) {
+      const a = at(l.from);
+      const b = at(l.to);
+      if (a && b) legs.push({ from: a, to: b, kind: l.kind === "fly" ? "fly" : "ground" });
+    }
+    const stops: WildStop[] = walkLoop.stops.map((st) => ({ code: st.code, name: st.name, country: st.country, lat: st.lat, lon: st.lon, arrive: st.arrive, depart: st.leave, nights: st.nights, perDay: 0 }));
+    const points: [number, number][] = [...stops.map((st) => [st.lon, st.lat] as [number, number]), ...(home ? [home] : [])];
+    return { stops, legs, points, home };
+    // walkHome only reads its argument.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [walkLoop, walk.params, wildCoord]);
+  // The legs and points the overlay layers draw: the itinerary's, else the walk's loop, else the route card's.
+  const overlayLegs = itinRoute ? itinRoute.legs : walkRoute ? walkRoute.legs : abLegs;
+  const overlayPoints = itinRoute ? itinPoints : walkRoute ? walkRoute.points : abPoints;
 
   // ---- Where the traveller is, as the capabilities need it: a place /api/route resolves
   // (a city name when one is close, else the coordinates) and an itinerary's origin.
@@ -1799,6 +2393,9 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
   function shownSkeleton(): Skeleton | null {
     // The place page sits in front of everything else in the panel, so it is what the traveller is looking at.
     if (placePage) return placeSkeleton(placePage);
+    const wl = walkShowing ? walk.loops[walk.selected] : undefined;
+    const wo = walkOriginPlace(walk.params);
+    if (wl && wo) return skeletonFromWalk(wl, wo);
     if (eventSel) return eventSkeleton(eventSel);
     if (cardShown && ab.result && abSelected != null) {
       const o = ab.options[abSelected];
@@ -1884,6 +2481,12 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
     setPlacePage(null);
   }
   function runCommand(c: Command) {
+    // The brain's 'walk' kind (lib/command.ts, another stream): matched by its name so this
+    // builds before and after it lands; its fields are read loosely by walkFromCommand.
+    if ((c.kind as string) === "walk") {
+      walkFromCommand(c as unknown as Record<string, unknown>);
+      return;
+    }
     switch (c.kind) {
       case "route": {
         const base = emptyRouteForm();
@@ -2058,6 +2661,7 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
     // The itinerary on show is the route (its legs are drawn from coordinates, routeLegs below);
     // the open route card hides the trips underneath until it is folded or closed.
     if (itinRoute) return { stops: itinRoute.stops, legs: [], home: itinRoute.home };
+    if (walkRoute) return { stops: walkRoute.stops, legs: [], home: walkRoute.home };
     if (covered) return null;
     const wt = wildOpen ? wild.trip : view === "chat" && chatTrip && !chatDeals.length ? chatTrip : null;
     if (wt) return { stops: wt.stops, legs: wt.legs, home: wildCoord(wt.home) };
@@ -2067,14 +2671,15 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
       return { ...r, home: first?.kind === "fly" ? wildCoord(first.from) : origin ? [origin.lon, origin.lat] : null };
     }
     return null;
-  }, [itinRoute, covered, wildOpen, wild.trip, view, chatTrip, chatDeals.length, trip, wildCoord, homeLabel, origin]);
+  }, [itinRoute, walkRoute, covered, wildOpen, wild.trip, view, chatTrip, chatDeals.length, trip, wildCoord, homeLabel, origin]);
   // Legs on the globe, coordinates resolved: a leg to the front door ends at the visitor.
   const routeLegs = useMemo<RouteLeg[]>(() => {
     if (itinRoute) return itinRoute.legs;
+    if (walkRoute) return walkRoute.legs;
     if (!route) return [];
     const at = (code: string): [number, number] | null => wildCoord(code) ?? (origin && code === origin.label ? [origin.lon, origin.lat] : null);
     return route.legs.map((l) => ({ from: at(l.from), to: at(l.to), kind: l.kind })).filter((x): x is RouteLeg => !!x.from && !!x.to);
-  }, [itinRoute, route, wildCoord, origin]);
+  }, [itinRoute, walkRoute, route, wildCoord, origin]);
 
   // Play the route: the camera flies home, then to each stop in turn, then home, 2.5 s a hop;
   // any touch of the globe stops it.
@@ -2188,10 +2793,10 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
     else if ((wildOpen && wild.status === "ok") || (shortOpen && selectedTrip)) setSheet("half");
   }, [view, wildOpen, wild.status, shortOpen, selectedTrip]);
   // The cards on the map cover its right edge on desktop: framing keeps clear of them.
-  cardOpenRef.current = !isPhone() && (cardShown || !!eventSel || (evLayer.on && evLayer.list));
+  cardOpenRef.current = !isPhone() && (cardShown || (walk.open && walk.status !== "idle") || !!eventSel || (evLayer.on && evLayer.list));
   useEffect(() => stopPlay, [view, tripMode, selectedTrip, wild.trip, itin?.n]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const busy = searching || asking || wild.status === "loading" || ab.status === "loading" || finder.status === "loading" || longStay.status === "loading" || group.status === "loading" || plan.status === "loading" || liveSearch?.status === "loading" || combos.status === "loading" || (shortOpen && !trips);
+  const busy = searching || asking || walk.status === "loading" || wild.status === "loading" || ab.status === "loading" || finder.status === "loading" || longStay.status === "loading" || group.status === "loading" || plan.status === "loading" || liveSearch?.status === "loading" || combos.status === "loading" || (shortOpen && !trips);
 
   const pathForSelected = useMemo<[number, number][]>(() => {
     if (!reach || selectedStation == null) return [];
@@ -2229,6 +2834,17 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
     // The place page's city gets its own tag, so the page and the globe point at the same spot.
     if (placePage && !itinShowing) evs.unshift({ key: "place:open", lon: placePage.lon, lat: placePage.lat, text: placePage.name, kind: "base", hot: true });
     if (eventSel && !eventSpots.some((e) => e.key === eventSel.key)) evs.unshift({ key: `event:${eventSel.key}`, lon: eventSel.lon, lat: eventSel.lat, text: eventSel.name, sub: dateRange(eventSel.start, eventSel.end), kind: "event", hot: true });
+    if (walkShowing) {
+      // The walk thinking: the cities it expanded with the money so far, the price of every edge
+      // it just looked at for a few seconds; then the loop it chose, numbered.
+      if (route) out.push(...route.stops.map((st, i) => ({ key: `stop:${i}`, lon: st.lon, lat: st.lat, text: `${i + 1} · ${st.name} · ${st.nights}n`, kind: "stop" as const, hot: playing === i })));
+      if (walk.status === "loading") {
+        const onLoop = new Set(route?.stops.map((st) => st.code) ?? []);
+        for (const n of [...walk.nodes].reverse()) if (n.code !== "HOME" && !onLoop.has(n.code)) out.push({ key: `walk:node:${n.code}`, lon: n.lon, lat: n.lat, text: n.name, sub: n.money != null ? `€${n.money} so far` : shortDate(n.date), kind: "walk" });
+        for (const e of walk.edges.slice(-60).reverse()) if (walkClock - e.at < EDGE_TAG_MS) out.push({ key: `walk:edge:${e.from}>${e.to}>${e.kind}>${Math.round(e.at)}`, lon: e.lon, lat: e.lat, text: `€${Math.round(e.price)}`, kind: "walkedge", cheap: e.price < 40 });
+      }
+      return [...out, ...evs];
+    }
     if (abShowing && ab.result) {
       // A side the engine could not place (placed: false, borrowed or null coordinates) gets no tag: it would sit on the other city or on null island.
       const { from, to } = ab.result;
@@ -2268,9 +2884,9 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
     }
     out.sort((a, b) => (a.hot === b.hot ? 0 : a.hot ? -1 : 1));
     return out;
-  }, [view, tripMode, pick, wildRegion, route, playing, longStay, selectedBase, group, selectedOption, wildCoord, dealsList, deal, selectedDeal, hoveredDeal, dealCoord, abShowing, ab.result, abOption, covered, eventSpots, eventSel, placePage, itinShowing]);
+  }, [view, tripMode, pick, wildRegion, route, playing, longStay, selectedBase, group, selectedOption, wildCoord, dealsList, deal, selectedDeal, hoveredDeal, dealCoord, abShowing, ab.result, abOption, covered, eventSpots, eventSel, placePage, itinShowing, walkShowing, walk.status, walk.nodes, walk.edges, walkClock]);
   function pickLabel(key: string) {
-    if (key.startsWith("ab:") || key.startsWith("place:")) return;
+    if (key.startsWith("ab:") || key.startsWith("place:") || key.startsWith("walk:")) return;
     if (key.startsWith("event:")) {
       const e = eventSpots.find((x) => `event:${x.key}` === key) ?? (eventSel && `event:${eventSel.key}` === key ? eventSel : null);
       if (e) selectEvent(e);
@@ -2356,6 +2972,108 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
           updateTriggers: { getRadius: [phase], getFillColor: [phase], getLineColor: [phase] },
         }),
       );
+    }
+    // The graph walk as it thinks: every edge grows from its city and fades to a faint line
+    // (flights as great circles, trains and coaches dashed), a chosen edge brightens and stays,
+    // the cities being expanded pulse. Once the walk is done the edges off the best loop dim.
+    const wd = walkDrawRef.current;
+    const reduced = reducedRef.current;
+    if (wd) {
+      const now = performance.now();
+      const fresh = (e: WalkEdgeView) => now - e.at < EDGE_GROW_MS + EDGE_FADE_MS;
+      const moving = !reduced && (wd.fly.some(fresh) || wd.ground.some(fresh) || wd.nodes.length > 0);
+      // While nothing moves the triggers hold still, so deck.gl does not rebuild 200 paths a frame for nothing.
+      const tick = moving ? Math.floor(now / 33) : -wd.v;
+      const alpha = (e: WalkEdgeView): number => {
+        if (wd.done && wd.best.has(`${e.from}>${e.to}`)) return 235;
+        if (e.chosen) return wd.done ? 90 : 235;
+        const floor = wd.done ? 16 : 44;
+        if (reduced) return wd.done ? floor : 110;
+        const t = Math.max(0, (now - e.at - EDGE_GROW_MS) / EDGE_FADE_MS);
+        return Math.round(Math.max(floor, 210 - (210 - floor) * t));
+      };
+      const pathOf = (e: WalkEdgeView) => (reduced ? e.path : growPath(e.path, (now - e.at) / EDGE_GROW_MS));
+      const colorOf = (e: WalkEdgeView, base: [number, number, number]): RGBA => (e.chosen ? [111, 240, 196, alpha(e)] : e.home ? [238, 242, 255, alpha(e)] : [base[0], base[1], base[2], alpha(e)]);
+      if (wd.fly.length)
+        anim.push(
+          new PathLayer<WalkEdgeView>({
+            id: "walk-fly",
+            data: wd.fly,
+            getPath: pathOf,
+            getColor: (e) => colorOf(e, [124, 196, 255]),
+            getWidth: (e) => (e.chosen ? 2.6 : 1.4),
+            widthUnits: "pixels",
+            updateTriggers: { getPath: tick, getColor: tick, getWidth: wd.v },
+            parameters: { cullMode: "none" },
+          }),
+        );
+      if (wd.ground.length)
+        anim.push(
+          new PathLayer<WalkEdgeView>({
+            id: "walk-ground",
+            data: wd.ground,
+            getPath: pathOf,
+            getColor: (e) => colorOf(e, [255, 180, 84]),
+            getWidth: (e) => (e.chosen ? 2.8 : 1.6),
+            widthUnits: "pixels",
+            extensions: [dashExt],
+            getDashArray: [3, 2],
+            dashJustified: true,
+            updateTriggers: { getPath: tick, getColor: tick, getWidth: wd.v },
+            parameters: { cullMode: "none" },
+          } as ConstructorParameters<typeof PathLayer<WalkEdgeView>>[0]),
+        );
+      if (wd.nodes.length) {
+        anim.push(
+          new ScatterplotLayer<WalkNodeView>({
+            id: "walk-nodes",
+            data: wd.nodes,
+            getPosition: (n) => [n.lon, n.lat],
+            radiusUnits: "pixels",
+            getRadius: 4.5,
+            getFillColor: [238, 242, 255, 235],
+            stroked: true,
+            lineWidthUnits: "pixels",
+            getLineWidth: 1.5,
+            getLineColor: [111, 240, 196, 255],
+          }),
+        );
+        // A node pulses when it arrives; the latest keeps pulsing while the walk works from it.
+        const last = wd.nodes[wd.nodes.length - 1];
+        const pulsing = reduced ? [] : wd.nodes.filter((n) => n === last || now - n.at < NODE_PULSE_MS);
+        if (pulsing.length)
+          anim.push(
+            new ScatterplotLayer<WalkNodeView>({
+              id: "walk-pulse",
+              data: pulsing,
+              getPosition: (n) => [n.lon, n.lat],
+              radiusUnits: "pixels",
+              getRadius: (n) => 6 + (((now - n.at) % 1200) / 1200) * 22,
+              getFillColor: (n) => [111, 240, 196, Math.round(110 * (1 - ((now - n.at) % 1200) / 1200))],
+              stroked: false,
+              updateTriggers: { getRadius: tick, getFillColor: tick },
+            }),
+          );
+      }
+    }
+    // Deals and route options a live search just found: an arc grows from where they leave and fades.
+    if (arrivalsRef.current.length) {
+      const now = performance.now();
+      arrivalsRef.current = arrivalsRef.current.filter((a) => now - a.at < ARRIVAL_MS);
+      const shown = arrivalsRef.current.filter((a) => now >= a.at);
+      if (shown.length)
+        anim.push(
+          new PathLayer<Arrival>({
+            id: "arrivals",
+            data: shown,
+            getPath: (a) => (reduced ? a.path : growPath(a.path, (now - a.at) / 700)),
+            getColor: (a) => [a.color[0], a.color[1], a.color[2], reduced ? 150 : Math.round(230 * Math.min(1, Math.max(0, 1 - (now - a.at - 900) / (ARRIVAL_MS - 900))))],
+            getWidth: 2,
+            widthUnits: "pixels",
+            updateTriggers: { getPath: now, getColor: now },
+            parameters: { cullMode: "none" },
+          }),
+        );
     }
     overlay.setProps({ layers: [...baseLayersRef.current, ...anim] });
   }, []);
@@ -2790,6 +3508,17 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
             getLineColor: [5, 7, 14, 230],
           })
         : null,
+      abStreamLegs.length
+        ? new PathLayer<RouteLeg>({
+            id: "ab-stream",
+            data: abStreamLegs,
+            getPath: (l) => (l.kind === "fly" ? greatCircle(l.from, l.to, 40) : [l.from, l.to]),
+            getColor: (l) => (l.kind === "fly" ? [124, 196, 255, 110] : [255, 180, 84, 130]),
+            getWidth: 1.5,
+            widthUnits: "pixels",
+            parameters: { cullMode: "none" },
+          })
+        : null,
       overlayLegs.length
         ? new ArcLayer<RouteLeg>({
             id: "ab-arcs",
@@ -3036,7 +3765,7 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
     render();
     // focus* helpers only read refs and state setters; listing them would re-run this on every render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [airports, shown, gateways, gatewayIata, origin, selectedDest, live, view, reachBand, selectedStation, pathForSelected, placesShown, selectedPlace, tripsShown, trip, warmOnly, weather, dealsList, selectedDeal, hoveredDeal, deal, render, selectedCombo, combos, sightsOnMap, sights, wild.trip, wildCoord, chatTrip, chatDeals, shortOpen, wildOpen, tripMode, longStay, selectedBase, group, selectedOption, lowZoom, overlayLegs, overlayPoints, covered, itinShowing, eventSpots, eventSel]);
+  }, [airports, shown, gateways, gatewayIata, origin, selectedDest, live, view, reachBand, selectedStation, pathForSelected, placesShown, selectedPlace, tripsShown, trip, warmOnly, weather, dealsList, selectedDeal, hoveredDeal, deal, render, selectedCombo, combos, sightsOnMap, sights, wild.trip, wildCoord, chatTrip, chatDeals, shortOpen, wildOpen, tripMode, longStay, selectedBase, group, selectedOption, lowZoom, overlayLegs, overlayPoints, abStreamLegs, covered, itinShowing, eventSpots, eventSel]);
 
   const groundFeeds = reach ? reach.feeds.map((f) => f.attribution.split(" via ")[0].split(" (")[0]).join(", ") : "";
 
@@ -3055,6 +3784,7 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
           key={itin.n}
           skeleton={itin.skeleton}
           itinerary={itin.itinerary}
+          savedId={itin.savedId ?? (itin.itinerary as SavedItinerary | undefined)?.savedId}
           wishes={itin.wishes}
           pace={itin.pace}
           budget={itin.budget}
@@ -3157,6 +3887,26 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
             startCollapsed={isPhone()}
           />
         )}
+        {walk.open && walk.status !== "idle" && (
+          <WalkCard
+            walk={walk}
+            homeLabel={homeLabel}
+            onSelect={selectWalkLoop}
+            onItinerary={(i) => {
+              const loop = walk.loops[i];
+              const o = walkOriginPlace(walk.params);
+              if (loop && o) openItinerary({ skeleton: skeletonFromWalk(loop, o) });
+            }}
+            onMoreBudget={() => void runWalk({ ...(walk.params ?? {}), budget: WALK_MORE_BUDGET }, walk.source ?? "event")}
+            onCancel={cancelWalk}
+            onClose={closeWalk}
+            onCollapse={(c) => {
+              setWalk((w) => ({ ...w, collapsed: c }));
+              // Unfolded, the walk takes the globe back from the route card.
+              if (!c) setRouteCard((r) => (r.open && !r.collapsed ? { ...r, collapsed: true } : r));
+            }}
+          />
+        )}
         {routeCard.open && (
           <RouteCard
             form={abForm}
@@ -3176,7 +3926,10 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
               else setNotice("Wait for the search to finish, then make the itinerary.");
             }}
             collapsed={routeCard.collapsed}
-            onCollapse={(c) => setRouteCard({ open: true, collapsed: c })}
+            onCollapse={(c) => {
+              setRouteCard({ open: true, collapsed: c });
+              if (!c) setWalk((w) => (w.open && !w.collapsed ? { ...w, collapsed: true } : w));
+            }}
             onClose={() => {
               cancelRoute();
               if (pick === "place") cancelPick();
@@ -3347,6 +4100,11 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
           selectedOption,
           onOption: setSelectedOption,
           excludedCount: exclude.length,
+          walk,
+          onSmartLoop: runSmartLoop,
+          onWildWalk: runWildWalk,
+          wildWalkReach,
+          onWalkSelect: selectWalkLoop,
         }}
         onHere={showHere}
         pick={pick}

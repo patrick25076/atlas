@@ -7,6 +7,7 @@
 //        DEALS_GATEWAYS=OTP pnpm ingest:deals
 import { readFile, writeFile } from "node:fs/promises";
 import { kiwiDate, nightsOf, searchFlight, type KiwiItinerary } from "../../lib/kiwi";
+import { sensibleTicket } from "../../lib/board";
 import type { City, Deal, DealsFile } from "../../lib/types";
 import { DESTINATIONS } from "./destinations";
 import { recordManifest } from "./manifest";
@@ -81,6 +82,8 @@ async function worker() {
       const ok = r.itineraries
         .map((it) => ({ it, nights: nightsOf(it) }))
         .filter((x): x is { it: KiwiItinerary; nights: number } => x.nights != null && x.nights >= MIN_NIGHTS && x.nights <= MAX_NIGHTS)
+        // A "return" into one city and home from a far one (Chania in, Corfu out) is no getaway.
+        .filter(({ it }) => sensibleTicket(it))
         .sort((a, b) => a.it.price - b.it.price)
         .slice(0, KEEP_PER_ROUTE);
       for (const { it, nights } of ok) deals.push(toDeal(gw, dst, it, nights));

@@ -12,7 +12,7 @@
 import citiesJson from "@/public/data/cities.json";
 import countriesJson from "@/public/data/countries.json";
 import { countryAllowed } from "./been";
-import { hubDegree, resolveGateway } from "./board";
+import { hubDegree, resolveGateway, sensibleTicket } from "./board";
 import { targetCountry } from "./finder";
 import { rememberedFare, type RememberedFare } from "./insights";
 import { kiwiDate, nightsOf, searchFlight, type KiwiItinerary } from "./kiwi";
@@ -251,7 +251,8 @@ export async function scanCheapest(p: ScanParams): Promise<ScanResult> {
         }
       }
       if (r) {
-        const its = r.itineraries.filter((it) => (oneWay ? !it.inbound : fits(nightsOf(it))) && lands(it)).sort((a, b) => a.price - b.price);
+        // A "return" landing in one city and flying home from a far one is not this month's price.
+        const its = r.itineraries.filter((it) => (oneWay ? !it.inbound : fits(nightsOf(it))) && lands(it) && sensibleTicket(it)).sort((a, b) => a.price - b.price);
         const seenDates = new Set<string>();
         const kept: ScanMonth[] = [];
         for (const it of its) {

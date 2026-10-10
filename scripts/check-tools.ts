@@ -23,12 +23,16 @@
 //   itinerary  make_itinerary: a two-stop list (the model, or with --itin-stub the engine's
 //              no-model path that builds the days from the guides), nothing to plan from,
 //              last_route replayed from a thread's history, and an unknown place.
-// --only=command,dispatch,itinerary runs just those (no live tool at all); --only=tools just
-// the live table.
+//   walk       walk_trips (the graph walk): its parameters through the trace, the budget-0 path
+//              (the turn's budget spent: no search may leave, the fare memory still answers),
+//              the progress it streams, what the model reads, cheapest_way at budget 0, and one
+//              live walk of at most --walk-live=N searches (default 2, never past --live-cap).
+// --only=command,dispatch,itinerary,walk runs just those; --only=tools just the live table.
 import { atlasTools, parseDay, rememberOutput, type AgentContext } from "../lib/agent-tools";
 import { parseCommand, type Command } from "../lib/command";
-import { eventCommand, eventRoute, eventTripDays, routeDetail, routeResultDetail, type ChatEvent } from "../lib/chat-widgets";
-import { skeletonFromDeal, skeletonFromRoute, type Itinerary } from "../lib/itinerary";
+import { eventCommand, eventRoute, eventTripDays, routeDetail, routeResultDetail, walkCommandQuery, walkResultDetail, walkWindow, type ChatEvent } from "../lib/chat-widgets";
+import { skeletonFromDeal, skeletonFromRoute, skeletonFromWalk, type Itinerary } from "../lib/itinerary";
+import type { WalkLoop, WalkResult } from "../lib/graph-walk";
 import type { RouteResult } from "../lib/route-finder";
 import type { Deal } from "../lib/types";
 import { kiwiStats, kiwiThrottled } from "../lib/kiwi";
@@ -64,6 +68,17 @@ const rows: Row[] = [];
 let failures = 0;
 /** Kiwi searches this process sent so far (memo hits do not count; refused ones do). */
 const sent = () => kiwiStats().today;
+/** A tool's answer: a streaming tool (walk_trips) is an async generator whose last yield is the answer and whose
+ * earlier yields are progress ({ running: true, progress }); `seen` collects those. Anything else is awaited as is. */
+async function drain(r: unknown, seen?: unknown[]): Promise<unknown> {
+  if (!r || typeof (r as AsyncIterable<unknown>)[Symbol.asyncIterator] !== "function") return r;
+  let last: unknown;
+  for await (const item of r as AsyncIterable<unknown>) {
+    if (item && typeof item === "object" && (item as { running?: unknown }).running === true) seen?.push(item);
+    else last = item;
+  }
+  return last;
+}
 
 /** Calls one tool and records the row; returns the answer so a case can look at its fields
  * (undefined when the tool was skipped or missing). `edge` rows test odd inputs: a note or an
@@ -92,7 +107,7 @@ async function check(name: string, input: unknown, opts: { edge?: boolean; estim
   let note = "";
   let answer: Record<string, unknown> | undefined;
   try {
-    const r = (await t.execute(input, { toolCallId: `check-${name}`, messages: [] })) as Record<string, unknown> | null | undefined;
+    const r = (await drain(await t.execute(input, { toolCallId: `check-${name}`, messages: [] }))) as Record<string, unknown> | null | undefined;
     if (r && typeof r === "object") answer = r;
     if (r == null || typeof r !== "object") {
       status = `FAIL: answered ${String(r)}`;
@@ -146,7 +161,7 @@ async function dry(name: string, input: unknown): Promise<{ engine: string; para
     throw new Error("harness: parameters read, the engine was not called");
   };
   try {
-    await tools[name]?.execute?.(input, { toolCallId: `dry-${name}`, messages: [] });
+    await drain(await tools[name]?.execute?.(input, { toolCallId: `dry-${name}`, messages: [] }));
   } catch {
     // safe() never throws; a throw here would be a tool outside it, and the verdict says so
   } finally {
@@ -268,6 +283,48 @@ if (want("command")) {
     ["Christmas in Vienna", { kind: "events", where: "Vienna", words: ["christmas"] }],
     ["Easter in Seville", { kind: "events", where: "Seville", words: ["easter"] }],
     ["new year in Berlin", { kind: "events", where: "Berlin", words: ["new year"] }],
+    // Walks: a loop of cheap hops (lib/graph-walk.ts), the way the owner searches with Skyscanner Explore.
+    ["loop from Brasov 20-30 Oct 6 days", { kind: "walk", origin: "Brasov", from: "2026-10-20", to: "2026-10-30", minNights: 5, maxNights: 6 }],
+    ["loop from Brasov 20 to 30 Oct 5 to 6 nights 2 nights a stop", { kind: "walk", origin: "Brasov", from: "2026-10-20", to: "2026-10-30", minNights: 5, maxNights: 6, nightsPerStop: 2 }],
+    ["3 cities in 6 days", { kind: "walk", from: undefined, maxStops: 3, minNights: 5, maxNights: 6 }],
+    ["Brasov to Warsaw then train then home", { kind: "walk", origin: "Brasov", mustInclude: ["Warsaw"] }],
+    ["cheap unique loop next month not germany", { kind: "walk", from: "2026-11-01", to: "2026-11-30", style: "unique", avoid: ["Germany"] }],
+    ["Brasov to Warsaw by plane, Warsaw to Gdansk by train, then another city and back to Brasov or Bucharest, 6 days, cheapest but unique, not Germany", { kind: "walk", origin: "Brasov", mustInclude: ["Warsaw", "Gdansk"], minNights: 5, maxNights: 6, style: "unique", avoid: ["Germany"] }],
+    ["a loop, 2 nights a stop, nothing like germany", { kind: "walk", nightsPerStop: 2, avoid: ["like:DE"] }],
+    ["I don't like countries like Germany, a loop in november", { kind: "walk", from: "2026-11-01", to: "2026-11-30", avoid: ["like:DE"] }],
+    ["loop from Cluj, 3 cities, 2-3 nights each", { kind: "walk", origin: "Cluj", maxStops: 3, nightsPerStop: [2, 3] }],
+    ["city hopping in december, 8 nights, 4 stops", { kind: "walk", from: "2026-12-01", to: "2026-12-31", minNights: 8, maxNights: 8, maxStops: 4 }],
+    ["plane then train then home from Bucharest in november", { kind: "walk", origin: "Bucharest", from: "2026-11-01" }],
+    ["loop 6 days, not Germany or Austria, hidden gems", { kind: "walk", minNights: 5, maxNights: 6, style: "unique", avoid: ["Germany", "Austria"] }],
+    ["2 cities 4 nights not touristy", { kind: "walk", maxStops: 2, minNights: 4, maxNights: 4, style: "unique" }],
+    ["/loop Brasov 6 days", { kind: "walk", origin: "Brasov", minNights: 5, maxNights: 6 }],
+    ["/walk from Brasov 20 to 30 Oct", { kind: "walk", origin: "Brasov", from: "2026-10-20", to: "2026-10-30" }],
+    ["loop from Brasov 2 weeks, no night flights", { kind: "walk", origin: "Brasov", minNights: 14, avoid: undefined }],
+    // The owner's own chain, as he wrote it: an A-B pair is two places, the first place starts the loop, the
+    // ways home ("back to Brasov or Sibiu or Otopeni") are no stops.
+    ["Brasov-Warsaw plane, then Warsaw-Gdansk train, then Gdansk to another city and that back to Brasov or Sibiu or Otopeni", { kind: "walk", origin: "Brasov", mustInclude: ["Warsaw", "Gdansk"] }],
+    ["I would have done Brasov-Warsaw plane, then Warsaw-Gdansk train, then Gdansk to another city and that back to Brasov or Sibiu or Otopeni", { kind: "walk", origin: "Brasov", mustInclude: ["Warsaw", "Gdansk"] }],
+    ["Brasov - Warsaw plane, then Warsaw - Gdansk train, then back home", { kind: "walk", origin: "Brasov", mustInclude: ["Warsaw", "Gdansk"] }],
+    // A chain that begins with a hop starts where the traveller is: Warsaw is a stop, never the start.
+    ["fly to Warsaw then train to Gdansk then home", { kind: "walk", origin: undefined, mustInclude: ["Warsaw", "Gdansk"] }],
+    ["Warsaw by plane then train to Gdansk then home", { kind: "walk", origin: undefined, mustInclude: ["Warsaw", "Gdansk"] }],
+    ["Cluj-Napoca to Warsaw then train to Gdansk then home", { kind: "walk", origin: "Cluj-Napoca", mustInclude: ["Warsaw", "Gdansk"] }],
+    ["go from Brasov and come back from Gdansk, 6 days", { kind: "walk", origin: "Brasov", mustInclude: ["Gdansk"], minNights: 5, maxNights: 6 }],
+    ["loop from Bucharest 6 days with Krakow", { kind: "walk", origin: "Bucharest", mustInclude: ["Krakow"] }],
+    ["multi city trip Warsaw and Gdansk 6 days", { kind: "walk", origin: undefined, mustInclude: ["Warsaw", "Gdansk"] }],
+    ["loop with my partner 6 days", { kind: "walk", mustInclude: undefined }],
+    // Avoid words the walk can resolve: a way to travel is none, "via X" is X, a group word loses its "countries".
+    ["loop from Brasov next week 5 nights, not by plane", { kind: "walk", origin: "Brasov", avoid: undefined }],
+    ["loop from Brasov 6 days not via Munich", { kind: "walk", avoid: ["Munich"] }],
+    ["a few cities, avoid the dach countries", { kind: "walk", maxStops: 3, avoid: ["dach"] }],
+    ["loop from Brasov 6 days not the balkans", { kind: "walk", avoid: ["balkans"] }],
+    // "through" a European country for a week is a walk kept to it; weeks, or a far country, stay Wild.
+    ["loop through Poland 6 days", { kind: "walk", countries: ["Poland"], minNights: 5, maxNights: 6 }],
+    ["loop through Poland 3 weeks", { kind: "wild", countries: ["Poland"], nights: 21 }],
+    // What stays what it was: a far region or weeks overland is Wild, "then back" is a return, a list of stays an itinerary.
+    ["/loop sea 21", { kind: "wild", region: "sea", nights: 21 }],
+    ["loop through Vietnam 3 weeks", { kind: "wild", countries: ["Vietnam"], nights: 21 }],
+    ["Brasov to Lisbon then back", { kind: "route", from: "Brasov", to: "Lisbon" }],
   ];
   const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
   for (const [input, wantFirst, on] of cases) {
@@ -326,6 +383,54 @@ if (want("dispatch")) {
   verdict("route: an event under way", on.depart === "2026-10-11" && on.nights === 2 && onDays?.start === "2026-10-11" && onDays.end === "2026-10-11", `${JSON.stringify(on)}; trip days ${JSON.stringify(onDays)}`);
   const xmas = eventRoute({ event: "Christmas markets", city: "Vienna", start: "2026-12-01", end: "2026-12-23" }, "2026-10-10");
   verdict("route: a season", xmas.nights === 4 && xmas.depart === "2026-12-01", JSON.stringify(xmas));
+  // The walk on the bus: a fixed two-stop loop (Warsaw by plane, Gdansk by train, home by plane).
+  const wl = (kind: "fly" | "train" | "road", from: string, fromName: string, to: string, toName: string, date: string, price: number, minutes: number) => ({ kind, from, fromName, to, toName, date, minutes, price, source: kind === "fly" ? ("live" as const) : ("ground" as const), ...(kind === "fly" ? { url: "https://www.kiwi.com/x" } : { estimated: true }) });
+  const loopA: WalkLoop = {
+    id: "a",
+    title: "Warsaw, Gdansk",
+    stops: [
+      { code: "WAW", name: "Warsaw", country: "PL", lat: 52.23, lon: 21.01, arrive: "2026-10-20", leave: "2026-10-22", nights: 2, worth: 90 },
+      { code: "GDN", name: "Gdansk", country: "PL", lat: 54.35, lon: 18.65, arrive: "2026-10-22", leave: "2026-10-25", nights: 3, worth: 80 },
+    ],
+    legs: [wl("road", "HOME", "Brașov", "GHV", "Brasov", "2026-10-20", 3, 25), wl("fly", "GHV", "Brasov", "WMI", "Warsaw", "2026-10-20", 35, 120), wl("train", "WAW", "Warsaw", "GDN", "Gdansk", "2026-10-22", 34, 170), wl("fly", "GDN", "Gdansk", "OTP", "Bucharest", "2026-10-25", 40, 150), wl("road", "OTP", "Bucharest", "HOME", "Brașov", "2026-10-25", 17, 150)],
+    home: "GHV",
+    start: "2026-10-20",
+    end: "2026-10-25",
+    nights: 5,
+    flights: 2,
+    ground: 1,
+    total: 129,
+    hours: 12,
+    score: 200,
+    why: ["the cheapest flight out of Brasov in the window"],
+  };
+  const walkRes: WalkResult = { loops: [loopA, { ...loopA, id: "b", title: "Gdansk" }], searched: 3, failed: 0, fromMemory: 0, expanded: 4, considered: [], generatedAt: "2026-10-10T10:00:00Z" };
+  const wd = walkResultDetail(walkRes);
+  verdict("walk-result: whole result", wd.result === walkRes && !("params" in wd), `${wd.result.loops.length} loops, first ${wd.result.loops[0].id}`);
+  const wd2 = walkResultDetail(walkRes, 1, { g: "GHV", home: "RO", lat: 45.657, lon: 25.601, label: "Brașov", from: "2026-10-20", to: "2026-10-30" });
+  verdict("walk-result: loop first", wd2.result.loops[0].id === "b" && wd2.result.loops.length === 2 && wd2.params?.g === "GHV", `first ${wd2.result.loops[0].id}, params ${wd2.params?.label}`);
+  verdict("walk-result: bad loop", walkResultDetail(walkRes, 9).result.loops[0].id === "a", "an index past the list keeps the order");
+  const sw = skeletonFromWalk(loopA, { name: "Brașov", lat: 45.657, lon: 25.601 });
+  verdict("itinerary: walk skeleton", sw.stops.length === 2 && sw.stops[0].nights === 2 && sw.start === "2026-10-20" && sw.legs.length >= 3 && sw.origin.name === "Brașov", `${sw.title}; ${sw.stops.length} stops, ${sw.legs.length} legs, ${sw.source}`);
+  // The command line's walk becomes the atlas:walk query: the window defaults of walkWindow, the traveller's airports.
+  const here = { lat: 45.657, lon: 25.601, label: "Brașov", gateways: ["GHV", "SBZ", "OTP"], home: "RO" };
+  const wc = parseCommand("loop from Brasov 20 to 30 Oct 5 to 6 nights 2 nights a stop, not germany", "2026-10-10")[0] as Extract<Command, { kind: "walk" }>;
+  const wq = walkCommandQuery(wc, here, "2026-10-10").params;
+  verdict("walk: command to query", wq.g === "GHV,SBZ,OTP" && wq.from === "2026-10-20" && wq.to === "2026-10-30" && wq.minNights === 5 && wq.maxNights === 6 && wq.nightsPerStop === "2" && wq.avoid === "Germany", JSON.stringify(wq).slice(0, 110));
+  const cluj = parseCommand("loop from Cluj 3 cities", "2026-10-10")[0] as Extract<Command, { kind: "walk" }>;
+  const cq = walkCommandQuery(cluj, here, "2026-10-10", (n) => (n === "Cluj" ? { lat: 46.77, lon: 23.6, label: "Cluj-Napoca", gateways: ["CLJ"], home: "RO" } : null));
+  verdict("walk: a named start", cq.params.g === "CLJ" && cq.params.label === "Cluj-Napoca" && cq.params.maxStops === 3 && cq.params.from === "2026-10-17", `${cq.params.label} ${cq.params.g}, ${cq.params.from} to ${cq.params.to}; ${cq.notes.join(" | ").slice(0, 60)}`);
+  const w0 = walkWindow({}, "2026-10-10");
+  verdict("walk: default window", w0.from === "2026-10-17" && w0.to === "2026-10-30" && w0.minNights === 5 && w0.maxNights === 6 && w0.notes.length === 2, `${w0.from} to ${w0.to}, ${w0.minNights} to ${w0.maxNights} nights`);
+  const w1 = walkWindow({ from: "2026-10-20", to: "2026-10-22", minNights: 5 }, "2026-10-10");
+  verdict("walk: short window widened", w1.to === "2026-10-25" && w1.notes.some((n) => /widened/.test(n)), `${w1.from} to ${w1.to}: ${w1.notes.join(" | ")}`);
+  // Both ends in the past: the note names the window really searched, never a swapped one.
+  const w2 = walkWindow({ from: "2026-09-01", to: "2026-09-10" }, "2026-10-10");
+  verdict("walk: past window", w2.from === "2026-10-10" && w2.to > w2.from && !w2.notes.some((n) => /read as/.test(n)) && w2.notes.some((n) => n.includes(w2.to)), `${w2.from} to ${w2.to}: ${w2.notes.join(" | ")}`);
+  const w3 = walkWindow({ from: "2026-11-10", to: "2026-11-01" }, "2026-10-10");
+  verdict("walk: swapped window", w3.from === "2026-11-01" && w3.to === "2026-11-10" && w3.notes.some((n) => n.includes("read as 2026-11-01 to 2026-11-10")), w3.notes.join(" | "));
+  const pq = walkCommandQuery(parseCommand("loop through Poland 6 days", "2026-10-10")[0] as Extract<Command, { kind: "walk" }>, here, "2026-10-10").params;
+  verdict("walk: countries to query", pq.countries === "Poland", `countries ${pq.countries}`);
   console.log("");
 }
 
@@ -414,6 +519,114 @@ if (want("itinerary")) {
     verdict("make_itinerary: compact one way", !!got3 && got3.legs === 1 && notes3.some((n) => /one way/.test(n)) && notes3.some((n) => /option 2 \(Train to Vienna/.test(n)), got3 ? `${got3.legs} leg; ${notes3.join(" | ").slice(0, 120)}` : "the tool never reached the engine");
     const r4 = (await (atlasTools(octx) as unknown as Tools).make_itinerary!.execute!({ from: "last_route", option: 5 }, { toolCallId: "check-itin-nooption", messages: [] })) as Record<string, unknown>;
     verdict("make_itinerary: compact bad option", typeof r4.note === "string" && /option 5 does not exist/.test(r4.note), String(r4.note ?? r4.error ?? "").slice(0, 70));
+  }
+  console.log("");
+}
+
+// ---------------------------------------------------------------------------------------
+// walk: walk_trips, the chat's graph walk. The owner's case: from Brasov, 20 to 30 October (or the same days a
+// year on when the run is later), 5 to 6 nights, 2 nights a stop, not countries like Germany, unique.
+if (want("walk")) {
+  console.log("walk_trips (the graph walk):");
+  const base = today < "2026-10-18" ? "2026-10-20" : plus(10);
+  const end = new Date(Date.parse(base) + 10 * 86_400_000).toISOString().slice(0, 10);
+  const owner = { from: base, to: end, minNights: 5, maxNights: 6, nightsPerStop: 2, avoid: ["like:DE"], style: "unique" };
+  const wctx = (used: number, max: number): AgentContext => ({ origin: { lat: 45.657, lon: 25.601, label: "Brașov" }, gateways: ["GHV", "SBZ", "OTP"], home: "RO", today, budget: { used, max } });
+  const run = async (c: AgentContext, input: unknown, seen?: unknown[]) => (await drain(await (atlasTools(c) as unknown as Tools).walk_trips!.execute!(input, { toolCallId: "check-walk", messages: [] }), seen)) as Record<string, unknown>;
+  // The parameters the tool hands the engine, read through the trace (no engine call, nothing leaves).
+  {
+    const c = wctx(100, 120);
+    let got: Record<string, unknown> | null = null;
+    c.trace = (_e, p) => {
+      got = p;
+      throw new Error("harness: parameters read");
+    };
+    const before = sent();
+    const r = await run(c, { ...owner, nightsPerStop: "2-3" as unknown as number, mustInclude: ["Gdansk"], countries: undefined });
+    const p = got as Record<string, unknown> | null;
+    verdict("walk_trips -> walkTrips", !!p && p.budget === 12 && p.beam === 2 && p.maxStops === 3 && JSON.stringify(p.nightsPerStop) === "[2,3]" && (p.avoid as string[])?.[0] === "like:DE" && p.style === "unique" && p.from === base && typeof p.deadlineMs === "number" && (p.deadlineMs as number) <= 90_000 && sent() === before && typeof r.error === "string", p ? `budget ${p.budget}, beam ${p.beam}, nps ${JSON.stringify(p.nightsPerStop)}, avoid ${String(p.avoid)}, deadline ${p.deadlineMs} ms` : "the tool never reached the engine");
+    const c2 = wctx(115, 120);
+    let got2: Record<string, unknown> | null = null;
+    c2.trace = (_e, q) => {
+      got2 = q;
+      throw new Error("harness: parameters read");
+    };
+    await run(c2, owner);
+    verdict("walk_trips: budget = what is left", (got2 as Record<string, unknown> | null)?.budget === 5, `budget ${(got2 as Record<string, unknown> | null)?.budget} with 5 left in the turn`);
+    // A named start abroad keeps the traveller's own home country: Gdansk in the start's country stays a stop.
+    const c3 = wctx(0, 120);
+    let got3: Record<string, unknown> | null = null;
+    c3.trace = (_e, q) => {
+      got3 = q;
+      throw new Error("harness: parameters read");
+    };
+    await run(c3, { ...owner, origin: "Warsaw", mustInclude: ["Warsaw", "Gdansk"] });
+    const g3 = got3 as Record<string, unknown> | null;
+    verdict("walk_trips: start abroad", !!g3 && g3.home === "RO" && JSON.stringify(g3.mustInclude) === '["Gdansk"]' && JSON.stringify(g3.gateways) !== '["GHV","SBZ","OTP"]', g3 ? `home ${g3.home}, gateways ${String(g3.gateways)}, must ${String(g3.mustInclude)}` : "the tool never reached the engine");
+    // A city to pass in the home country can never close: a plain note, before any search.
+    const before4 = sent();
+    const r4 = await run(wctx(0, 120), { ...owner, mustInclude: ["Cluj"] });
+    verdict("walk_trips: stop at home", sent() === before4 && typeof r4.note === "string" && /home country/.test(String(r4.note)) && Array.isArray(r4.loops) && !(r4.loops as unknown[]).length, String(r4.note ?? r4.error ?? "").slice(0, 80));
+  }
+  // The budget-0 path: the turn's budget spent. No search may leave; the walk still runs on the fare memory and the
+  // ground graph, and the note names the turn, never a rate limit.
+  {
+    const before = sent();
+    const t0 = Date.now();
+    const seen: unknown[] = [];
+    const r = await run(wctx(5, 5), owner, seen);
+    const leaked = sent() - before;
+    const note = String(r.note ?? "");
+    const loops = Array.isArray(r.loops) ? (r.loops as { route: string; total: number }[]) : [];
+    const ok = typeof r.error !== "string" && leaked === 0 && r.searched === 0 && /this turn's search budget is spent.*live prices were not searched/.test(note) && !/rate-limited|few minutes/.test(note) && typeof r.params === "object";
+    if (!ok) failures++;
+    rows.push({ tool: "walk_trips (budget 0)", ms: Date.now() - t0, status: ok ? `ok (${loops.length} loops from memory, ${seen.length} progress lines)` : `FAIL: ${String(r.error ?? note).slice(0, 60)}; leaked ${leaked}`, kiwi: leaked, source: String(r.source ?? ""), note: note.slice(0, 90) });
+    process.stdout.write(`  ${"walk_trips (budget 0)".padEnd(28)} ${rows.at(-1)!.status}\n`);
+    for (const l of loops.slice(0, 3)) process.stdout.write(`      ${l.route}  €${l.total}\n`);
+    // The model reads the loops, never the raw result or the query object.
+    const tm = (atlasTools(wctx(0, 0)).walk_trips as unknown as { toModelOutput?: (o: { output: unknown }) => { value: Record<string, unknown> } }).toModelOutput?.({ output: r });
+    verdict("walk_trips: model output", !!tm && !("raw" in tm.value) && !("params" in tm.value) && Array.isArray(tm.value.loops), tm ? `keys ${Object.keys(tm.value).join(", ").slice(0, 60)}` : "no toModelOutput");
+    // The globe's live lines ride on the progress: nodes and edges, by index, with the query that draws them.
+    const liveLines = (seen as { live?: { at: number; lines: Record<string, unknown>[] }; params?: unknown }[]).flatMap((x) => x.live?.lines ?? []);
+    const firstParams = (seen[0] as { params?: { g?: string } } | undefined)?.params;
+    verdict("walk_trips: live lines", seen.length === 0 || (liveLines.some((l) => "edge" in l || "node" in l) && firstParams?.g === "GHV,SBZ,OTP"), `${seen.length} yields, ${liveLines.length} lines (${liveLines.filter((l) => "edge" in l).length} edges, ${liveLines.filter((l) => "node" in l).length} nodes, ${liveLines.filter((l) => "loop" in l).length} loops)`);
+  }
+  // A request the engine refuses (nights a stop that do not fit) keeps the engine's reason with the budget spent.
+  {
+    const before = sent();
+    const r = await run(wctx(5, 5), { ...owner, nightsPerStop: 5, minNights: 3, maxNights: 3 });
+    verdict("walk_trips: refused at budget 0", sent() === before && /do not fit/.test(String(r.note ?? "")) && !/budget is spent/.test(String(r.note ?? "")), String(r.note ?? r.error ?? "").slice(0, 80));
+  }
+  // cheapest_way with the turn's budget spent: the engine at budget 0, no refusal, no search.
+  {
+    const before = sent();
+    const r = (await drain(await (atlasTools(wctx(5, 5)) as unknown as Tools).cheapest_way!.execute!({ to: "Vienna", depart: plus(30), nights: 3 }, { toolCallId: "check-way0", messages: [] }))) as Record<string, unknown>;
+    const leaked = sent() - before;
+    const note = String(r.note ?? "");
+    verdict("cheapest_way (budget 0)", typeof r.error !== "string" && leaked === 0 && /live prices were not searched/.test(note) && !/needs at least one live search/.test(note), `${Array.isArray(r.options) ? r.options.length : 0} options, source ${r.source}, "${note.slice(0, 60)}"`, leaked);
+  }
+  // One live walk, at most --walk-live searches (default 2) and never past the run's cap. A small budget still runs
+  // the "anywhere" search from home first; the rest of the walk comes from the fare memory and the ground graph.
+  {
+    const walkLive = Number(args.find((a) => a.startsWith("--walk-live="))?.split("=")[1] ?? 2);
+    const cap = Math.max(0, Math.min(Number.isFinite(walkLive) ? walkLive : 2, LIVE_CAP - sent()));
+    if (!cap) {
+      rows.push({ tool: "walk_trips (live)", ms: 0, status: "skipped: no live search left under the cap", kiwi: 0, source: "", note: "" });
+      process.stdout.write(`  ${"walk_trips (live)".padEnd(28)} skipped\n`);
+    } else {
+      const before = sent();
+      const t0 = Date.now();
+      const seen: unknown[] = [];
+      const r = await run(wctx(0, cap), owner, seen);
+      const leaked = sent() - before;
+      const loops = Array.isArray(r.loops) ? (r.loops as { route: string; total: number; legs: unknown[] }[]) : [];
+      const ok = typeof r.error !== "string" && leaked <= cap && r.searched === leaked && seen.length > 0 && typeof r.source === "string";
+      if (!ok) failures++;
+      rows.push({ tool: "walk_trips (live)", ms: Date.now() - t0, status: ok ? `ok (${loops.length} loops, ${seen.length} progress lines, cap ${cap})` : `FAIL: ${String(r.error ?? r.note ?? "")}; ${leaked} sent, ${seen.length} progress lines`, kiwi: leaked, source: String(r.source ?? ""), note: String(r.note ?? "").slice(0, 90) });
+      process.stdout.write(`  ${"walk_trips (live)".padEnd(28)} ${rows.at(-1)!.status}\n`);
+      for (const line of seen.slice(0, 4)) process.stdout.write(`      ... ${(line as { progress: string }).progress.slice(0, 100)}\n`);
+      for (const l of loops.slice(0, 3)) process.stdout.write(`      ${l.route}  €${l.total}\n`);
+    }
   }
   console.log("");
 }
@@ -531,6 +744,7 @@ console.log("turn budget spent (no search may leave; the note names the turn, no
     ["long_stay", { countries: ["PT"], months: 1 }],
     ["group_trip", { members: [{ name: "Ana", origins: ["Cluj"], available: [{ from: plus(30), to: plus(34) }] }, { name: "Patrick", origins: ["GHV"], available: [{ from: plus(30), to: plus(34) }] }], where: "Lisbon" }],
     ["cheapest_way", { to: "Lisbon", depart: plus(35) }],
+    ["walk_trips", { from: plus(20), to: plus(30), minNights: 5, maxNights: 6 }],
     ["two_city_combos", { from: "OTP", dst: "OPO", city: "OPO", out: plus(30), back: plus(34), price: 150 }],
     ["wild_trip", { region: "sea", nights: 10, countries: ["Vietnam", "Thailand"], wishes: "temples and street food" }],
   ];

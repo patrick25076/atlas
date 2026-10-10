@@ -785,3 +785,55 @@
   font-size: 14px;
   font-weight: 600;
 }
+
+/* graph walk loops: the route as a line of hops, why lines, the legs folded */
+.hops {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 6px;
+  margin: 6px 0 4px;
+  font-size: 13px;
+}
+.hop {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.hopPlace {
+  font-weight: 600;
+  color: var(--ink);
+}
+.hopKind {
+  padding: 1px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  color: var(--ink-3);
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+.why {
+  margin: 4px 0 0;
+  padding-left: 16px;
+  color: var(--ink-2);
+  font-size: 12.5px;
+}
+.legs {
+  margin-top: 6px;
+  font-size: 12.5px;
+  color: var(--ink-2);
+}
+.legs summary {
+  cursor: pointer;
+  color: var(--ink-3);
+}
+.legs ol {
+  margin: 4px 0 0;
+  padding-left: 18px;
+}
+.legs a {
+  color: var(--mint);
+}
+a.mini {
+  text-decoration: none;
+}

@@ -11,7 +11,10 @@ import { todayIso } from "@/lib/format";
 // the box empty it shows examples. "/" or Ctrl+K focus it from anywhere on the page. The
 // globe runs the command (onRun), the same way it runs one sent as an atlas:command event.
 
-const ICON: Record<Command["kind"], string> = {
+// Keyed by plain strings, not Command["kind"]: the brain stream adds the 'walk' kind to
+// lib/command.ts, and this file must build both before and after it lands.
+const ICON: Record<string, string> = {
+  walk: "⤳",
   route: "⇄",
   events: "✺",
   getaways: "✈",
@@ -21,7 +24,8 @@ const ICON: Record<Command["kind"], string> = {
   itinerary: "✦",
   ask: "?",
 };
-const WHAT: Record<Command["kind"], string> = {
+const WHAT: Record<string, string> = {
+  walk: "cheapest loop, city by city",
   route: "the cheapest way",
   events: "events worth flying for",
   getaways: "getaways from your airports",
@@ -160,10 +164,10 @@ export default function CommandBar({ onRun, busy }: { onRun: (c: Command) => voi
               onClick={() => run(c)}
             >
               <span className="cmdglyph" aria-hidden="true">
-                {ICON[c.kind]}
+                {ICON[c.kind] ?? "›"}
               </span>
               <span className="cmdlabel">{c.label}</span>
-              <span className="cmdwhat">{WHAT[c.kind]}</span>
+              <span className="cmdwhat">{WHAT[c.kind] ?? ""}</span>
             </button>
           ))}
           <div className="cmdfoot">

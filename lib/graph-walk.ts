@@ -15,15 +15,18 @@ import airportsJson from "@/public/data/airports.json";
 import citiesJson from "@/public/data/cities.json";
 import countriesJson from "@/public/data/countries.json";
 import fameJson from "@/public/data/fame.json";
+import cityPlacesJson from "@/public/data/city-places.json";
+import heritageJson from "@/public/data/heritage.json";
 import postgres from "postgres";
 import { countryAllowed } from "./been";
 import { countryLabel, hubDegree, resolveGateway } from "./board";
 import { dealsFor } from "./deals-source";
+import { FAME_FLOOR, isGem } from "./gems";
 import { driveMinutes, haversineKm } from "./geo";
 import { reachFrom } from "./ground";
 import { kiwiDate, kiwiStats, kiwiThrottled, searchFlight, THROTTLED_MESSAGE, type KiwiItinerary } from "./kiwi";
 import { TtlLru } from "./memo";
-import type { Airport, City, CountryInfo } from "./types";
+import type { Airport, City, CityPlaces, CountryInfo, HeritageRow } from "./types";
 import { findCityCode, resolveCountries, wishTilt } from "./wild";
 
 // ---------------------------------------------------------------------------------------
@@ -54,13 +57,17 @@ export type WalkParams = {
   exclude?: string[];
   /** Cities (codes or names) every loop must pass through. */
   mustInclude?: string[];
-  /** Country codes or city codes (or names) the traveller dislikes: never a stop. */
+  /** Country codes or city codes (or names) the traveller dislikes: never a stop. A group word ("dach", "germanic",
+   * "nordics", "benelux", "baltics", "balkans", "iberia", "british isles") or "like:DE" / "like Germany" avoids the
+   * whole group the country belongs to ("countries like Germany"); see countryGroup. */
   avoid?: string[];
   /** Countries (ISO2 or names) to favour. */
   prefer?: string[];
   /** A region's countries (for Wild): stops keep to them from depth 2; depth 1 may land in a hub outside them. */
   allowedCountries?: string[];
-  /** Free words ("street food, no big cities"): a tilt on the worth of a place. */
+  /** Free words ("street food, no big cities"): a tilt on the worth of a place. "unique" (or "hidden gems",
+   * "off the beaten path", "underrated") weights hidden gems and smaller cities up and the 25 biggest hubs down,
+   * so "cheap but unique" is not answered with Milan and Rome. */
   style?: string;
   /** When it aborts (the client went away), no more live searches are spent and the walk answers from what it has. */
   signal?: AbortSignal;
@@ -110,6 +117,32 @@ const DB_CAP_MS = 4_000;
 const HUB_DEGREE = 60;
 /** The home node's code in events and legs. */
 const HOME = "HOME";
+/**
+ * A train or coach up to this long runs centre to centre with no security queue, and the hours on board can be
+ * read, worked or looked out of, so they count at GROUND_HOUR_SHARE of the tradeoff's euro per hour. That is what
+ * lets the owner's Warsaw to Gdansk train beat a flight that is cheaper on the ticket but not after airport time.
+ */
+const GROUND_EASY_MIN = 360;
+const GROUND_HOUR_SHARE = 0.75;
+/** The style "unique", in worth points (halved by WORTH_WEIGHT like every bonus): a hidden gem, a city below hub
+ * size, a country new to the traveller up; one of the BIG_HUBS biggest hubs in the world down. */
+const UNIQUE_GEM = 45;
+const UNIQUE_SMALL = 20;
+const UNIQUE_NEW_COUNTRY = 15;
+const UNIQUE_BIG_HUB = 50;
+const BIG_HUBS = 25;
+/** Open states per depth whose way home is looked at one ground hop further (see homeAfter); each costs one memoised
+ * ground reach (about 40 ms the first time), so the cheapest few by their own priority are enough. */
+const LOOKAHEAD_STATES = 30;
+/** Added to the beam's order (never to the priority the early stop reads) for a state whose way home rests on a distance
+ * guess once no live search is left to confirm it: it can be walked only when nothing that can close is open. */
+const BLIND_PENALTY = 1000;
+/** Words that ask for the unusual over the famous. The ones that carry their own "not" or "less" ("not touristy",
+ * "less crowded", "avoid the touristy places") are whole phrases here, so the negation check never reads them as a
+ * refusal. */
+const UNIQUE_WORDS = /\b(not (too )?touristy|non touristy|untouristy|avoid(ing)? (the )?(touristy|tourist traps?|crowds)( places| spots)?|away from the crowds|less (touristy|crowded|known)|lesser known|unique|unusual|offbeat|underrated|hidden gems?|gems?|off the beaten (path|track)|small(er)? (cities|towns|places)|quiet(er)? (towns|places))\b/;
+/** A word before the unique phrase that turns it into a refusal ("not unique", "no hidden gems"). */
+const NEGATION = /\b(no|not|never|without|avoid|avoiding|less|nothing|skip)\b/;
 
 const AIRPORTS = airportsJson as unknown as Airport[];
 const CITIES = citiesJson as unknown as Record<string, City>;
@@ -127,6 +160,125 @@ const FAME = fameJson as unknown as Record<string, [number, number, number]>;
 const cityOf = new Map<string, string>();
 for (const [code, c] of Object.entries(CITIES)) for (const a of c.airports) if (!cityOf.has(a)) cityOf.set(a, code);
 const unsafe = (cc: string) => COUNTRIES[cc]?.advisory?.warning === true;
+const PLACES = cityPlacesJson as unknown as Record<string, CityPlaces>;
+const HERITAGE = heritageJson as unknown as HeritageRow[];
+/** The biggest hubs by destinations served (Frankfurt, Paris, Amsterdam, Istanbul, Munich, London, Rome...): what "unique" steers away from. */
+const BIG_HUB_SET = new Set(
+  Object.keys(CITIES)
+    .sort((a, b) => hubDegree(b) - hubDegree(a))
+    .slice(0, BIG_HUBS),
+);
+/** Hidden gems as the globe marks them (lib/gems.ts): fame under the mass-tourism line with substance behind it.
+ * World Heritage within 40 km is counted once per city and kept, the file is static. */
+const gemMemo = new Map<string, boolean>();
+function isGemCity(code: string): boolean {
+  const hit = gemMemo.get(code);
+  if (hit != null) return hit;
+  const c = CITIES[code];
+  const near = c ? HERITAGE.filter((h) => Math.abs(h[1] - c.lat) < 0.5 && haversineKm(c.lat, c.lon, h[1], h[2]) <= 40).length : 0;
+  // A fame row far below what the city's air traffic says is a bad row, not a hidden gem: fame.json gives Krakow
+  // (52 destinations) 8,880 views, which would make it a gem next to Bydgoszcz. A city served from 30 places with
+  // fewer than five times the gem floor in views (Krakow, Tashkent, Cork, Colombo, Ibiza) is never a gem here.
+  const views = FAME[code]?.[0] ?? -1;
+  const suspect = views >= 0 && views < 5 * FAME_FLOOR && hubDegree(code) >= 30;
+  const gem = !suspect && isGem(FAME, code, near, PLACES[code]);
+  gemMemo.set(code, gem);
+  return gem;
+}
+
+/**
+ * Countries people lump together. The owner said "I don't like Germany, I don't like countries like Germany": one
+ * code is not what he meant, the group is. The brain passes a group word or "like:DE" and the walk avoids them all.
+ */
+export const COUNTRY_GROUPS: Record<string, string[]> = {
+  dach: ["DE", "AT", "CH", "LI"],
+  benelux: ["BE", "NL", "LU"],
+  nordics: ["DK", "NO", "SE", "FI", "IS"],
+  baltics: ["EE", "LV", "LT"],
+  balkans: ["AL", "BA", "BG", "HR", "XK", "ME", "MK", "RS"],
+  iberia: ["ES", "PT", "AD"],
+  "british isles": ["GB", "IE", "IM", "JE", "GG"],
+};
+const GROUP_WORDS: Record<string, string> = {
+  dach: "dach",
+  germanic: "dach",
+  "german speaking": "dach",
+  "german speaking countries": "dach",
+  benelux: "benelux",
+  "low countries": "benelux",
+  nordics: "nordics",
+  nordic: "nordics",
+  "nordic countries": "nordics",
+  scandinavia: "nordics",
+  scandinavian: "nordics",
+  baltics: "baltics",
+  baltic: "baltics",
+  "baltic states": "baltics",
+  balkans: "balkans",
+  balkan: "balkans",
+  iberia: "iberia",
+  iberian: "iberia",
+  "british isles": "british isles",
+  "uk and ireland": "british isles",
+  "western balkans": "balkans",
+  "former yugoslavia": "balkans",
+  "iberian peninsula": "iberia",
+  "spain and portugal": "iberia",
+};
+const foldWords = (s: string) =>
+  s
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9:]+/g, " ")
+    .trim();
+/** True when the style words ask for the unusual over the famous ("unique", "hidden gems", "off the beaten path").
+ * Read clause by clause, as wishTilt reads its words: "not unique, big cities please" and "no hidden gems" refuse the
+ * unusual, so a clause with a negation before its unique phrase does not count. */
+export function wantsUnique(style?: string): boolean {
+  for (const clause of (style ?? "").split(/[,;.]|\bbut\b|\band\b/i)) {
+    const s = foldWords(clause);
+    const m = UNIQUE_WORDS.exec(s);
+    if (m && !NEGATION.test(s.slice(0, m.index))) return true;
+  }
+  return false;
+}
+
+/** A group word as people write it: "the Balkans", "Benelux countries", "Baltic states", "the Iberian peninsula". */
+function groupWord(s: string): string | undefined {
+  const bare = s.replace(/^the /, "");
+  return GROUP_WORDS[s] ?? GROUP_WORDS[bare] ?? GROUP_WORDS[bare.replace(/ (countries|states|peninsula|region)$/, "")];
+}
+
+/**
+ * The countries a group expression stands for: a group word ("dach", "nordics", "benelux countries", "the iberian
+ * peninsula"), or "like:DE", "like Germany", "countries like Germany", "places like Germany", "somewhere like
+ * Germany" (the group the country is in, else the country alone), and "countries like Germany and Austria" (the
+ * groups joined). Null when the text is not a group expression, or names a country nobody knows (the caller then
+ * reads it as a plain place).
+ */
+export function countryGroup(raw: string): { name: string; codes: string[] } | null {
+  const s = foldWords(raw);
+  const word = groupWord(s);
+  if (word) return { name: word, codes: COUNTRY_GROUPS[word] };
+  const like = /^(?:(?:countries|places|somewhere|anywhere|anything|cities) )?like[: ]\s*(.+)$/.exec(s);
+  if (!like) return null;
+  const names: string[] = [];
+  const codes = new Set<string>();
+  for (const part of like[1].split(/ and | or /)) {
+    const target = part.trim().replace(/^the /, "");
+    if (!target) continue;
+    // A group named after "like" ("like the balkans"), else a country (a code or a name) and the group it is in.
+    const named = groupWord(target);
+    const cc = named ? null : /^[a-z]{2}$/.test(target) && COUNTRIES[target.toUpperCase()] ? target.toUpperCase() : resolveCountries([target]).codes[0];
+    if (!named && !cc) return null;
+    const found = named ? null : Object.entries(COUNTRY_GROUPS).find(([, list]) => list.includes(cc!));
+    const name = named ?? found?.[0] ?? cc!;
+    if (!names.includes(name)) names.push(name);
+    for (const c of named ? COUNTRY_GROUPS[named] : (found?.[1] ?? [cc!])) codes.add(c);
+  }
+  return names.length ? { name: names.join(" and "), codes: [...codes] } : null;
+}
 
 /** How much a place is worth a stop: Wikipedia views, Wikivoyage listings and hub size (the lines lib/wild.ts keeps private). */
 function worth(code: string): number {
@@ -294,6 +446,9 @@ type State = {
   start: string | null;
   /** The edge that led here, re-emitted as chosen when this state is expanded. */
   via?: Extract<WalkEvent, { type: "edge" }>;
+  /** This state's number and its parent's, so the beam can keep one parent's children from taking every slot. */
+  id: number;
+  parent: number;
 };
 
 type Edge = { to: string; leg: WalkLeg; arrive: string; img?: string };
@@ -346,9 +501,17 @@ export async function walkTrips(p: WalkParams): Promise<WalkResult> {
   // Avoid: a country code, a city code, or a name of either.
   const avoidCountries = new Set<string>();
   const avoidCities = new Set<string>();
+  const avoidGroups: string[] = [];
   for (const raw of p.avoid ?? []) {
     const s = String(raw ?? "").trim();
     if (!s) continue;
+    // A group first ("dach", "like:DE"): "countries like Germany" means Austria and Switzerland too.
+    const group = countryGroup(s);
+    if (group) {
+      for (const cc of group.codes) avoidCountries.add(cc);
+      avoidGroups.push(`${group.name} (${group.codes.join(", ")})`);
+      continue;
+    }
     const up = s.toUpperCase();
     if (/^[A-Z]{2}$/.test(up) && COUNTRIES[up]) {
       avoidCountries.add(up);
@@ -361,12 +524,16 @@ export async function walkTrips(p: WalkParams): Promise<WalkResult> {
     }
     const cc = resolveCountries([s]).codes[0];
     if (cc) avoidCountries.add(cc);
-    else return fail(`unknown place to avoid: ${s.slice(0, 40)} (a country such as DE or Germany, or a city such as Berlin)`);
+    else return fail(`unknown place to avoid: ${s.slice(0, 40)} (a country such as DE or Germany, a city such as Berlin, or a group such as dach or like:DE)`);
   }
+  if (avoidGroups.length) considered.push(`avoiding ${avoidGroups.join("; ")}`);
   const prefer = new Set(resolveCountries(p.prefer).codes);
   const allowed = p.allowedCountries?.length ? new Set(resolveCountries(p.allowedCountries).codes) : null;
   if (p.allowedCountries?.length && !allowed?.size) return fail(`none of those is a country we know: ${p.allowedCountries.join(", ")}`);
   const tilt = wishTilt(p.style);
+  /** "Cheap but unique": hidden gems and smaller cities up, the world's biggest hubs down (UNIQUE_*). */
+  const unique = wantsUnique(p.style);
+  if (unique) considered.push(`style unique: hidden gems +${UNIQUE_GEM * WORTH_WEIGHT} euro, cities below hub size +${UNIQUE_SMALL * WORTH_WEIGHT}, a new country +${(15 + UNIQUE_NEW_COUNTRY) * WORTH_WEIGHT}, the ${BIG_HUBS} biggest hubs -${UNIQUE_BIG_HUB * WORTH_WEIGHT}`);
   const isHub = (code: string) => hubDegree(code) >= HUB_DEGREE;
   /** The style's tilt on a place: hubs for "cities", smaller places for "experiences", listings for "food". The coast needs the weather file; left to Wild. */
   const styleScore = (code: string): number => {
@@ -374,6 +541,13 @@ export async function walkTrips(p: WalkParams): Promise<WalkResult> {
     if (tilt.cities) v += tilt.cities * (isHub(code) ? 35 : -10);
     if (tilt.experiences) v += tilt.experiences * (isHub(code) ? -15 : 30);
     if (tilt.food) v += tilt.food * Math.min(20, Math.max(0, FAME[code]?.[1] ?? 0));
+    if (unique) {
+      if (isGemCity(code)) v += UNIQUE_GEM;
+      if (!isHub(code)) v += UNIQUE_SMALL;
+      if (BIG_HUB_SET.has(code)) v -= UNIQUE_BIG_HUB;
+      // worth() pays up to 30 for hub size; a traveller asking for the unusual is not paid for a big airport.
+      v -= Math.min(30, hubDegree(code) / 4);
+    }
     return v;
   };
 
@@ -441,35 +615,42 @@ export async function walkTrips(p: WalkParams): Promise<WalkResult> {
   // from another traveller's airport is no way out of this door, so only deals from the asked gateways count.
   const boards = (boardsAll?.deals ?? []).filter((d) => gwCodes.includes(d.gw));
   const boardGateways = [...new Set(boards.map((d) => d.gw))];
+  /** A way home in the units a loop is scored in (see close): the fare, the hours with airport time at the way home's
+   * rate, the stops penalty. A heuristic in fares alone ranked Bratislava's remembered 85 euro way home, a long
+   * one-stop day that scores 437, ahead of Rome's 74 euro direct flight. */
+  const flightHome = (price: number, minutes: number, stops: number) => price + (hHome * (minutes + FLIGHT_OVERHEAD_MIN)) / 60 + stopsPenalty(stops);
+  /** Half of tonight's cheapest board return per city, as a way home (the outbound flight's minutes stand in for the way back). */
   const boardHalf = new Map<string, number>();
   for (const d of boards) {
     const city = CITIES[d.dstCity] ? d.dstCity : (cityOf.get(d.dst) ?? d.dstCity);
-    const half = Math.round(d.price / 2);
+    const half = flightHome(Math.round(d.price / 2), d.outMin, d.stops);
     const prev = boardHalf.get(city);
     if (prev == null || half < prev) boardHalf.set(city, half);
   }
   /** Every remembered way home out of a city, so a state picks the cheapest that leaves inside its own home window. */
   const memHomeByCity = new Map<string, MemFare[]>();
-  /** The cheapest of them per city, for the heuristic only. */
+  /** The cheapest of them per city (fare, hours and stops), for the heuristic only. */
   const memHomeMin = new Map<string, number>();
   for (const f of memHome) {
     const city = cityOf.get(f.src) ?? f.src;
     (memHomeByCity.get(city) ?? memHomeByCity.set(city, []).get(city)!).push(f);
+    const cost = flightHome(f.price, f.hours * 60, f.stops);
     const prev = memHomeMin.get(city);
-    if (prev == null || f.price < prev) memHomeMin.set(city, f.price);
+    if (prev == null || cost < prev) memHomeMin.set(city, cost);
   }
   if (boards.length) considered.push(`boards: ${boards.length} return fares from ${boardGateways.join(", ")}, half of one is a one-way estimate`);
   else if (boardsAll?.deals.length) considered.push(`boards: none for ${gwCodes.join(", ")} (the stored boards are for other airports)`);
   considered.push(memHome.length ? `fare memory: ${memHome.length} ways home seen in the last day` : client() ? "fare memory: no way home seen in the last day" : "fare memory: off");
   const gwPlaces = gateways.map((g) => g.place!);
-  /** An optimistic cost of the way home from a city: a known fare, else a cheap one-way by distance. */
+  /** An optimistic cost of the way home from a city, in the units a loop is scored in: a known fare, else a cheap
+   * direct one-way by distance (20 euro plus 0.04 per km, half an hour plus 800 km an hour in the air). */
   const heuristic = (code: string, lat: number, lon: number): number => {
     const mem = memHomeMin.get(code);
     if (mem != null) return mem;
     const half = boardHalf.get(code);
     if (half != null) return half;
     const km = Math.min(...gwPlaces.map((g) => haversineKm(lat, lon, g.lat, g.lon)));
-    return 20 + 0.04 * km;
+    return flightHome(20 + 0.04 * km, 30 + km * 0.075, 0);
   };
 
   // 4. The rules for a stop. A city is never revisited, nor a country by air; a train or
@@ -489,7 +670,7 @@ export async function walkTrips(p: WalkParams): Promise<WalkResult> {
   const bonus = (code: string, s: State): number => {
     const c = CITIES[code];
     let v = worth(code);
-    if (!s.countries.has(c.country)) v += 15;
+    if (!s.countries.has(c.country)) v += 15 + (unique ? UNIQUE_NEW_COUNTRY : 0);
     if (s.depth > 0 && isHub(s.city) && !isHub(code)) v += 25;
     if (prefer.has(c.country)) v += 40;
     if (must.includes(code)) v += 150;
@@ -497,6 +678,14 @@ export async function walkTrips(p: WalkParams): Promise<WalkResult> {
     return v * WORTH_WEIGHT;
   };
   const hoursOfFlight = (minutes: number) => (minutes + FLIGHT_OVERHEAD_MIN) / 60;
+  /** The hours a leg is charged at the tradeoff's rate: a flight with its airport time, an easy train or coach at
+   * GROUND_HOUR_SHARE, a drive or a long overland day in full. One rule for every edge, so a ground hop and a
+   * flight to the same city are compared on the same terms. Real hours (the loop's `hours`) are counted apart. */
+  const chargedHours = (kind: WalkLeg["kind"], minutes: number) =>
+    kind === "fly" ? hoursOfFlight(minutes) : kind !== "road" && minutes <= GROUND_EASY_MIN ? (minutes / 60) * GROUND_HOUR_SHARE : minutes / 60;
+  const realHours = (kind: WalkLeg["kind"], minutes: number) => (kind === "fly" ? hoursOfFlight(minutes) : minutes / 60);
+  /** A state that arrived by train, coach or ferry: the diversity rule keeps one in every beam when one exists. */
+  const byGround = (s: State) => !!s.via && s.via.kind !== "fly" && s.via.kind !== "road";
 
   // 5. The frontier: one list of open states per depth, ordered by priority (cost so far plus
   // the heuristic) when the depth is walked. The beam is the best few of each depth, after
@@ -510,7 +699,8 @@ export async function walkTrips(p: WalkParams): Promise<WalkResult> {
   };
   const loops: WalkLoop[] = [];
   const seenLoops = new Map<string, WalkLoop>();
-  const origin: State = { city: HOME, name: p.origin.label, lat: p.origin.lat, lon: p.origin.lon, country: home, date: p.from, depth: 0, cities: [], countries: new Set([home]), legs: [], stops: [], money: 0, hours: 0, worth: 0, cost: 0, priority: 0, start: null };
+  let nextId = 0;
+  const origin: State = { city: HOME, name: p.origin.label, lat: p.origin.lat, lon: p.origin.lon, country: home, date: p.from, depth: 0, cities: [], countries: new Set([home]), legs: [], stops: [], money: 0, hours: 0, worth: 0, cost: 0, priority: 0, start: null, id: nextId++, parent: -1 };
   push(origin);
   say(`Walking from ${p.origin.label} (${gwCodes.join(", ")}), ${p.from} to ${p.to}, ${minNights} to ${maxNights} nights, ${nMin === nMax ? nMin : `${nMin} to ${nMax}`} a stop, up to ${maxStops} stops, beam ${beam}, budget ${budget}.`);
 
@@ -567,14 +757,13 @@ export async function walkTrips(p: WalkParams): Promise<WalkResult> {
     stops.push({ code: e.to, name: c.name, country: c.country, lat: c.lat, lon: c.lon, arrive: e.arrive, leave: addDays(e.arrive, nMin), nights: nMin, worth: Math.round(worth(e.to)), img: e.img });
     const road = legs.length > s.legs.length + 1 ? legs[legs.length - 2] : null;
     const roadCost = road ? road.price + hv * (road.minutes / 60) : 0;
-    const legHours = e.leg.kind === "fly" ? hoursOfFlight(e.leg.minutes) : e.leg.minutes / 60;
     const b = bonus(e.to, s);
     const money = s.money + e.leg.price + (road?.price ?? 0);
-    const hours = s.hours + legHours + (road ? road.minutes / 60 : 0);
-    const cost = s.cost + e.leg.price + hv * legHours + stopsPenalty(stopsOnTicket) + roadCost - b;
+    const hours = s.hours + realHours(e.leg.kind, e.leg.minutes) + (road ? road.minutes / 60 : 0);
+    const cost = s.cost + e.leg.price + hv * chargedHours(e.leg.kind, e.leg.minutes) + stopsPenalty(stopsOnTicket) + roadCost - b;
     const countries = new Set(s.countries);
     countries.add(c.country);
-    return { city: e.to, name: c.name, lat: c.lat, lon: c.lon, country: c.country, date: e.arrive, depth: s.depth + 1, cities: [...s.cities, e.to], countries, legs, stops, money, hours, worth: s.worth + b, cost, priority: cost + heuristic(e.to, c.lat, c.lon), start: s.start ?? e.leg.date, via: edgeEvent(s, e) };
+    return { city: e.to, name: c.name, lat: c.lat, lon: c.lon, country: c.country, date: e.arrive, depth: s.depth + 1, cities: [...s.cities, e.to], countries, legs, stops, money, hours, worth: s.worth + b, cost, priority: cost + heuristic(e.to, c.lat, c.lon), start: s.start ?? e.leg.date, via: edgeEvent(s, e), id: nextId++, parent: s.id };
   };
 
   /** A loop closed by a home leg from state `s`: ranked, deduplicated by its city sequence, streamed. */
@@ -592,7 +781,7 @@ export async function walkTrips(p: WalkParams): Promise<WalkResult> {
     const ground = legs.filter((l) => l.kind !== "fly").reduce((a, l) => a + l.price, 0);
     const total = flights + ground;
     const hours = r1(legs.reduce((a, l) => a + l.minutes, 0) / 60 + (legs.filter((l) => l.kind === "fly").length * FLIGHT_OVERHEAD_MIN) / 60);
-    const legHours = (leg.kind === "fly" ? hoursOfFlight(leg.minutes) : leg.minutes / 60) + (road ? road.minutes / 60 : 0);
+    const legHours = chargedHours(leg.kind, leg.minutes) + (road ? road.minutes / 60 : 0);
     const score = Math.round(s.cost + leg.price + (road?.price ?? 0) + hHome * legHours + stopsPenalty(stopsOnTicket));
     const why: string[] = [];
     // The way out is a home airport only when the first flight leaves from one; a coach from the door to a
@@ -629,26 +818,199 @@ export async function walkTrips(p: WalkParams): Promise<WalkResult> {
   const worstToBeat = () => (loops.length >= beam ? loops[beam - 1].score : null);
   /** The most a single further stop can take off a path (worth, variety, a preferred country, a must city, the style),
    * so the early stop below stays admissible: a child can be cheaper than its parent. */
-  const maxBonus = WORTH_WEIGHT * (150 + 15 + 25 + (prefer.size ? 40 : 0) + (must.length ? 150 : 0) + Math.max(0, (tilt.cities ?? 0) * 35) + Math.max(0, (tilt.experiences ?? 0) * 30) + Math.max(0, (tilt.food ?? 0) * 20));
+  const maxBonus = WORTH_WEIGHT * (150 + 15 + 25 + (prefer.size ? 40 : 0) + (must.length ? 150 : 0) + Math.max(0, (tilt.cities ?? 0) * 35) + Math.max(0, (tilt.experiences ?? 0) * 30) + Math.max(0, (tilt.food ?? 0) * 20) + (unique ? UNIQUE_GEM + UNIQUE_SMALL + UNIQUE_NEW_COUNTRY : 0));
   /** The ground graph's reach from the traveller's door, read once: a stop inside it has a train or coach home. The
    * graph is time, which runs both ways near enough, so the reach from home stands for the way back to it. */
   let homeReachMemo: Map<string, GroundLink> | null = null;
   const homeReach = () => (homeReachMemo ??= new Map(groundFrom(p.origin.lat, p.origin.lon, maxGroundMin, null).map((g) => [g.code, g])));
+  /**
+   * The days a state can leave on (see 6b): from home, any day that still leaves minNights inside the window (the
+   * "anywhere" search covers the whole range, as Explore does); from a stop, the stop's nights, and early enough
+   * that the next stop still gets its nights and the way home still falls inside the window. Null when none is left.
+   */
+  const hopWindow = (s: State): { a: string; b: string } | null => {
+    const a = s.city === HOME ? p.from : addDays(s.date, nMin);
+    const latestArrival = s.city === HOME ? addDays(p.to, -minNights) : addDays(minDay(addDays(s.start!, maxNights), p.to), -nMin);
+    const b = s.city === HOME ? latestArrival : minDay(addDays(s.date, stopMax), latestArrival);
+    return a <= b ? { a, b } : null;
+  };
+  /** The days a stop reached on `arrive` (the trip having left on `start`) may fly home on (see 6a). */
+  const homeWindow = (arrive: string, start: string) => ({
+    earliest: maxDay(addDays(arrive, nMin), addDays(start, minNights)),
+    latest: minDay(addDays(arrive, stopMax), minDay(addDays(start, maxNights), p.to)),
+  });
+  /** The cheapest way home out of a city that is actually known for a window: a fare the memory saw leaving inside
+   * it, else half of tonight's board return, else a train or coach to the door. Null when nobody knows one. `closable`
+   * leaves the board out: half a return says a route exists, but only a remembered fare, a live search or the ground
+   * graph closes a loop (6a), so with no search left a board is no way home. */
+  const knownHome = (code: string, lat: number, lon: number, earliest: string, latest: string, closable = false): number | null => {
+    let best: number | null = null;
+    for (const f of memHomeByCity.get(code) ?? []) {
+      if (f.out < earliest || f.out > latest) continue;
+      const cost = flightHome(f.price, f.hours * 60, f.stops);
+      if (best == null || cost < best) best = cost;
+    }
+    if (best != null) return best;
+    const half = closable ? undefined : boardHalf.get(code);
+    if (half != null) return half;
+    const link = homeReach().get(code);
+    return link ? groundPrice(haversineKm(lat, lon, p.origin.lat, p.origin.lon)) + hHome * chargedHours(kindOfMode(link.mode), link.minutes) : null;
+  };
+  /**
+   * The way home of a state that will go on, one ground hop ahead. A first stop is rarely the city the traveller
+   * flies home from: Warsaw's own way home is dear, but the train to Gdansk and Gdansk's cheap flight home is how
+   * the owner would do it. So the heuristic is the cheaper of the state's own way home and the best ground hop out
+   * of it (its fare and its hours at the rate) plus that city's way home. Ground hops cost no search, so this looks
+   * one step ahead for free.
+   *
+   * Only a neighbour whose way home is known counts (a remembered fare inside the window it could fly home in, a
+   * board, a train or coach to the door). A distance guess is never used here: with it, a city ringed by towns
+   * nobody has a fare for (Katowice, with Krakow, Rzeszow and Ostrava as guesses) looked cheaper than a city whose
+   * way home is remembered (Naples, then Rome), took the beam, and closed nothing. A neighbour that would still owe
+   * a must city cannot fly home from there, so it does not count either. The next city's worth is left out on
+   * purpose: a heuristic estimates what getting home costs, and with the worth in it the beam filled with coaches.
+   */
+  const homeAfter = (s: State, hop: { a: string; b: string }, closable: boolean): number | null => {
+    let best: number | null = null;
+    // A ground hop leaves on the first day of the hop window (6b) and arrives the same day.
+    const { earliest, latest } = homeWindow(hop.a, s.start!);
+    if (earliest > latest) return null;
+    for (const g of groundFrom(s.lat, s.lon, maxGroundMin, s.city)) {
+      if (!landable(g.code, s, true)) continue;
+      if (must.some((m) => m !== g.code && !s.cities.includes(m))) continue;
+      const c = CITIES[g.code];
+      const home = knownHome(g.code, c.lat, c.lon, earliest, latest, closable);
+      if (home == null) continue;
+      const via = groundPrice(haversineKm(s.lat, s.lon, c.lat, c.lon)) + hHop * chargedHours(kindOfMode(g.mode), g.minutes) + home;
+      if (best == null || via < best) best = via;
+    }
+    return best == null ? null : Math.max(0, best);
+  };
+  /** What closing a loop from this state would cost without a search: its own home window is open and a remembered
+   * fare leaves inside it, or a train or coach reaches the door. Null when it cannot. */
+  const closingWithoutSearch = (s: State): number | null => {
+    if (!s.start) return null;
+    const { earliest, latest } = homeWindow(s.date, s.start);
+    return earliest <= latest ? knownHome(s.city, s.lat, s.lon, earliest, latest, true) : null;
+  };
   const homeEdge = (s: State, leg: WalkLeg): Extract<WalkEvent, { type: "edge" }> => {
     const g = leg.kind === "fly" ? pointOf(leg.to) : p.origin;
     return { type: "edge", from: s.city, to: HOME, toName: leg.toName, lat: g?.lat ?? 0, lon: g?.lon ?? 0, kind: leg.kind, price: leg.price, minutes: leg.minutes, source: leg.source, home: true };
+  };
+
+  /**
+   * The beam of a depth: the best states by priority, with four diversity rules that keep its size (and so the
+   * number of searches) the same.
+   * - One state per city: three ways into Prague all ask the same way home, and the other cities go unwalked.
+   * - At most beam - 1 children of one parent from depth 2 on: one stop ringed by cheap towns (Katowice, with
+   *   Ostrava by coach) could otherwise take every slot, and the cheapest branch of the depth before (Naples, then
+   *   Rome by coach and a remembered way home) would never get a child walked. A slot left empty by this rule is
+   *   filled by the next state in order, so the beam never shrinks.
+   * - At least one branch overland when the depth has one: a flight is nearly always cheaper on paper than a
+   *   five-hour train, so a beam of the cheapest states would be all flights and "plane, train, plane" (Brasov to
+   *   Warsaw, the train to Gdansk, a flight on) would never be walked unless asked for.
+   * - At least one branch by air when the depth has one: ground hops are known before any search and flights are
+   *   not, so the lookahead can make a beam all coaches; the explore out of a stop is the other half of the walk.
+   * - The branch with the cheapest known way to close (`bestKnown`: a remembered way home inside its own window, or
+   *   one ground hop away, or a train or coach to the door) is always walked, when the depth has one. A distance
+   *   guess is optimistic on purpose, so guessed branches outrank a remembered 74 euro way home; without this rule
+   *   Naples, the coach to Rome and Rome's remembered flight home (123 euro, the cheapest loop the memory holds)
+   *   lost its slot to Ostrava, whose live way home came back at 242. It costs no search. When its parent already
+   *   has its share of the beam it replaces its own costliest sibling, so the per-parent cap still holds.
+   * A rule takes the beam's last slot that the rules before it do not need.
+   */
+  const pickBeam = (level: State[], depth: number, bestKnown: State | null): State[] => {
+    const perParent = depth >= 2 && beam >= 2 ? beam - 1 : beam;
+    const picked: State[] = [];
+    const seen = new Set<string>();
+    const children = new Map<number, number>();
+    const take = (s: State) => {
+      seen.add(s.city);
+      children.set(s.parent, (children.get(s.parent) ?? 0) + 1);
+      picked.push(s);
+    };
+    const held: State[] = [];
+    for (const s of level) {
+      if (picked.length >= beam) break;
+      if (seen.has(s.city)) continue;
+      if ((children.get(s.parent) ?? 0) >= perParent) {
+        held.push(s);
+        continue;
+      }
+      take(s);
+    }
+    // Only when no other parent has a state left: the cap is about sharing slots, never about leaving one empty.
+    for (const s of held) if (picked.length < beam && !seen.has(s.city)) take(s);
+    if (held.length && picked.length === beam) considered.push(`depth ${depth}: at most ${perParent} cities from one stop, so another branch keeps a slot`);
+    if (beam < 2 || picked.length < beam) return picked;
+    const swapIn = (want: (s: State) => boolean, keep: (s: State) => boolean, why: string) => {
+      if (picked.some(want)) return;
+      const at = picked.map((x, i) => (keep(x) ? -1 : i)).filter((i) => i >= 0).pop();
+      if (at == null) return;
+      // The newcomer must not break the per-parent cap once the state it replaces has left.
+      const fits = (x: State) => (children.get(x.parent) ?? 0) - (picked[at].parent === x.parent ? 1 : 0) < perParent;
+      const g = level.find((x) => want(x) && !seen.has(x.city) && fits(x));
+      if (!g) return;
+      considered.push(`depth ${depth}: ${g.name} by ${g.via?.kind ?? "air"} from ${g.stops.at(-2)?.name ?? p.origin.label} kept in the beam in place of ${picked[at].name}, ${why}`);
+      children.set(picked[at].parent, (children.get(picked[at].parent) ?? 1) - 1);
+      children.set(g.parent, (children.get(g.parent) ?? 0) + 1);
+      seen.add(g.city);
+      picked[at] = g;
+    };
+    if (bestKnown && !picked.includes(bestKnown) && !seen.has(bestKnown.city)) {
+      const siblings = picked.map((x, i) => (x.parent === bestKnown.parent ? i : -1)).filter((i) => i >= 0);
+      const at = siblings.length >= perParent ? siblings[siblings.length - 1] : picked.length - 1;
+      considered.push(`depth ${depth}: ${bestKnown.name} kept in the beam in place of ${picked[at].name}, the cheapest branch that closes from what is already known`);
+      children.set(picked[at].parent, (children.get(picked[at].parent) ?? 1) - 1);
+      children.set(bestKnown.parent, (children.get(bestKnown.parent) ?? 0) + 1);
+      seen.add(bestKnown.city);
+      picked[at] = bestKnown;
+    }
+    // Each rule keeps what the rules before it needed: the best known branch, then the only overland one.
+    const onlyGround = (x: State) => byGround(x) && picked.filter(byGround).length === 1;
+    swapIn(byGround, (x) => x === bestKnown, "so one branch goes overland");
+    swapIn((x) => !byGround(x), (x) => x === bestKnown || onlyGround(x), "so one branch flies on");
+    return picked;
   };
 
   // 6. The walk, depth by depth.
   walk: for (let depth = 0; depth <= maxStops; depth++) {
     const level = (levels[depth] ?? []).sort((a, b) => a.priority - b.priority);
     if (!level.length) break;
+    // The one-hop ground lookahead (homeAfter) for states that can still go deeper, by depth and by date; it only
+    // ever lowers a priority, so it runs before the early stop reads the best one.
+    // Then the order the beam reads. With no live search left (budget 0, spent, the breaker open, the caller gone),
+    // a way home nobody knows can never be found: a state that rests on a distance guess, for itself and for every
+    // ground neighbour, goes behind every state that can still close. Its priority stays honest for the early stop.
+    // `bestKnown` is the state with the cheapest way to close without a search (the beam always walks it, see pickBeam).
+    const rank = new Map<State, number>();
+    let bestKnown: State | null = null;
+    let bestKnownCost = Infinity;
+    if (depth > 0) {
+      const searchesLeft = searched + failed < budget && timeLeft() > 0 && !kiwiThrottled() && !gone();
+      level.forEach((s, i) => {
+        const hop = depth < maxStops && i < LOOKAHEAD_STATES ? hopWindow(s) : null;
+        const ahead = hop ? homeAfter(s, hop, !searchesLeft) : null;
+        if (ahead != null) s.priority = Math.min(s.priority, s.cost + ahead);
+        // With searches left the lookahead above may count a board; what the state closes at for free is asked apart.
+        const own = closingWithoutSearch(s);
+        const next = hop ? (searchesLeft ? homeAfter(s, hop, true) : ahead) : null;
+        const free = own == null ? next : next == null ? own : Math.min(own, next);
+        if (free != null && s.cost + free < bestKnownCost) {
+          bestKnownCost = s.cost + free;
+          bestKnown = s;
+        }
+        rank.set(s, s.priority + (searchesLeft || free != null ? 0 : BLIND_PENALTY));
+      });
+      level.sort((a, b) => rank.get(a)! - rank.get(b)! || a.priority - b.priority);
+    }
     const bar = worstToBeat();
-    if (bar != null && level[0].priority - (maxStops - depth) * maxBonus >= bar) {
+    if (bar != null && Math.min(...level.map((x) => x.priority)) - (maxStops - depth) * maxBonus >= bar) {
       considered.push(`stopped at depth ${depth}: ${loops.length} loops closed and no open state can beat a score of ${bar}`);
       break;
     }
-    for (const s of level.slice(0, depth === 0 ? 1 : beam)) {
+    const picked = depth === 0 ? level.slice(0, 1) : pickBeam(level, depth, bestKnown);
+    for (const s of picked) {
       if (timeLeft() <= 0 || gone()) {
         considered.push(gone() ? "stopped: the caller went away" : `stopped at the ${Math.round(deadlineMs / 1000)} s limit`);
         break walk;
@@ -663,8 +1025,7 @@ export async function walkTrips(p: WalkParams): Promise<WalkResult> {
       // the asked range, and every must city is behind us. The last stop never swallows the rest
       // of the trip: a loop that needs more nights goes one stop deeper instead.
       if (s.depth > 0 && s.start && must.every((m) => s.cities.includes(m))) {
-        const earliest = maxDay(addDays(s.date, nMin), addDays(s.start, minNights));
-        const latest = minDay(addDays(s.date, stopMax), minDay(addDays(s.start, maxNights), p.to));
+        const { earliest, latest } = homeWindow(s.date, s.start);
         if (earliest <= latest) {
           // The fare memory: the cheapest remembered way home that leaves inside this state's own window.
           const mem = (memHomeByCity.get(s.city) ?? [])
@@ -699,19 +1060,14 @@ export async function walkTrips(p: WalkParams): Promise<WalkResult> {
       }
       if (s.depth >= maxStops) continue;
 
-      // 6b. The hop window out of here: from home, any day that still leaves minNights inside the
-      // window (the "anywhere" search covers the whole range, as Explore does); from a stop, the
-      // stop's nights, and early enough that the next stop still gets its nights and the way home
-      // still falls inside the window.
-      const a = s.city === HOME ? p.from : addDays(s.date, nMin);
-      const latestArrival = s.city === HOME ? addDays(p.to, -minNights) : addDays(minDay(addDays(s.start!, maxNights), p.to), -nMin);
-      const b = s.city === HOME ? latestArrival : minDay(addDays(s.date, stopMax), latestArrival);
-      if (a > b) continue;
+      // 6b. The hop window out of here (hopWindow): the days this state may leave on, if any are left.
+      const hop = hopWindow(s);
+      if (!hop) continue;
+      const { a, b } = hop;
       const hv = s.city === HOME ? hIn : hHop;
       const edges = new Map<string, { edge: Edge; cost: number; stops: number }>();
       const offer = (e: Edge, stopsOnTicket: number) => {
-        const legHours = e.leg.kind === "fly" ? hoursOfFlight(e.leg.minutes) : e.leg.minutes / 60;
-        const cost = e.leg.price + hv * legHours + stopsPenalty(stopsOnTicket) - bonus(e.to, s);
+        const cost = e.leg.price + hv * chargedHours(e.leg.kind, e.leg.minutes) + stopsPenalty(stopsOnTicket) - bonus(e.to, s);
         const prev = edges.get(e.to);
         if (!prev || cost < prev.cost) edges.set(e.to, { edge: e, cost, stops: stopsOnTicket });
       };
@@ -762,7 +1118,7 @@ export async function walkTrips(p: WalkParams): Promise<WalkResult> {
         .map((g) => {
           const c = CITIES[g.code];
           const leg: WalkLeg = { kind: kindOfMode(g.mode), from: s.city, fromName: s.name, to: g.code, toName: c.name, date: a, minutes: g.minutes, price: groundPrice(haversineKm(s.lat, s.lon, c.lat, c.lon)), estimated: true, source: "ground" };
-          return { edge: { to: g.code, leg, arrive: a } as Edge, cost: leg.price + hv * (g.minutes / 60) - bonus(g.code, s), must: must.includes(g.code) };
+          return { edge: { to: g.code, leg, arrive: a } as Edge, cost: leg.price + hv * chargedHours(leg.kind, g.minutes) - bonus(g.code, s), must: must.includes(g.code) };
         })
         .sort((x, y) => x.cost - y.cost);
       let groundUsed = 0;
@@ -783,7 +1139,9 @@ export async function walkTrips(p: WalkParams): Promise<WalkResult> {
 
   // 7. The answer.
   const kiwiCalls = kiwiStats().today - kiwiBefore;
-  if (searched) considered.push(`${searched} search${searched === 1 ? "" : "es"} through the gate, ${kiwiCalls} reached Kiwi (the rest hit its memo)`);
+  // kiwiCalls counts every request sent to Kiwi today by this instance, failed ones included, so it is reported
+  // beside the answered and failed counts rather than as a share of the answered ones.
+  if (searched || failed) considered.push(`${searched + failed} search${searched + failed === 1 ? "" : "es"} through the gate: ${searched} answered${failed ? `, ${failed} failed` : ""}; ${kiwiCalls} request${kiwiCalls === 1 ? "" : "s"} sent to Kiwi${kiwiCalls < searched + failed ? ", the rest answered from its memo" : ""}`);
   if (skipped) considered.push(timeLeft() <= 0 ? `${skipped} search${skipped > 1 ? "es" : ""} not made: the run reached its ${Math.round(deadlineMs / 1000)} s limit` : `${skipped} search${skipped > 1 ? "es" : ""} skipped at the budget of ${budget}`);
   if (refused) considered.push(`${refused} search${refused > 1 ? "es" : ""} not made while Kiwi throttles this address`);
   if (timedOut) considered.push(`${timedOut} search${timedOut > 1 ? "es" : ""} took longer than ${SEARCH_CAP_MS / 1000} s and ${timedOut > 1 ? "were" : "was"} not waited for`);
@@ -795,7 +1153,9 @@ export async function walkTrips(p: WalkParams): Promise<WalkResult> {
   let note: string | undefined;
   if (refused > 0 || throttled) note = `Kiwi is throttling live searches from this address; ${loops.length ? "the loops shown come from what is known (the fare memory, the boards, the ground graph)" : "nothing is known for these dates yet"}. Try again in a few minutes.`;
   else if (!loops.length && budget === 0) note = "No loop closes from the fare memory, the boards and the ground graph alone; allow a few live searches.";
-  else if (!loops.length && failed > 0 && searched === 0) note = `${failed} live search${failed > 1 ? "es" : ""} failed and nothing is remembered for these dates.`;
+  // As many searches lost as made (the threshold the route uses before it keeps an answer): the failures, not the
+  // window, are why nothing closed.
+  else if (!loops.length && failed > 0 && failed >= searched) note = `${failed} of ${searched + failed} live searches failed and nothing remembered closes a loop for these dates; try again in a few minutes.`;
   else if (!loops.length) note = `No loop closed inside ${p.from} to ${p.to} with ${minNights} to ${maxNights} nights; try a wider window, fewer nights a stop or a bigger budget.`;
   else if (late) note = `Kiwi was slow: ${loops.length} loop${loops.length === 1 ? "" : "s"} found before the run reached its time limit.`;
   const top = loops.slice(0, MAX_LOOPS);

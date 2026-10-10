@@ -39,6 +39,34 @@ export type Command =
       start?: string;
       from?: string;
     }
+  | {
+      /** A loop of cheap hops searched the way Skyscanner Explore works (lib/graph-walk.ts): "loop from Brasov
+       * 20-30 Oct 6 days", "3 cities in 6 days", "Brasov to Warsaw then train then home". The shell runs it through
+       * walkFromCommand in components/Globe.tsx, which builds its own query and dispatches `atlas:walk`;
+       * walkCommandQuery in lib/chat-widgets.ts is the same rule as a pure function (scripts/check-tools.ts tests
+       * that one, not the shell's); the terminal runs walk_trips. */
+      kind: "walk";
+      /** Where the loop starts and ends, as typed ("loop from Cluj"); absent means where the traveller is. */
+      origin?: string;
+      /** The window the whole trip lies in (YYYY-MM-DD); absent means the engine's default (a week out). */
+      from?: string;
+      to?: string;
+      minNights?: number;
+      maxNights?: number;
+      /** Nights a stop takes: 2, or a range [2, 3]. */
+      nightsPerStop?: number | [number, number];
+      maxStops?: number;
+      /** Cities the loop must pass through, as typed ("Warsaw", "Gdansk"). */
+      mustInclude?: string[];
+      /** Countries the stops keep to ("loop through Poland 6 days"), as typed. */
+      countries?: string[];
+      /** "unique" for hidden gems, not touristy, off the beaten track. */
+      style?: string;
+      /** Places the traveller does not want, as the walk reads them: a country name ("Germany"), "like:DE" for
+       * "countries like Germany", or a group word ("dach", "benelux", "nordics"). */
+      avoid?: string[];
+      label: string;
+    }
   | { kind: "ask"; text: string; label: string };
 
 export const COMMAND_HINTS: { example: string; what: string }[] = [
@@ -49,6 +77,8 @@ export const COMMAND_HINTS: { example: string; what: string }[] = [
   { example: "events in february", what: "what is worth flying for in a window" },
   { example: "jazz festivals in march", what: "events of a kind" },
   { example: "getaways under 3h this weekend", what: "short trips from your airports" },
+  { example: "loop from Brasov 20 to 30 Oct 6 days", what: "a loop of the cheapest hops by plane, train or coach, and home" },
+  { example: "3 cities in 6 days, not Germany, unique", what: "a few cities, the cheapest edges first, off the beaten track" },
   { example: "/wild sea 21", what: "a 21 night loop through Southeast Asia" },
   { example: "/stay thailand 2 months", what: "a long stay: bases, rent, flights" },
   { example: "/place Porto", what: "a place: sights, food, what is on, how to get there" },
@@ -460,6 +490,225 @@ function splitRoute(rest: string): { from?: string; to: string; more?: string[] 
   return null;
 }
 
+// ---------------------------------------------------------------------------------------
+// Walks: a loop of cheap hops (lib/graph-walk.ts), searched the way the owner does it by hand
+// with Skyscanner Explore. "loop from Brasov 20-30 Oct 6 days", "3 cities in 6 days", "Brasov
+// to Warsaw then train then home", "cheap unique loop next month not germany".
+
+/** Words that ask for a loop of hops rather than one trip: a loop, a number of cities, nights a
+ * stop, or a chain of hops written out ("plane then train", "then another city", "then home").
+ * "Rome to Paris then back" stays a return route: "then back" alone is no chain. */
+const WALK_TRIGGER = /\b(?:loops?|circuit|multi[\s-]?city|city[\s-]?hop(?:ping)?|(?:\d|two|three|four|five|six|a few|few)\s+(?:cities|stops|towns|places)|(?:nights?|days?)\s+(?:a|per|each|in each|at each|for each)\s+(?:stop|city|town|place)|then\s+(?:by\s+)?(?:train|rail|coach|bus|plane|fly|flight|ferry|home|another)|back home|come back from|plane then train|train then plane|(?:plane|train|coach|bus|flight|ferry)s?\s*,?\s*then|to another (?:city|place|town))\b/i;
+/** Words that make a loop the wild engine's (a far region, weeks overland), not the walk's. "through" and
+ * "across" are read apart: "loop through Poland 6 days" is a walk kept to Poland; a far country or two weeks
+ * or more is Wild's. */
+const WILD_ONLY = /\b(?:wild|backpack(?:ing)?|overland|grand tour|island hopping|through|across)\b/i;
+/** A two-part name that is one place, never an A-B pair of two ("Cluj-Napoca", "Saint-Malo", "Baden-Baden"). */
+const ONE_PLACE_PAIR = /^(?:cluj-napoca|baden-baden|bielsko-biala|bielsko-biała|gorzow-wielkopolski|castellon-de|sankt-\S+|saint-\S+|sainte-\S+|st-\S+|san-\S+|santa-\S+|santo-\S+|sao-\S+|são-\S+|le-\S+|la-\S+|les-\S+|el-\S+|al-\S+|bad-\S+|port-\S+|porto-\S+|aix-\S+|villa-\S+|ciudad-\S+|nieuw-\S+|new-\S+)$/i;
+/** A kind of hop written next to a pair ("Brasov-Warsaw plane", "by train Warsaw-Gdansk"). */
+const HOP_WORD = "(?:by\\s+)?(?:planes?|fly|flights?|train|trains|rail|coach|bus|ferry|car)";
+/** Who comes along is not a stop: "with my partner", "with kids". */
+const NOT_A_STOP = /^(?:my|our|a|an|the|kids|children|family|friends?|wife|husband|partner|girlfriend|boyfriend|baby|dog|parents|mum|mom|dad|budget|luggage|bags?|hand luggage|backpack|car|time)\b/i;
+/** "Cheap but unique": the walk's style that weights hidden gems up and the biggest hubs down. */
+const STYLE_UNIQUE = /\b(?:unique|hidden gems?|not (?:too )?touristy|less touristy|untouristy|off the beaten (?:path|track)|smaller (?:cities|places|towns)|offbeat|lesser[\s-]known|not mainstream)\b/gi;
+/** The countries people compare others to ("countries like Germany"), as the code the walk's like: rule takes.
+ * A short list on purpose: this file has no data files; a name not here goes through as written. */
+const COUNTRY_ISO: Record<string, string> = { germany: "DE", austria: "AT", switzerland: "CH", netherlands: "NL", holland: "NL", belgium: "BE", luxembourg: "LU", france: "FR", italy: "IT", spain: "ES", portugal: "PT", poland: "PL", "united kingdom": "GB", uk: "GB", britain: "GB", england: "GB", ireland: "IE", denmark: "DK", sweden: "SE", norway: "NO", finland: "FI", czechia: "CZ", "czech republic": "CZ", slovakia: "SK", hungary: "HU", greece: "GR", turkey: "TR", romania: "RO", bulgaria: "BG", croatia: "HR", serbia: "RS", slovenia: "SI" };
+/** Group words the walk reads as several countries at once, as the word lib/graph-walk.ts's countryGroup knows
+ * (its GROUP_WORDS); the key is what people type, the value what the walk is sent. */
+const AVOID_GROUPS: Record<string, string> = { dach: "dach", germanic: "dach", "german speaking": "dach", benelux: "benelux", "low countries": "benelux", nordics: "nordics", nordic: "nordics", scandinavia: "nordics", scandinavian: "nordics", baltics: "baltics", baltic: "baltics", "baltic states": "baltics", balkans: "balkans", balkan: "balkans", iberia: "iberia", iberian: "iberia", "british isles": "british isles" };
+/** How a group word reads in a label. */
+const GROUP_LABEL: Record<string, string> = { dach: "the DACH countries", benelux: "Benelux", nordics: "the Nordics", baltics: "the Baltics", balkans: "the Balkans", iberia: "Iberia", "british isles": "the British Isles" };
+/** What can follow "not" or "no" without being a place: "not touristy", "no night flights", "no big cities",
+ * "not by plane" (a way to travel, read apart below). */
+const NOT_AVOIDABLE = /^(?:touristy|too|expensive|far|long|more|big|crowded|night|nights|overnight|flights?|trains?|coach(?:es)?|bus(?:es)?|hubs?|layovers?|stops?|cities|city|hostels?|early|late|the|a|an|much|cheap|stress|rush|change|changes|connections?|by|via|planes?|fly|flying|car|cars|ferry|ferries|driving|ground|air)$/i;
+/** "not Germany", "no Austria or Switzerland", "nothing like Germany", "I don't like countries like Germany". The
+ * name runs to a separator, a date word or a number. */
+const AVOID_RE = /\b(?:not|no|avoid(?:ing)?|without|except|skip(?:ping)?|nothing|nowhere|i (?:do not|don'?t) like|hate)\s+(?:(?:countries|places|anywhere|somewhere)\s+)?(like\s+)?([\p{L}][\p{L} .'-]*?)(?=\s*(?:[,;.!?|]|$|\b(?:in|from|next|this|with|for|on|between|under|by|please|then|loop|starting|leaving|around|during)\b|\d))/giu;
+/** Words a walk line carries that are no place: the kinds of hop, the filler of a spoken chain. */
+const WALK_FILLER = /\b(?:loops?|circuit|multi[\s-]?city|city[\s-]?hop(?:ping)?|hopping|cheap(?:est)?|cheaper|but|also|planes?|trains?|rail|coach|bus|fly|flights?|ferry|home|back|another (?:city|place|town|stop)|then|by|way|maybe|i'?d|i would|i|have|had|done|did|that|this|it|do|go|come|would|could|trip|route|days?|nights?)\b/gi;
+
+/**
+ * The places of a walk line, once dates, stays and wishes are gone: where it starts and the cities it must pass.
+ * The first place is the start only when the chain begins with one ("Brasov to Warsaw", "Brasov-Warsaw plane");
+ * a chain that begins with a hop ("fly to Warsaw", "Warsaw by plane then train to Gdansk") starts where the
+ * traveller is, and every place in it is a stop. Starting from a stop would make a loop that can never close:
+ * the walk never stops in its own start country. "back to Brasov or Sibiu" names the ways home, never stops;
+ * "come back from Gdansk", "with Krakow", "via Krakow" and "Warsaw and Gdansk" name stops.
+ */
+function walkPlaces(text: string): { origin?: string; mustInclude: string[] } {
+  let rest = ` ${text} `;
+  // A-B pairs: "Brasov - Warsaw" always, "Brasov-Warsaw" when a hop is written next to it or the line chains two
+  // pairs; a name that is one place ("Cluj-Napoca") never splits.
+  rest = rest.replace(/([\p{L}.'])\s+[-–]\s+(?=\p{L})/gu, "$1 -> ");
+  const pairRe = /(^|[\s|,;(])(\p{L}[\p{L}'.]+)[-–](\p{L}[\p{L}'.]+)(?=$|[\s|,;)])/gu;
+  const pairs = [...rest.matchAll(pairRe)].filter((m) => !ONE_PLACE_PAIR.test(`${m[2]}-${m[3]}`));
+  const hopAfter = new RegExp(`^\\s*,?\\s*${HOP_WORD}\\b`, "i");
+  const hopBefore = new RegExp(`\\b${HOP_WORD}\\s*$`, "i");
+  if (pairs.length) {
+    const split = new Set(pairs.filter((m) => pairs.length >= 2 || hopAfter.test(rest.slice(m.index! + m[0].length)) || hopBefore.test(rest.slice(0, m.index! + m[1].length))).map((m) => m.index!));
+    rest = rest.replace(pairRe, (all: string, pre: string, a: string, b: string, at: number) => (split.has(at) ? `${pre}${a} -> ${b}` : all));
+  }
+  const must: string[] = [];
+  const add = (raw: string) => {
+    for (const part of raw.split(/\s*(?:,|&|\+|\band\b)\s*/i)) {
+      if (NOT_A_STOP.test(part.trim())) continue;
+      const name = cleanPlace(part.replace(WALK_FILLER, " "));
+      if (placeLike(name) && !must.includes(name)) must.push(name);
+    }
+  };
+  const END = String.raw`(?=\s*(?:\||,|;|$|->|→|\bthen\b|\bwith\b|\bvia\b|\bto\b))`;
+  // "come back from Gdansk", "fly back from Gdansk": the city the way home leaves from is a stop.
+  rest = rest.replace(new RegExp(String.raw`\b(?:back|return(?:ing)?)\s+from\s+([^|,;]+?)` + END, "gi"), (_all: string, p: string) => (add(p), " | "));
+  // "with Krakow", "via Krakow", "including Krakow and Gdansk": stops. "with my partner" is no place.
+  rest = rest.replace(new RegExp(String.raw`\b(?:with|via|including|plus)\s+([^|,;]+?)` + END, "gi"), (all: string, p: string) => {
+    const before = must.length;
+    add(p);
+    return must.length > before ? " | " : all;
+  });
+  // "back to Brasov or Sibiu or Otopeni", "home to Bucharest": the ways home, which are the traveller's airports.
+  rest = rest.replace(/\b(?:back|home|return(?:ing)?)\s+to\s+[^|,;]+/gi, " | ");
+  // "from X" ends at the next separator, "and", "then", "with", "via" or "to": "go from Brasov and come back".
+  let origin: string | undefined;
+  rest = rest.replace(/\bfrom\s+([^|,;]+?)(?=\s*(?:\||,|;|$|->|→|\band\b|\bthen\b|\bwith\b|\bvia\b|\bto\b))/i, (all: string, p: string) => {
+    const name = cleanPlace(p.replace(WALK_FILLER, " "));
+    if (!placeLike(name)) return all;
+    origin = name;
+    return " | ";
+  });
+  const places: string[] = [];
+  const chain = /\bto\b|->|→/i.test(rest);
+  // No chain, but names joined by "and": "multi city trip Warsaw and Gdansk".
+  const joined = !chain && /\p{L}\s+(?:and|&)\s+\p{L}/iu.test(rest);
+  if (chain || joined) {
+    for (const seg of rest.split(/\s*(?:\||,|;|->|→|\bto\b|\bthen\b|\band\b|&)\s*/i)) {
+      // "Brasov or Bucharest": a choice of ways home, not stops.
+      if (/\bor\b/i.test(seg)) continue;
+      const name = cleanPlace(seg.replace(WALK_FILLER, " "));
+      if (placeLike(name) && !places.includes(name)) places.push(name);
+    }
+  }
+  if (chain && !origin) {
+    // The chain's head: what comes before its first "to" or arrow, after the last separator. A place there is
+    // where the loop starts ("Brasov to Warsaw"); a hop word or nothing ("fly to", "Warsaw by plane then train
+    // to") means the chain starts where the traveller is.
+    const head = rest.split(/\bto\b|->|→/i)[0].split(/\s*(?:\||,|;|\bthen\b|\band\b)\s*/i).at(-1) ?? "";
+    const name = cleanPlace(head.replace(WALK_FILLER, " "));
+    if (!new RegExp(`\\b${HOP_WORD}\\b`, "i").test(head) && placeLike(name)) origin = name;
+  }
+  for (const p of places) if (!must.includes(p)) must.push(p);
+  return { ...(origin ? { origin } : {}), mustInclude: must.filter((p) => p !== origin).slice(0, 5) };
+}
+
+/** A loop of hops, or null when the line is not one (no walk words, a far region, weeks overland). */
+function readWalk(raw: string, today: string): Extract<Command, { kind: "walk" }> | null {
+  if (!WALK_TRIGGER.test(raw)) return null;
+  let w = ` ${raw} `;
+  // The walk's own phrases first, so the date and stay reader below never sees "2 nights a stop" as the stay.
+  let nps: number | [number, number] | undefined;
+  const npsOf = (a: string, b?: string) => {
+    const x = numberOf(a);
+    const y = b ? numberOf(b) : null;
+    if (x == null || x < 1 || x > 14) return;
+    nps = y != null && y > x && y <= 14 ? [x, y] : x;
+  };
+  w = w.replace(/\b(\d{1,2}|one|two|three|four|a couple of)(?:\s*(?:-|–|to)\s*(\d{1,2}))?\s+(?:nights?|days?)\s+(?:a|per|each|in each|at each|for each)\s+(?:stop|city|town|place)\b/i, (_all, a: string, b?: string) => (npsOf(a, b), " | "));
+  if (nps == null) w = w.replace(/\b(\d{1,2}|one|two|three|four)(?:\s*(?:-|–|to)\s*(\d{1,2}))?\s+(?:nights?|days?)\s+each\b/i, (_all, a: string, b?: string) => (npsOf(a, b), " | "));
+  let range: [number, number] | undefined;
+  w = w.replace(/\b(\d{1,2})\s*(?:-|–|to)\s*(\d{1,2})\s+(nights?|days?)\b/i, (all, a: string, b: string, unit: string) => {
+    const x = Number(a);
+    const y = Number(b);
+    if (!(y >= x && x >= 1 && y <= 60)) return all;
+    range = /^day/i.test(unit) ? [Math.max(1, x - 1), Math.max(1, y - 1)] : [x, y];
+    return " | ";
+  });
+  let maxStops: number | undefined;
+  w = w.replace(/\b(\d|two|three|four|five|six|a few|few)\s+(?:cities|stops|towns|places)\b/i, (_all, n: string) => {
+    const k = /few/.test(n) ? 3 : numberOf(n);
+    if (k != null && k >= 1 && k <= 6) maxStops = k;
+    return " | ";
+  });
+  let style: string | undefined;
+  w = w.replace(STYLE_UNIQUE, () => ((style = "unique"), " | "));
+  const avoid: string[] = [];
+  w = w.replace(AVOID_RE, (all, like: string | undefined, names: string) => {
+    const got: string[] = [];
+    for (const part of names.split(/\s*(?:,|\/|&|\bor\b|\band\b)\s*/i)) {
+      // "not via Munich" is Munich; "not by plane" is a way to travel, which the walk does not take as a wish.
+      let n = part.trim().toLowerCase().replace(/^the\s+/, "").replace(/^(?:via|through|in|to)\s+/, "").replace(/^the\s+/, "");
+      if (/^(?:by|on|using)\b/.test(n)) continue;
+      // "the dach countries", "nordic countries", "the balkan region": the group word without its tail.
+      const bare = n.replace(/\s+(?:countries|country|region|area|states)$/, "");
+      const group = AVOID_GROUPS[n] ?? AVOID_GROUPS[bare];
+      if (group) {
+        got.push(group);
+        continue;
+      }
+      n = bare || n;
+      if (!n || NOT_AVOIDABLE.test(n) || n.split(/\s+/).length > 3) continue;
+      if (like) got.push(`like:${COUNTRY_ISO[n] ?? titleCase(n)}`);
+      else if (placeLike(titleCase(n))) got.push(titleCase(n));
+    }
+    if (!got.length) return all;
+    for (const g of got) if (!avoid.includes(g)) avoid.push(g);
+    return " | ";
+  });
+  // "through Poland", "across Italy": a European country the walk keeps to. Any other "through" (a far country,
+  // a region, a city) is left for the wild engine below.
+  let countries: string[] | undefined;
+  w = w.replace(/\b(?:through|across|around|in)\s+(?:the\s+)?([\p{L}][\p{L} ]*?)(?=\s*(?:[|,;.!?]|$|\d|\b(?:in|for|from|next|this|with|then|and|on|over|within|during|starting|leaving|not|no|but)\b))/giu, (all, name: string) => {
+    const n = name.trim().toLowerCase();
+    if (!COUNTRY_ISO[n]) return all;
+    (countries ??= []).push(titleCase(n));
+    return " | ";
+  });
+  // A far region or weeks overland is the wild engine's loop ("Balkans loop 10 nights" stays wild).
+  const lowerLeft = w.toLowerCase();
+  if (REGION_WORDS.some(([re]) => re.test(lowerLeft)) || WILD_ONLY.test(lowerLeft)) return null;
+  // "3 cities in 6 days" is how long, not when: for a walk, "in N days" is the stay ("in 2 weeks" stays a date).
+  w = w.replace(/\b(?:in|over|within)\s+(\d{1,2}|two|three|four|five|six|seven|eight|nine|ten)\s+(days?)\b/gi, " $1 $2 ");
+  const r = readLine(w, today);
+  // The stay: a range read above, else the reader's nights ("6 days" is 5 to 6 nights: the day you fly home counts).
+  const daysSaid = /\b(?:\d{1,2}|a|one|two|three|four|five|six|seven|eight|nine|ten)\s+days?\b/i.test(w) && !/\bnights?\b/i.test(w);
+  const nights: [number, number] | undefined = range ?? (r.nights != null ? (daysSaid ? [r.nights, r.nights + 1] : [r.nights, r.nights]) : (r.nightsRange ?? undefined));
+  if (nights && nights[1] > 21) return null;
+  // Two weeks or more kept to one country is a long trip through it: the wild engine's ("loop through Poland 3 weeks").
+  if (countries && nights && nights[0] >= 14) return null;
+  const { origin, mustInclude } = walkPlaces(r.rest);
+  const win = r.win;
+  const from = win?.from;
+  const to = win && !win.exact ? win.to : undefined;
+  const avoidLabel = avoid.map((a) => (a.startsWith("like:") ? `nothing like ${ISO_NAME[a.slice(5)] ?? a.slice(5)}` : `not ${GROUP_LABEL[a] ?? a}`)).join(", ");
+  const npsLabel = nps == null ? "" : Array.isArray(nps) ? `${nps[0]} to ${nps[1]} nights a stop` : `${nps} night${nps === 1 ? "" : "s"} a stop`;
+  const label = [
+    `A loop${origin ? ` from ${origin}` : ""}${mustInclude.length ? ` through ${mustInclude.join(", ")}` : ""}${countries ? ` in ${countries.join(", ")}` : ""}`,
+    win ? `${win.month ? "in " : ""}${winLabel(win, today)}` : "",
+    nights ? `${nights[0] === nights[1] ? nights[0] : `${nights[0]} to ${nights[1]}`} nights` : "",
+    npsLabel,
+    maxStops ? `up to ${maxStops} stops` : "",
+    avoidLabel,
+    style ? "off the beaten track" : "",
+  ]
+    .filter(Boolean)
+    .join(", ");
+  return {
+    kind: "walk",
+    ...(origin ? { origin } : {}),
+    ...(from ? { from } : {}),
+    ...(to ? { to } : {}),
+    ...(nights ? { minNights: nights[0], maxNights: nights[1] } : {}),
+    ...(nps != null ? { nightsPerStop: nps } : {}),
+    ...(maxStops ? { maxStops } : {}),
+    ...(mustInclude.length ? { mustInclude } : {}),
+    ...(countries ? { countries } : {}),
+    ...(style ? { style } : {}),
+    ...(avoid.length ? { avoid } : {}),
+    label,
+  };
+}
+/** The country names the like: codes stand for, for labels. */
+const ISO_NAME: Record<string, string> = Object.fromEntries(Object.entries(COUNTRY_ISO).map(([n, c]) => [c, titleCase(n)]));
+
 type Stops = {
   stops: { place: string; nights: number }[];
   start?: string;
@@ -672,8 +921,13 @@ export function parseCommand(text: string, today: string): Command[] {
       }
       case "wild":
       case "w":
-      case "loop":
         push(wild(argRest, true));
+        return finish();
+      // "/loop" and "/walk" are the graph walk, unless a far region is named ("/loop sea 21" is still Wild).
+      case "loop":
+      case "walk":
+        // A leading name is where the loop starts ("/loop Brasov 6 days"), as "loop from Brasov" would say it.
+        push(regionOf(args.toLowerCase(), true) ? wild(argRest, true) : (readWalk(/^\s*(?:from\b|[^\p{L}])/iu.test(args) || !args.trim() ? `loop ${args}` : `loop from ${args}`, day) ?? wild(argRest, true)));
         return finish();
       case "stay":
       case "s":
@@ -705,6 +959,13 @@ export function parseCommand(text: string, today: string): Command[] {
   // Free text. The strong patterns first: they win even when the line is a question.
   if (ITIN_TRIGGER.test(lower)) {
     push(itinerary());
+    return finish();
+  }
+  // A loop of hops ("loop from Brasov 20-30 Oct 6 days", "3 cities in 6 days", "Brasov to Warsaw then
+  // train then home"): the graph walk, before the route and the list of stays, which would read only a piece of it.
+  const walk = readWalk(raw, day);
+  if (walk) {
+    push(walk);
     return finish();
   }
   // A list of stays is an itinerary even without the word: "Lisbon 3 nights, Porto 2 nights",
