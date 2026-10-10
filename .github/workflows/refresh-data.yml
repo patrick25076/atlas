@@ -1,31 +1,33 @@
-# Keeps public/data fresh without anyone's laptop. Every source here is free and needs no key.
+# Keeps the data fresh without anyone's laptop. Every source here is free and needs no key,
+# except the Blob store the price boards are written to (BLOB_READ_WRITE_TOKEN secret).
 # A commit by this workflow redeploys production (Vercel builds every push to main).
 name: Refresh data
 
 on:
   schedule:
     - cron: "15 3 * * *" # daily: weather, rates, advisories, airports, airlines, cities, holidays
-    - cron: "45 3 * * 1" # weekly (Monday): towns, ground graph (GTFS)
-    - cron: "30 4 1 * *" # monthly (1st): Overture places and ferries, heritage, visa
+    - cron: "45 3 * * 1" # weekly (Monday): towns, ground graph (GTFS), one-way fares
+    - cron: "30 4 1 * *" # monthly (1st): Overture places and ferries, heritage, visa, fame
+    - cron: "0 1 * * *" # nightly: price boards for ~150 airports, straight to Blob
   workflow_dispatch:
     inputs:
       set:
         description: "Which set to refresh"
         type: choice
         default: daily
-        options: [daily, weekly, monthly, all]
+        options: [daily, weekly, monthly, boards, all]
 
 permissions:
   contents: write
 
-concurrency:
-  group: refresh-data
-  cancel-in-progress: false
-
 jobs:
   refresh:
+    if: github.event.schedule != '0 1 * * *' && inputs.set != 'boards'
     runs-on: ubuntu-latest
     timeout-minutes: 90
+    concurrency:
+      group: refresh-data
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -56,7 +58,6 @@ jobs:
           pnpm ingest:countries
           pnpm ingest:holidays
           pnpm ingest:weather
-          DEALS_GATEWAYS=OTP,CLJ,IAS,TSR,SBZ,GHV,CRA pnpm ingest:deals
 
       - name: Weekly sources
         if: steps.set.outputs.set == 'weekly' || steps.set.outputs.set == 'all'
@@ -73,6 +74,7 @@ jobs:
           pnpm ingest:ferries
           pnpm ingest:overture
           pnpm ingest:gtfs
+          pnpm ingest:fame
 
       - name: Commit what changed
         run: |
@@ -87,3 +89,29 @@ jobs:
             git pull --rebase -X theirs origin main
             git push
           fi
+
+  # Each shard runs on its own runner (its own address): Kiwi throttles an address after a
+  # couple of thousand searches, and 150 airports need about 6,000.
+  boards:
+    if: github.event.schedule == '0 1 * * *' || inputs.set == 'boards' || inputs.set == 'all'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5, 6, 7]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.9.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Search and store the boards
+        env:
+          BLOB_READ_WRITE_TOKEN: ${{ secrets.BLOB_READ_WRITE_TOKEN }}
+          BOARDS_SHARD: ${{ matrix.shard }}/8
+        run: pnpm ingest:boards

@@ -52,6 +52,8 @@ export type Deal = {
   backMin: number;
   url: string;
   bags?: string;
+  /** Kiwi destination photo id: https://images.kiwi.com/photos/600x600/{img}.jpg */
+  img?: string;
 };
 export type DealsFile = { updated: string; window: { from: string; to: string }; gateways: string[]; nights: [number, number]; deals: Deal[] };
 

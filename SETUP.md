@@ -113,3 +113,14 @@ Needed only once the agent, accounts or watches land. Not yet.
 
 1. https://neon.tech → New project, region **Frankfurt (eu-central-1)**.
 2. Copy the pooled connection string into `.env.local` as `DATABASE_URL`, and into Vercel.
+
+## 12. Vercel Blob store for the price boards (done, nothing to do)
+
+The cheapest-getaway boards for ~150 airports worldwide are rebuilt every night and stored
+in a Vercel Blob store called `atlas-boards` (public read, linked to the `atlas` project),
+not in git, so the repository does not grow by megabytes a day. I created the store with
+the CLI on 2026-10-10 and put its token in two places: the project's environment variables
+on Vercel (`BLOB_READ_WRITE_TOKEN`, pulled into `.env.local` locally) and a GitHub Actions
+secret of the same name, which the nightly job uses. If you ever rotate it: Vercel → Storage
+→ atlas-boards → tokens, then update the GitHub secret (`gh secret set BLOB_READ_WRITE_TOKEN`).
+Free tier is plenty: a board is 50 to 200 KB and the site reads it through its own cache.
