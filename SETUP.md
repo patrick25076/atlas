@@ -107,7 +107,16 @@ Concerts, sport and theatre in about 30 countries, 5,000 calls a day for free.
 2. Tell me; events for the selected place (next 30 days) go on the card, with the
    affiliate link once you join their programme on Impact.
 
-## 4. Neon Postgres (free tier): trips, users, fare watches
+## 4. A Postgres database (Supabase or Neon, free tier): the shared fare memory, saved trips, fare watches
+
+Atlas remembers every fare any search ever saw (with its timestamp) so the next person gets
+history for free, keeps saved trips, and logs searches. It needs one connection string.
+Either works:
+- **Supabase**: https://supabase.com → New project, region **Frankfurt** → Project Settings → Database →
+  Connection string (URI, "Transaction" pooler on port 6543). Paste it as `DATABASE_URL`.
+- **Neon**: as below.
+Tables are created automatically on first use.
+
 
 Needed only once the agent, accounts or watches land. Not yet.
 

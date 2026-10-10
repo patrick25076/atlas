@@ -1,0 +1,71 @@
+// Server-only. Travel with a purpose: the events worth flying for inside a window, each with
+// the cheapest way there from the traveller's airports. Tonight's boards answer first (free),
+// a live search fills the rest for the best few. Dates of the edition are the usual ones;
+// the chat verifies the exact edition on the web when it matters.
+import { eventsInWindow, type PurposeEvent } from "./purpose-events";
+import { dealsFor } from "./deals-source";
+import { kiwiDate, nightsOf, searchFlight } from "./kiwi";
+import { haversineKm } from "./geo";
+import { resolveGateway } from "./board";
+import citiesJson from "@/public/data/cities.json";
+import type { City, Deal } from "./types";
+
+const CITIES = citiesJson as unknown as Record<string, City>;
+const cityOf = new Map<string, string>();
+for (const [code, c] of Object.entries(CITIES)) for (const a of c.airports) cityOf.set(a, code);
+
+export type PurposeTrip = { event: PurposeEvent & { start: string; end: string }; deal: Deal | null; source: "board" | "live" | "none"; km: number };
+
+export async function purposeTrips(gateways: string[], from: string, to: string, opts: { live?: number; kinds?: PurposeEvent["kind"][] } = {}): Promise<PurposeTrip[]> {
+  const events = eventsInWindow(from, to).filter((e) => !opts.kinds?.length || opts.kinds.includes(e.kind));
+  const home = resolveGateway(gateways[0]);
+  const boards = await dealsFor(gateways);
+  const out: PurposeTrip[] = [];
+  const addDays = (iso: string, n: number) => new Date(Date.parse(iso) + n * 86_400_000).toISOString().slice(0, 10);
+  for (const e of events) {
+    const city = CITIES[e.code] ?? CITIES[cityOf.get(e.code) ?? ""];
+    const km = home && city ? haversineKm(home.lat, home.lon, city.lat, city.lon) : 0;
+    // A board deal that overlaps the event: there on at least one of its days.
+    const hit = boards.deals
+      .filter((d) => (d.dstCity === e.code || d.dst === e.code || cityOf.get(d.dst) === e.code) && d.out <= e.end && d.back >= e.start)
+      .sort((a, b) => a.price - b.price)[0];
+    out.push({ event: e, deal: hit ?? null, source: hit ? "board" : "none", km });
+  }
+  // Live for the nearest few without a board hit: a return around the event, 2 to 5 nights.
+  const live = out.filter((t) => !t.deal).sort((a, b) => a.km - b.km).slice(0, opts.live ?? 4);
+  await Promise.all(
+    live.map(async (t) => {
+      try {
+        const e = t.event;
+        const r = await searchFlight({ flyFrom: gateways.join(","), flyTo: e.code, departureDate: kiwiDate(addDays(e.start, -2)), departureDateTo: kiwiDate(e.end), returnDate: kiwiDate(addDays(e.start, 1)), returnDateTo: kiwiDate(addDays(e.end, 3)) });
+        const it = r.itineraries
+          .map((x) => ({ it: x, n: nightsOf(x) }))
+          .filter((x) => x.n != null && x.n >= 2 && x.n <= 6 && x.it.outbound.departureTime.slice(0, 10) <= e.end && (x.it.inbound?.departureTime.slice(0, 10) ?? "") >= e.start)
+          .sort((a, b) => a.it.price - b.it.price)[0];
+        if (!it) return;
+        const d: Deal = {
+          gw: it.it.outbound.from,
+          dst: it.it.outbound.to,
+          dstCity: cityOf.get(it.it.outbound.to) ?? it.it.outbound.to,
+          city: CITIES[cityOf.get(it.it.outbound.to) ?? ""]?.name ?? e.city,
+          country: e.country,
+          price: Math.round(it.it.price),
+          out: it.it.outbound.departureTime.slice(0, 10),
+          back: it.it.inbound?.departureTime.slice(0, 10) ?? "",
+          nights: it.n!,
+          stops: Math.max(it.it.outbound.stops, it.it.inbound?.stops ?? 0),
+          carriers: [...new Set([...it.it.outbound.segments, ...(it.it.inbound?.segments ?? [])].map((s) => s.carrierName || s.carrier))],
+          outMin: Math.round(it.it.outbound.durationSeconds / 60),
+          backMin: it.it.inbound ? Math.round(it.it.inbound.durationSeconds / 60) : 0,
+          url: it.it.bookingUrl,
+          img: it.it.imageId,
+        };
+        t.deal = d;
+        t.source = "live";
+      } catch {
+        // stays unpriced
+      }
+    }),
+  );
+  return out.sort((a, b) => (a.deal ? a.deal.price : 9999) - (b.deal ? b.deal.price : 9999));
+}

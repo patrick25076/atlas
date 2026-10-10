@@ -20,6 +20,7 @@ import { expandWeather, visaFor } from "@/lib/types";
 import Panel, { MODE_LABEL, type CombosState, type PlanState, type WildState } from "./Panel";
 import type { FinderQuery, FinderState } from "./FinderForm";
 import type { Plan } from "@/lib/plan";
+import type { PurposeTrip } from "@/lib/purpose";
 import type { EatsResponse } from "@/app/api/eats/route";
 import type { HotelsResult } from "@/lib/liteapi";
 import type { WildLeg, WildTrip } from "@/lib/wild";
@@ -150,6 +151,9 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
   const [wildNights, setWildNights] = useState(14);
   const [wildStyle, setWildStyle] = useState("experiences");
   const [wildBudget, setWildBudget] = useState("mid");
+  const [wildTradeoff, setWildTradeoff] = useState("balanced");
+  const [wildVariants, setWildVariants] = useState(1);
+  const [purpose, setPurpose] = useState<{ status: "idle" | "loading" | "ok" | "error"; trips: PurposeTrip[]; note?: string }>({ status: "idle", trips: [] });
   const [plan, setPlan] = useState<PlanState>({ status: "idle" });
   const [finder, setFinder] = useState<FinderState>({ status: "idle", deals: [], lines: [] });
   const [chatDeals, setChatDeals] = useState<Deal[]>([]);
@@ -694,6 +698,18 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
   // Everything we know about the selected city and country.
   const selected = selectedPlace ? places.find((x) => x.key === selectedPlace) : null;
   const target = useMemo(() => {
+    if (selectedPlace === "here" && origin) {
+      let code: string | null = null;
+      let bestKm = 40;
+      for (const [k, c] of Object.entries(cities)) {
+        const km = haversineKm(origin.lat, origin.lon, c.lat, c.lon);
+        if (km < bestKm) {
+          bestKm = km;
+          code = k;
+        }
+      }
+      return { code: code ?? undefined, name: code ? cities[code].name : origin.label, lat: origin.lat, lon: origin.lon, country: code ? cities[code].country : gateways[0]?.airport.country, pop: code ? cities[code].pop : undefined };
+    }
     if (view === "deals" && deal) {
       const c = cities[deal.dstCity];
       const coord = dealCoord(deal);
@@ -705,7 +721,7 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
     }
     return null;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [view, deal, selected, cities]);
+  }, [view, deal, selected, cities, selectedPlace, origin]);
 
   const intel = useMemo<Intel | null>(() => {
     if (!target) return null;
@@ -768,7 +784,7 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
     setSightsOnMap(false);
     setCombos({ status: "idle" });
     setSelectedCombo(null);
-    const name = deal?.city;
+    const name = deal?.city ?? (view !== "deals" ? target?.name : undefined);
     if (!name) return;
     const ctrl = new AbortController();
     fetch(`/api/sights?name=${encodeURIComponent(name)}`, { signal: ctrl.signal })
@@ -776,14 +792,22 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
       .then((j: Sights | null) => setSights(j))
       .catch(() => {});
     return () => ctrl.abort();
-  }, [deal?.city]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [deal?.city, view !== "deals" ? target?.name : null]);
   // Rated places to eat and live hotel prices for the deal's city and dates.
   useEffect(() => {
     setEats(null);
     setHotels(null);
-    if (!deal) return;
-    const c = dealCoord(deal);
+    const c = deal ? dealCoord(deal) : view !== "deals" && target ? ([target.lon, target.lat] as [number, number]) : null;
     if (!c) return;
+    if (!deal) {
+      const ctrl = new AbortController();
+      fetch(`/api/eats?lat=${c[1].toFixed(4)}&lon=${c[0].toFixed(4)}`, { signal: ctrl.signal })
+        .then((r) => (r.ok ? r.json() : null))
+        .then((j: EatsResponse | null) => setEats(j))
+        .catch(() => {});
+      return () => ctrl.abort();
+    }
     const ctrl = new AbortController();
     fetch(`/api/eats?lat=${c[1].toFixed(4)}&lon=${c[0].toFixed(4)}`, { signal: ctrl.signal })
       .then((r) => (r.ok ? r.json() : null))
@@ -795,7 +819,7 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
       .catch(() => {});
     return () => ctrl.abort();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [deal?.dstCity, deal?.out, deal?.back]);
+  }, [deal?.dstCity, deal?.out, deal?.back, view !== "deals" ? target?.code ?? target?.name : null]);
   async function findCombosFor() {
     if (!deal) return;
     setCombos({ status: "loading" });
@@ -832,7 +856,7 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
     if (!boardGateways.length || !gateways[0]) return;
     setWild({ status: "loading", lines: [] });
     setPlan({ status: "idle" });
-    const q = new URLSearchParams({ g: boardGateways.map((g) => g.iata).join(","), home: gateways[0].airport.country, region: wildRegion, nights: String(wildNights), style: wildStyle, budget: wildBudget });
+    const q = new URLSearchParams({ g: boardGateways.map((g) => g.iata).join(","), home: gateways[0].airport.country, region: wildRegion, nights: String(wildNights), style: wildStyle, budget: wildBudget, tradeoff: wildTradeoff, variants: String(wildVariants) });
     if (month) q.set("month", month);
     if (origin) {
       q.set("lat", origin.lat.toFixed(4));
@@ -901,6 +925,41 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
     } catch {
       setPlan({ status: "error", note: "network" });
     }
+  }
+  // Swap the shown trip for one of its ranked alternatives.
+  function showAlternative(i: number) {
+    const t = wild.trip;
+    const alt = t?.alternatives?.[i];
+    if (!t || !alt) return;
+    const others = [{ variant: t.variant ?? "Best", rank: t.alternatives!.length + 1, score: 0, title: t.title, totals: t.totals, judge: t.judge, outDate: t.outDate, backDate: t.backDate, legs: t.legs, stops: t.stops }, ...t.alternatives!.filter((_, k) => k !== i)];
+    const next: WildTrip = { ...t, variant: alt.variant, title: alt.title, totals: alt.totals, judge: alt.judge, outDate: alt.outDate, backDate: alt.backDate, legs: alt.legs, stops: alt.stops, alternatives: others };
+    setWild({ ...wild, trip: next });
+    setPlan({ status: "idle" });
+    frameWild(next);
+  }
+  // Events worth flying for in the next two months (or the picked month).
+  async function findPurpose() {
+    if (!boardGateways.length) return;
+    setPurpose({ status: "loading", trips: [] });
+    const from = month ? `${month}-01` : new Date(Date.now() + 3 * 86_400_000).toISOString().slice(0, 10);
+    const to = month ? new Date(Date.UTC(Number(month.slice(0, 4)), Number(month.slice(5, 7)), 0)).toISOString().slice(0, 10) : new Date(Date.now() + 62 * 86_400_000).toISOString().slice(0, 10);
+    try {
+      const r = await fetch(`/api/purpose?g=${boardGateways.map((g) => g.iata).join(",")}&from=${from}&to=${to}&live=4`);
+      const j = (await r.json()) as { trips?: PurposeTrip[]; error?: string };
+      if (!r.ok || j.error) setPurpose({ status: "error", trips: [], note: j.error ?? `failed (${r.status})` });
+      else {
+        setPurpose({ status: "ok", trips: j.trips ?? [] });
+        setChatDeals((j.trips ?? []).map((t) => t.deal).filter((d): d is Deal => !!d));
+      }
+    } catch {
+      setPurpose({ status: "error", trips: [], note: "network" });
+    }
+  }
+  // The place the traveller is in, as a place page.
+  function showHere() {
+    if (!origin) return;
+    setView("all");
+    setSelectedPlace("here");
   }
   function frameWild(trip: WildTrip) {
     const map = mapRef.current;
@@ -1130,6 +1189,10 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
 
   function focusPlace(key: string | null) {
     setSelectedPlace(key);
+    if (key === "here" && origin) {
+      fitTo(origin.lat, origin.lon, 10);
+      return;
+    }
     const p = key ? places.find((x) => x.key === key) : null;
     setSelectedStation(p?.ground && p.mode !== "plane" ? p.ground.id : null);
     if (p) fitTo(p.lat, p.lon, p.mode === "plane" ? 5 : 7);
@@ -1676,7 +1739,15 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
         onWildStyle={setWildStyle}
         wildBudget={wildBudget}
         onWildBudget={setWildBudget}
+        wildTradeoff={wildTradeoff}
+        onWildTradeoff={setWildTradeoff}
+        wildVariants={wildVariants}
+        onWildVariants={setWildVariants}
         onWild={buildWildTrip}
+        onWildAlternative={showAlternative}
+        purpose={purpose}
+        onPurpose={findPurpose}
+        onHere={showHere}
         plan={plan}
         onPlan={planWild}
         gateways={gateways}

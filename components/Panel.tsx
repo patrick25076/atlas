@@ -16,6 +16,7 @@ import type { CombosResult } from "@/lib/combos";
 import type { WildTrip } from "@/lib/wild";
 import { WILD_BUDGETS, WILD_REGIONS, WILD_STYLES } from "@/lib/ui-types";
 import type { Plan } from "@/lib/plan";
+import type { PurposeTrip } from "@/lib/purpose";
 import type { EatsResponse } from "@/app/api/eats/route";
 import type { HotelsResult } from "@/lib/liteapi";
 
@@ -96,7 +97,15 @@ type Props = {
   onWildStyle: (s: string) => void;
   wildBudget: string;
   onWildBudget: (b: string) => void;
+  wildTradeoff: string;
+  onWildTradeoff: (t: string) => void;
+  wildVariants: number;
+  onWildVariants: (n: number) => void;
   onWild: () => void;
+  onWildAlternative: (i: number) => void;
+  purpose: { status: "idle" | "loading" | "ok" | "error"; trips: PurposeTrip[]; note?: string };
+  onPurpose: () => void;
+  onHere: () => void;
   plan: PlanState;
   onPlan: () => void;
   // explore
@@ -265,6 +274,20 @@ export default function Panel(p: Props) {
             ))}
           </div>
           <div className="chips nowrap">
+            {[
+              ["price", "Cheapest"],
+              ["balanced", "Balanced"],
+              ["comfort", "Comfort: short flights, few stops"],
+            ].map(([k, label]) => (
+              <button key={k} className={`chip ghost${p.wildTradeoff === k ? " on" : ""}`} onClick={() => p.onWildTradeoff(k)} title="How to trade euros for hours">
+                {label}
+              </button>
+            ))}
+            <button className={`chip ghost${p.wildVariants > 1 ? " on" : ""}`} onClick={() => p.onWildVariants(p.wildVariants > 1 ? 1 : 3)} title="Build the balanced, cheapest and comfortable versions and rank them">
+              {p.wildVariants > 1 ? "3 versions, ranked" : "1 version"}
+            </button>
+          </div>
+          <div className="chips nowrap">
             {WILD_BUDGETS.map((b) => (
               <button key={b.key} className={`chip ghost${p.wildBudget === b.key ? " on" : ""}`} onClick={() => p.onWildBudget(b.key)}>
                 {b.label}
@@ -325,6 +348,37 @@ export default function Panel(p: Props) {
                     )}
                     <div className="sub">Best for: {p.wild.trip.judge.bestFor}</div>
                   </div>
+                </div>
+              )}
+              {p.wild.trip.alternatives && p.wild.trip.alternatives.length > 0 && (
+                <div className="section">
+                  <h2>Ranked against each other</h2>
+                  <div className="row active">
+                    <span className="code">#1</span>
+                    <span>
+                      <div className="name">
+                        {p.wild.trip.variant ?? "Best"}: {p.wild.trip.title}
+                      </div>
+                      <div className="sub">
+                        €{p.wild.trip.totals.all} · €{p.wild.trip.totals.perDay} a day · {p.wild.trip.totals.hoursInAir} h in transit · judge {p.wild.trip.judge?.score ?? "?"}
+                      </div>
+                    </span>
+                    <span className="meta">shown</span>
+                  </div>
+                  {p.wild.trip.alternatives.map((alt, i) => (
+                    <div key={alt.variant} className="row" onClick={() => p.onWildAlternative(i)}>
+                      <span className="code">#{alt.rank}</span>
+                      <span>
+                        <div className="name">
+                          {alt.variant}: {alt.title}
+                        </div>
+                        <div className="sub">
+                          €{alt.totals.all} · €{alt.totals.perDay} a day · {alt.totals.hoursInAir} h in transit · judge {alt.judge?.score ?? "?"}
+                        </div>
+                      </span>
+                      <span className="meta">open</span>
+                    </div>
+                  ))}
                 </div>
               )}
               <div className="section">
@@ -763,6 +817,34 @@ export default function Panel(p: Props) {
 
       {tab === "trips" && (
         <>
+          <div className="section">
+            <div className="headline">
+              <h2>Travel for a purpose</h2>
+              <button className="chip ghost" onClick={p.onPurpose} disabled={p.purpose.status === "loading"}>
+                {p.purpose.status === "loading" ? "Pricing events…" : p.purpose.status === "ok" ? "Refresh" : "Find events worth flying for"}
+              </button>
+            </div>
+            {p.purpose.status === "idle" && <div className="status muted">Carnivals, fire festivals, marathons, lantern nights, cherry blossom, northern lights: the next two months (or the month you picked), each with the cheapest way there from your airports.</div>}
+            {p.purpose.status === "error" && <div className="status">{p.purpose.note}</div>}
+            {p.purpose.status === "ok" &&
+              p.purpose.trips.slice(0, 10).map((t) => (
+                <div key={t.event.name + t.event.start} className="row" onClick={() => t.deal && p.onDeal(`${t.deal.gw}|${t.deal.dst}|${t.deal.out}`)} style={{ cursor: t.deal ? "pointer" : "default" }}>
+                  <span className="code">{t.deal ? `€${t.deal.price}` : "?"}</span>
+                  <span>
+                    <div className="name">
+                      {t.event.name} · {t.event.city}
+                    </div>
+                    <div className="sub">
+                      {dateRange(t.event.start, t.event.end)}
+                      {t.deal ? ` · fly ${dateRange(t.deal.out, t.deal.back)} from ${t.deal.gw}${t.deal.stops ? "" : ", direct"}` : " · no fare found yet"}
+                      {t.event.note ? ` · ${t.event.note}` : ""}
+                    </div>
+                  </span>
+                  <span className="meta">{t.event.kind}</span>
+                </div>
+              ))}
+          </div>
+          <h2>Short loops</h2>
           <div className="status">Fly out, hop between cities by train or coach, fly home from the last one. Ranked by countries and cities per euro and hour.</div>
           <div className="chips nowrap">
             {[3, 5, 7, 10].map((d) => (
@@ -873,6 +955,16 @@ export default function Panel(p: Props) {
 
       {p.view === "all" && (
         <>
+          {!place && p.origin && (
+            <div className="row" onClick={p.onHere} title="What's on, what to do, where to eat, right here">
+              <span className="code">HERE</span>
+              <span>
+                <div className="name">{p.origin.label}</div>
+                <div className="sub">events, sights, food and rated restaurants where you are</div>
+              </span>
+              <span className="meta">open</span>
+            </div>
+          )}
           {place && (
             <>
               <div className="row active" onClick={() => p.onPlace(null)}>
@@ -943,8 +1035,67 @@ export default function Panel(p: Props) {
             )}
           </Chips>
           <div className="scroll">
-            {place && p.intel && (
-              <div style={{ paddingBottom: 12 }}>
+            {(place || p.selectedPlace === "here") && p.intel && (
+              <div style={{ paddingBottom: 12, display: "flex", flexDirection: "column", gap: 10 }}>
+                {p.selectedPlace === "here" && (
+                  <div className="row active" onClick={() => p.onPlace(null)}>
+                    <span className="code">HERE</span>
+                    <span>
+                      <div className="name">{p.origin?.label}</div>
+                      <div className="sub">where you are now</div>
+                    </span>
+                    <span className="meta">close</span>
+                  </div>
+                )}
+                {p.sights && (p.sights.see.length > 0 || p.sights.do.length > 0) && (
+                  <div className="section">
+                    <div className="headline">
+                      <h2>What to do in {p.sights.title}</h2>
+                      <button className="chip ghost" onClick={p.onShowSights}>
+                        Show on the map
+                      </button>
+                    </div>
+                    <div className="sights">
+                      {[...p.sights.see.slice(0, 6), ...p.sights.do.slice(0, 2)].map((s) => (
+                        <a key={s.kind + s.name} className="sight" href={s.url ?? p.sights!.url} target="_blank" rel="noreferrer">
+                          <div className="sightimg" style={s.image ? { backgroundImage: `url(${s.image})` } : undefined}>
+                            <span className={`badge ${s.kind === "do" ? "warm" : "heritage"}`}>{s.kind === "do" ? "do" : "see"}</span>
+                          </div>
+                          <b>{s.name}</b>
+                          {s.desc && <p>{s.desc}</p>}
+                        </a>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {p.eats && p.eats.food.status === "ok" && p.eats.food.places.length > 0 && (
+                  <div className="section">
+                    <h2>Eat well, fairly priced</h2>
+                    {p.eats.food.places.slice(0, 6).map((e) => (
+                      <a key={e.id} className="row" href={e.url ?? `https://foursquare.com/v/${e.id}`} target="_blank" rel="noreferrer" style={{ color: "inherit" }}>
+                        <span className="code">{e.rating?.toFixed(1)}</span>
+                        <span>
+                          <div className="name">
+                            {e.name} <span className="muted">{"€".repeat(e.price ?? 1)}</span>
+                          </div>
+                          <div className="sub">{[e.category, e.tip].filter(Boolean).join(" · ")}</div>
+                        </span>
+                        <span className="meta">{e.distance != null ? `${(e.distance / 1000).toFixed(1)} km` : ""}</span>
+                      </a>
+                    ))}
+                    {p.eats.sweet.status === "ok" && p.eats.sweet.places.length > 0 && <div className="status">Sweet: {p.eats.sweet.places.map((e) => `${e.name} (${e.rating?.toFixed(1)})`).join(" · ")}</div>}
+                  </div>
+                )}
+                {p.sights && p.sights.events.length > 0 && (
+                  <div className="section">
+                    <h2>Festivals and events</h2>
+                    {p.sights.events.slice(0, 4).map((e, i) => (
+                      <p key={i} className="para" style={{ margin: 0 }}>
+                        {e}
+                      </p>
+                    ))}
+                  </div>
+                )}
                 <PlaceIntel intel={p.intel} summary={p.summary} />
               </div>
             )}

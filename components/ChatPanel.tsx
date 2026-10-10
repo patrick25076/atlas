@@ -191,6 +191,15 @@ export default function ChatPanel(p: Props) {
             })}
           </div>
         ))}
+        {!busy && messages.length > 0 && messages.at(-1)?.role === "assistant" && (
+          <div className="chips followups">
+            {["Direct flights only", "Try my other airports too", "Two-city version", "What do I eat there?", "Hotels for those dates", "Make it a week longer"].map((f) => (
+              <button key={f} className="chip ghost" onClick={() => send(f)}>
+                {f}
+              </button>
+            ))}
+          </div>
+        )}
         {busy && messages.at(-1)?.role === "user" && (
           <div className="bubble ai">
             <p className="muted">Thinking…</p>

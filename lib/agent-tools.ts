@@ -17,7 +17,10 @@ import { dealsFor } from "./deals-source";
 import { findDeals } from "./finder";
 import { findCombos } from "./combos";
 import { kiwiDate, nightsOf, searchFlight } from "./kiwi";
-import { buildWild, customKey, wildPath, REGIONS, type Budget, type Region, type Style, type WildTrip } from "./wild";
+import { buildWild, customKey, wildPath, REGIONS, STOPOVER_PROGRAMMES, type Budget, type Region, type Style, type Tradeoff, type WildTrip } from "./wild";
+import { buildWildVariants } from "./wild-variants";
+import { purposeTrips } from "./purpose";
+import { fareHistory, hasDb } from "./db";
 import { judgeTrip } from "./judge";
 import { planDays, planPath, type Plan } from "./plan";
 import { readJson, writeJson } from "./boards-store";
@@ -199,8 +202,8 @@ export function atlasTools(ctx: AgentContext) {
     }),
 
     wild_trip: tool({
-      description: "A long multi-country loop (10 to 28 nights) into a far region: fly out (via a cheaper hub when that wins), chain cheap one-way flights and border hops for two or three nights a stop, fly home, with living costs per stop, visas, and a model's verdict. Regions: " + Object.entries(REGIONS).map(([k, v]) => `${k} (${v.label})`).join(", ") + ". Style: experiences, beaches, food, cities, slow. Budget: backpacker, mid, comfort. Optional custom country list or countries to favour. Takes one to two minutes unless already built; say so before calling.",
-      inputSchema: jsonSchema<{ region: Region; nights?: number; style?: Style; budget?: Budget; month?: string; countries?: string[]; prefer?: string[]; maxStops?: number; nightsPerStop?: number; stopover?: boolean }>({
+      description: "A long multi-country loop (7 to 28 nights) into a far region: fly out (via a cheaper hub when that wins), chain cheap one-way flights and border hops for two or three nights a stop, fly home (any of the traveller's airports, plus the last leg to their door), with living costs per stop, visas, a stopover night in a hub when it costs about the same, and a model's verdict. Regions: " + Object.entries(REGIONS).map(([k, v]) => `${k} (${v.label})`).join(", ") + ". Style: experiences, beaches, food, cities, slow. Budget: backpacker, mid, comfort. Tradeoff: price (cheapest whatever the hours), balanced, comfort (pays more for short flights and few stops). variants=3 builds the balanced, cheapest and comfortable versions and ranks them (use when the traveller wants options or asks why everything goes through one hub). noHubs skips the positioning hub (Istanbul, Budapest). Optional custom country list, countries to favour, max stops, nights per stop. Takes one to two minutes unless already built; say so before calling.",
+      inputSchema: jsonSchema<{ region: Region; nights?: number; style?: Style; budget?: Budget; month?: string; countries?: string[]; prefer?: string[]; maxStops?: number; nightsPerStop?: number; stopover?: boolean; tradeoff?: Tradeoff; noHubs?: boolean; variants?: number }>({
         type: "object",
         properties: {
           region: { type: "string", enum: Object.keys(REGIONS) },
@@ -213,6 +216,9 @@ export function atlasTools(ctx: AgentContext) {
           maxStops: { type: "number" },
           nightsPerStop: { type: "number" },
           stopover: { type: "boolean", description: "allow a hub night on the way home, default true" },
+          tradeoff: { type: "string", enum: ["price", "balanced", "comfort"] },
+          noHubs: { type: "boolean", description: "fly only from the traveller's own airports" },
+          variants: { type: "number", description: "1 (default) or 2 to 4 ranked variants" },
         },
         required: ["region"],
       }),
@@ -221,29 +227,62 @@ export function atlasTools(ctx: AgentContext) {
         const style = a.style ?? "experiences";
         const budget = a.budget ?? "mid";
         const month = a.month ?? ctx.month;
-        const custom = customKey(a.countries, a.prefer, a.maxStops, a.nightsPerStop);
+        const summarise = (trip: WildTrip) => ({
+          title: trip.title,
+          dates: `${trip.outDate} to ${trip.backDate}`,
+          totals: trip.totals,
+          legs: trip.legs.map((l) => (l.kind === "fly" ? `${l.date} fly ${l.fromName} → ${l.toName} €${l.price}, ${l.hours} h, ${l.stops ? `${l.stops} stop` : "direct"}` : `${l.date} ${l.mode} ${l.fromName} → ${l.toName} ~${Math.round(l.minutes / 60)} h`)),
+          stops: trip.stops.map((s) => `${s.name} (${s.country}) ${s.nights} nights, about €${s.perDay}/day${s.visa ? `, ${s.visa}` : ""}${s.note ? `; ${s.note}` : ""}`),
+          judge: trip.judge,
+        });
+        if ((a.variants ?? 1) > 1) {
+          const ranked = await buildWildVariants({ gateways, home: ctx.home, region: a.region, month, nights, style, budget, origin: ctx.origin, stopover: a.stopover, countries: a.countries, prefer: a.prefer, maxStops: a.maxStops, nightsPerStop: a.nightsPerStop }, Math.min(4, a.variants ?? 3));
+          if (!ranked.length) return { error: "no way into that region on those dates from here; try another month or region" };
+          return { ranked: ranked.map((t) => ({ rank: t.rank, variant: t.variant, score: t.score, ...summarise(t) })), key: { region: a.region, nights, style, budget, month }, raw: ranked[0] };
+        }
+        const custom = customKey(a.countries, a.prefer, a.maxStops, a.nightsPerStop, a.tradeoff, a.noHubs);
         const path = wildPath(mainGateway(gateways), a.region, month, nights, style, budget, custom);
         const stored = await readJson<WildTrip>(path);
         let trip = stored && stored.ageHours < 24 ? stored.body : null;
         if (!trip) {
-          const built = await buildWild({ gateways, home: ctx.home, region: a.region, month, nights, style, budget, origin: ctx.origin, stopover: a.stopover, countries: a.countries, prefer: a.prefer, maxStops: a.maxStops, nightsPerStop: a.nightsPerStop });
+          const built = await buildWild({ gateways, home: ctx.home, region: a.region, month, nights, style, budget, origin: ctx.origin, stopover: a.stopover, countries: a.countries, prefer: a.prefer, maxStops: a.maxStops, nightsPerStop: a.nightsPerStop, tradeoff: a.tradeoff, noHubs: a.noHubs });
           if (!built) return { error: "no way into that region on those dates from here; try another month or region" };
           const judge = await judgeTrip(built);
           trip = { ...built, judge: judge ?? undefined };
           await writeJson(path, trip).catch(() => null);
         }
-        return {
-          title: trip.title,
-          dates: `${trip.outDate} to ${trip.backDate}`,
-          totals: trip.totals,
-          legs: trip.legs.map((l) => (l.kind === "fly" ? `${l.date} fly ${l.fromName} → ${l.toName} €${l.price}, ${l.hours} h, ${l.stops ? `${l.stops} stop` : "direct"}` : `${l.date} ${l.mode} ${l.fromName} → ${l.toName} ~${Math.round(l.minutes / 60)} h`)),
-          stops: trip.stops.map((s) => `${s.name} (${s.country}) ${s.nights} nights, about €${s.perDay}/day${s.visa ? `, ${s.visa}` : ""}`),
-          judge: trip.judge,
-          key: { region: a.region, nights, style, budget, month, custom },
-          raw: trip,
-        };
+        return { ...summarise(trip), key: { region: a.region, nights, style, budget, month, custom }, raw: trip };
       },
     }),
+
+    events_worth_travelling_for: tool({
+      description: "Travel with a purpose: the events worth flying for inside a window (carnivals, festivals, marathons, fire festivals, lantern nights, seasons like cherry blossom or northern lights), each with the cheapest way there from the traveller's airports (tonight's boards, then a live search for the nearest few). Use for 'something special to go to in November', 'Halloween somewhere cool', 'a marathon abroad'.",
+      inputSchema: jsonSchema<{ from: string; to: string; kinds?: string[]; live?: number }>({
+        type: "object",
+        properties: { from: { type: "string", description: "YYYY-MM-DD" }, to: { type: "string", description: "YYYY-MM-DD" }, kinds: { type: "array", items: { type: "string", enum: ["festival", "sport", "culture", "season", "music", "food"] } }, live: { type: "number", description: "how many unpriced events to price live (default 4, slow)" } },
+        required: ["from", "to"],
+      }),
+      execute: async (a) => {
+        const r = await purposeTrips(gateways, a.from, a.to, { live: a.live, kinds: a.kinds as never });
+        return { events: r.slice(0, 12).map((t) => ({ event: t.event.name, city: t.event.city, country: t.event.country, dates: `${t.event.start} to ${t.event.end}`, kind: t.event.kind, note: t.event.note, cheapestTrip: t.deal ? compactDeal(t.deal) : null, priced: t.source })), raw: r.map((t) => t.deal).filter((d): d is Deal => !!d) };
+      },
+    }),
+
+    stopover_programmes: tool({
+      description: "Airlines that give a free or very cheap hotel night in their hub on the way (Turkish Airlines in Istanbul, Qatar in Doha, TAP in Lisbon, Icelandair, Finnair, Emirates, Singapore). Use when a route goes through one of these hubs or the traveller asks about layover hacks.",
+      inputSchema: jsonSchema<Record<string, never>>({ type: "object", properties: {} }),
+      execute: async () => Object.entries(STOPOVER_PROGRAMMES).map(([hub, p]) => ({ hub, airline: p.airline, note: p.note })),
+    }),
+
+    ...(hasDb()
+      ? {
+          fare_history: tool({
+            description: "What a route cost whenever anyone on Atlas looked, cheapest per departure date with the time it was seen: tells whether a fare is good now and how it moved. Airport codes.",
+            inputSchema: jsonSchema<{ from: string; to: string; dateFrom?: string; dateTo?: string }>({ type: "object", properties: { from: { type: "string" }, to: { type: "string" }, dateFrom: { type: "string" }, dateTo: { type: "string" } }, required: ["from", "to"] }),
+            execute: async (a) => fareHistory(a.from.toUpperCase(), a.to.toUpperCase(), a.dateFrom, a.dateTo, 25),
+          }),
+        }
+      : {}),
 
     plan_days: tool({
       description: "The day-by-day plan of a wild trip already built in this conversation: experiences, food and where, costs per day, a month's rent per city. Grounded in guides, live web research and rated restaurants. About a minute. Pass the same region, nights, style, budget, month as the trip.",

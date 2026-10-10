@@ -1,4 +1,5 @@
-import { buildWild, REGIONS, wildPath, type Budget, type Region, type Style, type WildTrip } from "@/lib/wild";
+import { buildWild, customKey, REGIONS, wildPath, type Budget, type Region, type Style, type Tradeoff, type WildTrip } from "@/lib/wild";
+import { buildWildVariants } from "@/lib/wild-variants";
 import { judgeTrip } from "@/lib/judge";
 import { readJson, writeJson } from "@/lib/boards-store";
 import { mainGateway } from "@/lib/board";
@@ -24,11 +25,14 @@ export async function GET(request: Request) {
   const lon = Number(p.get("lon"));
   const origin = Number.isFinite(lat) && Number.isFinite(lon) ? { lat, lon, label: (p.get("label") ?? "home").slice(0, 60) } : undefined;
   const stopover = p.get("stopover") !== "0";
+  const tradeoff = (["price", "balanced", "comfort"].includes(p.get("tradeoff") ?? "") ? p.get("tradeoff") : "balanced") as Tradeoff;
+  const noHubs = p.get("noHubs") === "1";
+  const variants = Math.min(4, Math.max(1, Number(p.get("variants")) || 1));
   if (!gateways.length || !/^[A-Z]{2}$/.test(home)) return Response.json({ error: "g (airport codes) and home (country) required" }, { status: 400 });
   if (!REGIONS[region]) return Response.json({ error: `region must be one of ${Object.keys(REGIONS).join(", ")}` }, { status: 400 });
   if (month && !/^\d{4}-\d{2}$/.test(month)) return Response.json({ error: "month must be YYYY-MM" }, { status: 400 });
 
-  const path = wildPath(mainGateway(gateways), region, month, nights, style, budget);
+  const path = wildPath(mainGateway(gateways), region, month, nights, style, budget, customKey(undefined, undefined, undefined, undefined, tradeoff, noHubs) + (variants > 1 ? `-v${variants}` : ""));
   if (!p.get("fresh")) {
     const stored = await readJson<WildTrip>(path);
     if (stored && stored.ageHours < FRESH_HOURS) return Response.json(stored.body, { headers: { "Cache-Control": "public, s-maxage=1800", "X-Wild": "stored" } });
@@ -51,7 +55,15 @@ export async function GET(request: Request) {
         const mine = !job;
         if (!job) {
           job = (async () => {
-            const trip = await buildWild({ gateways, home, region, month, nights, style, budget, origin, stopover, onProgress: (line) => send({ progress: line }) });
+            if (variants > 1) {
+              send({ progress: `Building ${variants} versions in parallel and ranking them…` });
+              const ranked = await buildWildVariants({ gateways, home, region, month, nights, style, budget, origin, stopover }, variants, (line) => send({ progress: line }));
+              if (!ranked.length) return null;
+              const done = { ...ranked[0], alternatives: ranked.slice(1).map((t) => ({ variant: t.variant, rank: t.rank, score: t.score, title: t.title, totals: t.totals, judge: t.judge, outDate: t.outDate, backDate: t.backDate, legs: t.legs, stops: t.stops })) } as WildTrip;
+              await writeJson(path, done).catch(() => null);
+              return done;
+            }
+            const trip = await buildWild({ gateways, home, region, month, nights, style, budget, origin, stopover, tradeoff, noHubs, onProgress: (line) => send({ progress: line }) });
             if (!trip) return null;
             send({ progress: "Asking for a second opinion…" });
             const judge = await judgeTrip(trip);

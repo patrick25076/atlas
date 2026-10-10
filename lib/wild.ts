@@ -71,7 +71,7 @@ export const BUDGET_SCALE: Record<Budget, number> = { backpacker: 0.65, mid: 1, 
 /** Nearby hubs that often sell the cheap long-hauls: positioning flights go here first. */
 const HUBS = ["BUD", "VIE", "WAW", "IST", "MIL", "LON", "PAR", "FRA", "AMS", "MAD", "ROM", "BER", "PRG", "ATH", "DUB", "CPH", "STO", "LIS", "BCN", "MUC", "ZRH", "BRU"];
 
-export type WildStop = { code: string; name: string; country: string; lat: number; lon: number; arrive: string; depart: string; nights: number; perDay: number; visa?: string | null; warning?: boolean };
+export type WildStop = { code: string; name: string; country: string; lat: number; lon: number; arrive: string; depart: string; nights: number; perDay: number; visa?: string | null; warning?: boolean; note?: string };
 export type WildLeg =
   | { kind: "fly"; from: string; to: string; fromName: string; toName: string; date: string; departAt: string; arriveAt: string; price: number; hours: number; stops: number; route: string[]; carriers: string[]; url: string }
   | { kind: "ground"; from: string; to: string; fromName: string; toName: string; date: string; minutes: number; mode: string; estimated: boolean; price: number };
@@ -92,6 +92,9 @@ export type WildTrip = {
   judge?: Judge;
   searched: number;
   generatedAt: string;
+  /** Other ranked versions of the same request (variants), lighter than a full trip. */
+  alternatives?: { variant: string; rank: number; score: number; title: string; totals: WildTrip["totals"]; judge?: Judge; outDate: string; backDate: string; legs: WildLeg[]; stops: WildStop[] }[];
+  variant?: string;
 };
 
 const addDays = (iso: string, n: number) => new Date(Date.parse(iso) + n * 86_400_000).toISOString().slice(0, 10);
@@ -156,7 +159,29 @@ export type WildParams = {
   prefer?: string[];
   maxStops?: number;
   nightsPerStop?: number;
+  /** How to trade euros for hours: "price" takes the cheapest, "comfort" pays more for short flights and few stops. */
+  tradeoff?: Tradeoff;
+  /** Skip the hub positioning (fly only from the home airports). */
+  noHubs?: boolean;
   onProgress?: (line: string) => void;
+};
+
+export type Tradeoff = "price" | "balanced" | "comfort";
+/** Euros one hour of travel is worth, per tradeoff: way in, chain hops, way home. */
+const HOUR_VALUE: Record<Tradeoff, [number, number, number]> = { price: [5, 7, 7], balanced: [9, 11, 12], comfort: [18, 20, 24] };
+
+/** Airlines and hubs with a free or near-free stopover programme: a night in the hub city on
+ * the way, hotel included or cheap. Worth saying when a leg goes through one. */
+export const STOPOVER_PROGRAMMES: Record<string, { airline: string; note: string }> = {
+  IST: { airline: "Turkish Airlines", note: "Turkish Airlines Stopover: a free hotel night (two in business) in Istanbul on international connections, booked through their site; verify current terms." },
+  DOH: { airline: "Qatar Airways", note: "Qatar Stopover: Doha hotel from about $14 a night for 1 to 4 nights when booked with the ticket; verify current terms." },
+  DXB: { airline: "Emirates", note: "Emirates Dubai Stopover packages: discounted hotel nights; verify current terms." },
+  LIS: { airline: "TAP", note: "TAP Portugal Stopover: up to 10 days in Lisbon or Porto at no extra fare; verify current terms." },
+  KEF: { airline: "Icelandair", note: "Icelandair Stopover: up to 7 days in Iceland at no extra fare on transatlantic routes." },
+  SIN: { airline: "Singapore Airlines", note: "Singapore Stopover Holiday: cheap hotel-and-transfer packages; verify current terms." },
+  ADD: { airline: "Ethiopian", note: "Ethiopian Airlines offers free Addis Ababa stopover hotels on long layovers; verify." },
+  HEL: { airline: "Finnair", note: "Finnair Stopover: up to 5 days in Finland at no extra fare." },
+  AMS: { airline: "KLM", note: "KLM offers stopover-friendly fares in Amsterdam; verify." },
 };
 
 export async function buildWild(p: WildParams): Promise<WildTrip | null> {
@@ -164,6 +189,9 @@ export async function buildWild(p: WildParams): Promise<WildTrip | null> {
   const region = REGIONS[p.region];
   const style: Style = p.style ?? "experiences";
   const budget: Budget = p.budget ?? "mid";
+  const tradeoff: Tradeoff = p.tradeoff ?? "balanced";
+  const [hIn, hHop, hHome] = HOUR_VALUE[tradeoff];
+  const stopsPenalty = (stops: number) => (tradeoff === "comfort" ? stops * 60 : tradeoff === "balanced" ? stops * 20 : 0);
   const only = new Set((p.countries ?? []).map((c) => c.toUpperCase()));
   const base: [string, string][] = only.size ? [...only].map((cc) => [cc, countryLabel(cc)] as [string, string]) : region.countries;
   const countries = base.filter(([cc]) => !unsafe(cc));
@@ -194,12 +222,14 @@ export async function buildWild(p: WildParams): Promise<WildTrip | null> {
   const to = addDays(from, 10);
 
   // 1. The way in: home airport and the two nearest big hubs, to every country of the region.
-  const hubs = HUBS.filter((h) => h !== homeCity && CITIES[h])
-    .map((h) => ({ h, km: haversineKm(gw.lat, gw.lon, CITIES[h].lat, CITIES[h].lon) }))
-    .filter((x) => x.km > 150 && x.km < 1800)
-    .sort((a, b) => a.km - b.km)
-    .slice(0, 2)
-    .map((x) => x.h);
+  const hubs = p.noHubs
+    ? []
+    : HUBS.filter((h) => h !== homeCity && CITIES[h])
+        .map((h) => ({ h, km: haversineKm(gw.lat, gw.lon, CITIES[h].lat, CITIES[h].lon) }))
+        .filter((x) => x.km > 150 && x.km < 1800)
+        .sort((a, b) => a.km - b.km)
+        .slice(0, 2)
+        .map((x) => x.h);
   const origins = [gw.code, ...(secondHome ? [secondHome.code] : []), ...hubs];
   const isHome = (o: string) => o === gw.code || o === secondHome?.code;
   say(`Looking for the cheapest way into ${region.label} from ${gw.label}${secondHome ? ` or ${secondHome.label}` : ""}${hubs.length ? `, or via ${hubs.map((h) => CITIES[h].name).join(" and ")}` : ""}…`);
@@ -210,7 +240,7 @@ export async function buildWild(p: WildParams): Promise<WildTrip | null> {
     for (const it of r.its) {
       const hubPenalty = isHome(r.origin) ? 0 : 70;
       // Landing somewhere worth the first nights beats landing in the cheapest corner of a country.
-      entries.push({ origin: r.origin, it, score: it.price + hubPenalty + 7 * hoursOf(it) - 0.8 * worth(cityOfItinerary(it)) });
+      entries.push({ origin: r.origin, it, score: it.price + hubPenalty + hIn * hoursOf(it) + stopsPenalty(it.outbound.stops) - 0.8 * worth(cityOfItinerary(it)) });
     }
   }
   entries.sort((a, b) => a.score - b.score);
@@ -271,6 +301,11 @@ export async function buildWild(p: WildParams): Promise<WildTrip | null> {
     if (posDay < lhDay) addStop(entry.origin, posDay, daysBetween(posDay, lhDay));
   }
   legs.push(flyLeg(entry.positioning ? entry.origin : startCity, entry.it));
+  // A hub night on the way in may be a free hotel night with the airline's stopover programme.
+  if (entry.positioning && stops.length) {
+    const prog = STOPOVER_PROGRAMMES[entry.origin];
+    if (prog && entry.it.outbound.segments.some((s) => (s.carrierName || "").includes(prog.airline.split(" ")[0]))) stops[stops.length - 1].note = prog.note;
+  }
   let current = cityOfItinerary(entry.it);
   let date = dayOf(entry.it.outbound.arrivalTime);
   const visited = new Set<string>([CITIES[current]?.country ?? ""]);
@@ -318,7 +353,7 @@ export async function buildWild(p: WildParams): Promise<WildTrip | null> {
         const code = cityOfItinerary(it);
         if (code === current || !CITIES[code]) continue;
         const back = stops.some((s) => haversineKm(s.lat, s.lon, CITIES[code].lat, CITIES[code].lon) < 120);
-        cands.push({ code, score: it.price + 9 * hoursOf(it) + (back ? 80 : 0) - worth(code) - variety(code), it });
+        cands.push({ code, score: it.price + hHop * hoursOf(it) + stopsPenalty(it.outbound.stops) + (back ? 80 : 0) - worth(code) - variety(code), it });
       }
     }
     cands.sort((a, b) => a.score - b.score);
@@ -355,7 +390,7 @@ export async function buildWild(p: WildParams): Promise<WildTrip | null> {
     // only when nothing shorter exists.
     const all = count(await oneWay(from.code, homeCodes, earliest, latest));
     const sane = all.filter((it) => hoursOf(it) <= 30);
-    const its = (sane.length ? sane : all).sort((a, b) => a.price + 10 * hoursOf(a) - (b.price + 10 * hoursOf(b)));
+    const its = (sane.length ? sane : all).sort((a, b) => a.price + hHome * hoursOf(a) + stopsPenalty(a.outbound.stops) - (b.price + hHome * hoursOf(b) + stopsPenalty(b.outbound.stops)));
     if (its[0]) {
       if (from !== stops.at(-1)) {
         // The last stop had no way home: drop it and give its nights to the one before.
@@ -400,6 +435,8 @@ export async function buildWild(p: WildParams): Promise<WildTrip | null> {
       lastStop.nights = Math.max(1, daysBetween(lastStop.arrive, lastStop.depart));
       legs.push(legA);
       addStop(chosen.h, dayOf(chosen.a.outbound.arrivalTime), Math.max(1, daysBetween(dayOf(chosen.a.outbound.arrivalTime), legB.date)));
+      const prog = STOPOVER_PROGRAMMES[chosen.h] ?? STOPOVER_PROGRAMMES[chosen.b.outbound.from];
+      if (prog && [...chosen.a.outbound.segments, ...chosen.b.outbound.segments].some((s) => (s.carrierName || "").includes(prog.airline.split(" ")[0]))) stops.at(-1)!.note = prog.note;
       backLeg = legB;
       say(`Stopover: ${CITIES[chosen.h].name} for ${stops.at(-1)!.nights} night${stops.at(-1)!.nights === 1 ? "" : "s"} on the way home, €${chosen.total} for both flights.`);
     }
@@ -452,9 +489,9 @@ export function wildPath(gw: string, region: string, month: string | undefined, 
 }
 
 /** A short stable suffix for custom country lists, so custom trips are stored apart. */
-export function customKey(countries?: string[], prefer?: string[], maxStops?: number, nightsPerStop?: number): string {
-  const parts = [...(countries ?? []).map((c) => c.toUpperCase()).sort(), ...(prefer ?? []).map((c) => `+${c.toUpperCase()}`).sort(), maxStops ? `s${maxStops}` : "", nightsPerStop ? `n${nightsPerStop}` : ""].filter(Boolean);
-  return parts.join("").toLowerCase().slice(0, 40);
+export function customKey(countries?: string[], prefer?: string[], maxStops?: number, nightsPerStop?: number, tradeoff?: Tradeoff, noHubs?: boolean): string {
+  const parts = [...(countries ?? []).map((c) => c.toUpperCase()).sort(), ...(prefer ?? []).map((c) => `+${c.toUpperCase()}`).sort(), maxStops ? `s${maxStops}` : "", nightsPerStop ? `n${nightsPerStop}` : "", tradeoff && tradeoff !== "balanced" ? tradeoff : "", noHubs ? "direct" : ""].filter(Boolean);
+  return parts.join("").toLowerCase().slice(0, 48);
 }
 
 export { hubDegree };

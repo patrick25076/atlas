@@ -125,11 +125,19 @@ export async function searchFlight(args: SearchArgs, attempt = 0): Promise<KiwiR
   if (reply.error) throw new Error(`kiwi mcp: ${reply.error.message}`);
   const text = reply.result?.content?.find((c) => c.type === "text")?.text ?? "";
   if (reply.result?.isError) throw new Error(`kiwi mcp: ${text.slice(0, 200)}`);
+  let parsed: KiwiResult;
   try {
-    return JSON.parse(text) as KiwiResult;
+    parsed = JSON.parse(text) as KiwiResult;
   } catch {
     throw new Error(`kiwi mcp: unexpected answer: ${text.slice(0, 200)}`);
   }
+  // Every fare anyone sees goes into the shared history, without slowing the answer.
+  if (parsed.itineraries?.length) {
+    import("./db")
+      .then((db) => db.recordFares(parsed.itineraries))
+      .catch(() => null);
+  }
+  return parsed;
 }
 
 /** Nights between the outbound departure and the inbound departure. */

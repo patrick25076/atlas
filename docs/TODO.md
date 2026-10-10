@@ -12,14 +12,14 @@ _Kept by the agent; updated every session. Plain language._
 | Travelpayouts | done: Drive script, marker 583720, API token (2026-10-10) | Kiwi clicks earn commission; cached one-way fares (Explore, Trips) with marker links | join more programs inside Travelpayouts (Airalo, Omio, Hostelworld, Klook) for more earning links |
 | Tavily search | key saved 2026-10-10, wired in | live review research for the planner and Ask | nothing (free tier ~1,000 searches a month; a plan uses about 10) |
 | Foursquare Places | done 2026-10-10: card on file, auto-recharge $20, 500 free Pro calls | restaurant ratings, price tiers, tips on deal pages, in plans and in Ask | watch the Transactions table after a few days to see credits per call; we cache every city a day (two calls per city per day at most). Reset the OAuth client secret you pasted (not used) |
-| LiteAPI | sandbox key saved 2026-10-10, wired in | hotel prices on deal pages | **production key** (sandbox prices are test data, so the site hides them until `LITEAPI_ENV=production`) |
+| LiteAPI | done 2026-10-10: production key, live prices on deal pages | hotel prices; booking next | nothing |
 | Ticketmaster | skipped for now | concerts and shows outside the 20 city feeds | a free key, when you want it |
 | DiscoverCars | skipped for now | car hire commission | an affiliate id, when you want it |
 | Viator Basic | applied, takes time | bookable experiences with commission | the key when it arrives |
 | Tiqets | applied, takes time | attraction tickets | the key when it arrives |
 | opentransportdata.swiss | not yet | Switzerland on the ground map | a free key |
 | ÖBB GTFS | not yet | Austria on the ground map | the zip in `data/raw/` |
-| Neon Postgres | not needed yet | accounts, fare watches | later |
+| **Postgres (Supabase or Neon)** | code ready, waiting for `DATABASE_URL` | the shared fare memory (every fare anyone saw, timestamped), saved trips, search log | **create a Supabase project (Frankfurt) and send the connection string** (SETUP §4) |
 
 ## Decisions waiting on you
 
