@@ -1,3 +1,52 @@
+# Update, Friday 10 October, daytime
+
+_You asked for: the whole world, not Romania; events from city sites; combos like fly to
+Warsaw, train to Gdańsk, fly home; hidden gems; an impeccable globe. Here is what changed._
+
+**Open it:** https://atlas-kappa-wheat.vercel.app
+
+1. **Works from anywhere.** Type any city or airport in the From pill (or let it place you).
+   Prices come from a "board" per airport: ~150 of the world's busiest airports are searched
+   every night (Denver → Dallas €44, Sydney → Ballina €66, Mumbai → Goa €73, Lisbon →
+   Seville €38), any other airport is searched live the first time someone asks (15 to 30
+   seconds, you watch the cards arrive) and kept for the next visitor. Boards live in a Vercel
+   Blob store, not in git, so the repo stops growing. Kiwi accepts a country as a destination,
+   so a board is ~35 searches, not 117.
+2. **Any month.** The When pill: next six weeks (nightly) or a month (live search, then kept).
+   "Cheapest from Bucharest in October" is one click.
+3. **Two cities for less.** On a deal, "Fly in, train on, fly home from the next city" prices
+   the open-jaw version live: Brașov → Warsaw is €89 return, or €33 in, train to Katowice,
+   €17 home: €50 and a second city. Shown on the globe when you pick one.
+4. **The new face.** Top bar (From, When, Ask), glass panel, cards with Kiwi's own city photos,
+   badges (direct, hidden gem, warm, World Heritage), price tags pinned to the globe (the
+   cheapest never overlap), an animated trail for the open deal, a bottom sheet on phones.
+5. **What to do there.** Sights from the Wikivoyage guide with photos, "Show on the map" pins
+   them on the city, plus the guide's festivals (Venice: Biennale, Carnival, Regata Storica).
+6. **What's on.** Twenty cities publish their own open event feeds (markets, exhibitions,
+   festivals, film): Paris, Bordeaux, Nantes, Madrid, Bilbao, Lisbon, Bologna, Berlin, Ghent,
+   Helsinki, Espoo, Dublin and all Ireland, Basel, New York, Chicago, San Francisco, Calgary,
+   Edmonton, Brisbane, Taipei. They appear on the deal page. The full research (what exists,
+   what needs a key, what is dead) is in `docs/events-sources.md`; Ticketmaster still adds
+   concerts once you give the key.
+7. **Hidden gems.** A badge and a filter: places with a lot to see (Wikivoyage listings,
+   World Heritage nearby) that fewer than 400,000 people looked up on Wikipedia last year.
+   Sibiu and Matera qualify; Paris never will.
+
+**Numbers:** ~150 airport boards, each 50 to 100 deals to 30 to 50 cities; 2,549 cities with a
+fame score; 20 event feeds; combos in 10 seconds; the nightly boards job ran once (8 runners,
+15 minutes each) and runs every night at 04:00 your time.
+
+**Caveats:** Kiwi's public search is still the price source (free, no key, terms unpublished;
+it throttles an address after a couple of thousand searches, which is why the nightly job is
+split over eight runners). Trips (three-country loops) still only work from Romania; they
+need one-way fares per airport and come next. Events exist only where a city publishes a
+feed; the big names without one (London, Amsterdam, Rome, Tokyo) say so honestly.
+
+**Nothing new to set up.** The Blob store I created myself (SETUP §12). The keys list below
+still stands.
+
+---
+
 # Good morning. Here is where Atlas stands.
 
 _Written for: Patrick, five minutes, coffee in hand._
