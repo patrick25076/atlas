@@ -8,7 +8,7 @@ on:
     - cron: "15 3 * * *" # daily: weather, rates, advisories, airports, airlines, cities, holidays
     - cron: "45 3 * * 1" # weekly (Monday): towns, ground graph (GTFS), one-way fares
     - cron: "30 4 1 * *" # monthly (1st): Overture places and ferries, heritage, visa, fame
-    - cron: "0 1 * * *" # nightly: price boards for ~150 airports, straight to Blob
+    - cron: "0 1 */2 * *" # every other night: price boards for ~150 airports, straight to Blob (private-repo minutes)
   workflow_dispatch:
     inputs:
       set:
@@ -22,7 +22,7 @@ permissions:
 
 jobs:
   refresh:
-    if: github.event.schedule != '0 1 * * *' && inputs.set != 'boards'
+    if: github.event.schedule != '0 1 */2 * *' && inputs.set != 'boards'
     runs-on: ubuntu-latest
     timeout-minutes: 90
     concurrency:
@@ -94,7 +94,7 @@ jobs:
   # Each shard runs on its own runner (its own address): Kiwi throttles an address after a
   # couple of thousand searches, and 150 airports need about 6,000.
   boards:
-    if: github.event.schedule == '0 1 * * *' || inputs.set == 'boards' || inputs.set == 'all'
+    if: github.event.schedule == '0 1 */2 * *' || inputs.set == 'boards' || inputs.set == 'all'
     runs-on: ubuntu-latest
     timeout-minutes: 120
     strategy:
