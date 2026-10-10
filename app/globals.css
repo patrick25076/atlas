@@ -2157,6 +2157,10 @@ button {
   border-radius: 16px;
   background: rgba(255, 255, 255, 0.035);
   border: 1px solid var(--line);
+  /* a flex child must be allowed to shrink, or the sideways card row widens the whole column */
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
 }
 .hoteldeals .headline {
   margin: 0;
@@ -2170,8 +2174,8 @@ button {
   gap: 8px;
   overflow-x: auto;
   scrollbar-width: none;
-  margin: 0 -12px;
-  padding: 2px 12px;
+  min-width: 0;
+  padding: 2px 0;
 }
 .hdrow::-webkit-scrollbar {
   display: none;
@@ -2380,4 +2384,165 @@ a.hdcard:hover {
   .beenpill .v.empty {
     display: none;
   }
+}
+
+/* ---------- everything scrollable, nothing constrained (2026-10-10) ---------- */
+/* Chip rows wrap: a horizontal strip hid most regions, styles and dates in a 440 px panel. */
+.chips.nowrap {
+  flex-wrap: wrap;
+  overflow: visible;
+  margin: 0;
+  padding: 0;
+}
+.panel .scroll .chips.nowrap {
+  margin: 0;
+  padding: 0;
+}
+/* The Trips mode row wraps too (six modes now), and stays above the scrolling column. */
+.modes {
+  flex-wrap: wrap;
+  overflow: visible;
+  margin: 0;
+  padding: 0;
+}
+.panel .scroll .modes {
+  margin: 0;
+  padding: 0;
+}
+.chip.more {
+  border-style: dashed;
+  color: var(--ink-3);
+}
+/* A select that sits in a chip row. */
+.search.slim {
+  width: auto;
+  flex: 0 1 auto;
+  padding: 7px 10px;
+  font-size: 13.5px;
+  border-radius: 999px;
+}
+textarea.search.wishes {
+  resize: vertical;
+  min-height: 52px;
+  line-height: 1.4;
+  font-size: 14px;
+}
+.pickbox-inline {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.pickbox-inline .airportpick {
+  min-width: 0;
+}
+.pickbox-inline .airportpick .search {
+  padding: 9px 12px;
+  font-size: 14px;
+}
+.form.wrap .airportpick,
+.form.wrap .placepick {
+  flex: 1 1 200px;
+}
+/* The Deals and Explore tabs are one scrolling column each; the list inside no longer scrolls on its own. */
+.cardlist {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.panel .scroll > .cardlist {
+  flex: 0 0 auto;
+}
+/* The deal filters stay in view while the cards scroll under them. */
+.stickyfilters {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0 -8px;
+  padding: 6px 8px 8px;
+  background: var(--glass-2);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border-bottom: 1px solid var(--line);
+}
+
+/* ---------- A to B: the option cards ---------- */
+.routecard {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 14px;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--line);
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, transform 0.15s;
+  animation: fadein 0.3s ease-out both;
+}
+.routecard:hover {
+  background: rgba(255, 255, 255, 0.07);
+  border-color: var(--line-2);
+}
+.routecard.active {
+  border-color: rgba(111, 240, 196, 0.6);
+  background: rgba(111, 240, 196, 0.07);
+}
+.routecard .cardtitle {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-weight: 650;
+  font-size: 15px;
+  min-width: 0;
+}
+.routecard .price {
+  font-weight: 760;
+  font-size: 20px;
+  color: var(--mint);
+  text-align: right;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  white-space: nowrap;
+}
+.routecard .price .sub,
+.routecard .cardtitle .sub {
+  font-weight: 500;
+  font-size: 12.5px;
+  color: var(--ink-3);
+}
+.routecard .why {
+  color: var(--ink-2);
+  font-size: 13px;
+  line-height: 1.45;
+}
+/* The legs of an option wrap instead of scrolling sideways, so a long chain is read whole. */
+.routestrip.compact {
+  flex-wrap: wrap;
+  overflow: visible;
+  mask-image: none;
+  margin: 0;
+  padding: 2px 0;
+  row-gap: 6px;
+}
+.legseq {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.legseq .place {
+  font-size: 12.5px;
+  color: var(--ink-2);
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.routecard .legrows .row {
+  cursor: default;
+}
+.routecard .legrows .meta a {
+  color: var(--mint);
 }

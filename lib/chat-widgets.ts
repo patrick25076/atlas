@@ -112,7 +112,22 @@ export const TOOL_LABEL: Record<string, string> = {
   group_trip: "Matching the group",
   best_months: "Reading the climate",
   price_insight: "Checking the fare memory",
+  cheapest_way: "Finding the cheapest way",
   ask: "One question",
+};
+
+/** The tools that can take a while: their chip shows the seconds elapsed while they run. */
+export const LONG_TOOLS = new Set(["wild_trip", "long_stay", "group_trip", "plan_days", "find_getaways", "scan_cheapest", "cheapest_way", "two_city_combos", "events_worth_travelling_for"]);
+
+/** A short word for each kind of route option, for the badge on its card. */
+export const ROUTE_KIND_LABEL: Record<string, string> = {
+  direct: "direct",
+  "nearby-airports": "nearby airport",
+  "ground-then-fly": "train, then fly",
+  "fly-then-ground": "fly, then train",
+  "via-hub": "two tickets via a hub",
+  "open-jaw": "open-jaw",
+  "ground-only": "train or coach",
 };
 
 /** A progress line built from a tool's input, shown while the tool runs. */
@@ -147,6 +162,12 @@ export function toolProgress(name: string, input: unknown): string {
         return `Searching the web: ${String(a.query ?? "").slice(0, 60)}`;
       case "hotel_deals":
         return `Reading the hotel snapshots${a.country ? ` for ${a.country}` : ""}`;
+      case "cheapest_way":
+        return `Checking every way ${a.from ? `from ${a.from} ` : ""}to ${a.to ?? "there"}${a.depart ? ` around ${a.depart}` : ""}: nearby airports, trains to a bigger airport, hubs, open-jaw`;
+      case "two_city_combos":
+        return `Pricing two-city versions around ${a.city ?? a.dst ?? "the city"}`;
+      case "plan_days":
+        return "Planning the days (about a minute)";
       default:
         return TOOL_LABEL[name] ?? name;
     }
@@ -169,5 +190,6 @@ export const FOLLOWUPS: Record<string, string[]> = {
   best_months: ["Scan prices for the best month", "Cheaper month instead"],
   price_insight: ["Show the cheapest month", "Try a nearby airport"],
   hotel_deals: ["Flights to the first one", "Only in Europe", "What do I do there?"],
+  cheapest_way: ["Show the route on the globe", "Fastest instead", "A week later", "One way only", "Is this a good price?"],
   default: ["Direct flights only", "Try my other airports too", "Two-city version", "What do I eat there?", "Hotels for those dates"],
 };

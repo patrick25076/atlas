@@ -1,15 +1,16 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type Ref } from "react";
 import type { Trip, TripsResult } from "@/lib/trips";
 import type { WildLeg, WildStop, WildTrip } from "@/lib/wild";
 import type { Plan } from "@/lib/plan";
 import type { PurposeTrip } from "@/lib/purpose";
-import type { Airport, CountryInfo, Gateway, Holiday } from "@/lib/types";
+import type { Airport, City, CountryInfo, Gateway, Holiday } from "@/lib/types";
 import { formatDuration } from "@/lib/geo";
 import { addDays, countryName, dateRange, daysBetween, euro, hoursLabel, localIso, monthLabel, monthOptions, shortDate, todayIso } from "@/lib/format";
 import { climateScore, MONTH_LETTERS, newId, TRIP_MODES, WILD_BUDGETS, WILD_REGIONS, WILD_STYLES, type GroupForm, type GroupMemberForm, type GroupQuery, type GroupState, type LongStayBase, type LongStayForm, type LongStayState, type Period, type TripMode } from "@/lib/ui-types";
 import { HeroNumbers, LegRows, RouteStrip, StopCards, StopPhoto } from "./RouteStrip";
+import RouteFinder, { type RouteFinderProps } from "./RouteFinder";
 import { searchAirports } from "./TopBar";
 
 // The Trips tab: one place for every kind of trip, with a mode row. Short loops and wild
@@ -21,13 +22,57 @@ export type PlanState = { status: "idle" | "loading" | "ok" | "error"; plan?: Pl
 /** The query a wild trip was built with, kept so "Plan the days" asks for the same stored trip even after the form changed. */
 export type WildQuery = Record<string, string>;
 export type WildState = { status: "idle" | "loading" | "ok" | "error"; lines: string[]; trip?: WildTrip; note?: string; source?: "stored" | "live"; query?: WildQuery };
-/** The fewest nights /api/wild and /api/plan accept; the form never offers less, so the label and the trip agree. */
-export const WILD_MIN_NIGHTS = 7;
+/** The fewest nights the Wild form offers; /api/wild clamps anything under its own floor (seven today), so a shorter ask is never refused. */
+export const WILD_MIN_NIGHTS = 5;
 export const WILD_MAX_NIGHTS = 90;
+/** The wishes text the engines keep (/api/wild and /api/longstay cut at 300); the box stops there so nothing is lost without a word. */
+export const WISHES_MAX = 300;
+
+/**
+ * "A to B" is a mode of this panel but not (yet) of lib/ui-types.TripMode, which another
+ * stream owns; the panel's own mode type is the wider one until "ab" lands there.
+ */
+export type PanelMode = TripMode | "ab";
+export const PANEL_MODES: { key: PanelMode; label: string; hint: string }[] = [...TRIP_MODES, { key: "ab", label: "A to B", hint: "the cheapest way from one place to another, by air, rail, coach and ferry" }];
+
+/** The free-form extras of every Trips mode: nothing here constrains the visitor to the chips. They live in Globe state like the forms, so a tab switch keeps them. */
+export type WildForm = {
+  /** Only these countries (ISO2); when any is chosen the region is "custom". */
+  countries: string[];
+  /** City codes (cities.json keys) the loop must pass through. */
+  mustInclude: string[];
+  /** Longest single flight in hours; 0 means no limit. */
+  maxHours: number;
+  /** Airports the loop may start from (IATA, three at most, as /api/wild reads); empty means the visitor's own. */
+  startFrom: string[];
+  /** What matters, in the visitor's words; sent as wishes=. */
+  wishes: string;
+  /** Nights a stop, least and most; null leaves it to the engine. */
+  stopNights: [number, number] | null;
+};
+export type ShortForm = { cities: number; mustInclude: string[]; countries: string[]; maxGroundHours: number };
+export type TripsExtra = {
+  wild: WildForm;
+  short: ShortForm;
+  longStay: { wishes: string; cities: string[] };
+  group: { budgetPerPerson: number };
+  purpose: { kindsText: string };
+};
+export const EMPTY_TRIPS_EXTRA: TripsExtra = {
+  wild: { countries: [], mustInclude: [], maxHours: 0, startFrom: [], wishes: "", stopNights: null },
+  short: { cities: 3, mustInclude: [], countries: [], maxGroundHours: 5 },
+  longStay: { wishes: "", cities: [] },
+  group: { budgetPerPerson: 0 },
+  purpose: { kindsText: "" },
+};
+/** The group query plus the budget a person, which lib/ui-types.GroupQuery (another stream's) does not carry yet. */
+export type GroupSearch = GroupQuery & { budgetPerPerson?: number };
+/** Short loop lengths the chips offer; /api/trips clamps at its own ceiling (14 today). */
+export const SHORT_DAYS = [3, 5, 7, 10, 14, 21];
 /** The engine searches at most this many departure days of a window; the form clips before asking. */
 export const WILD_WINDOW_DAYS = 10;
 export type PurposeState = { status: "idle" | "loading" | "ok" | "error"; trips: PurposeTrip[]; note?: string };
-export type LongStayQuery = { months: number; startMonth?: string; budget: string; countries?: string[] };
+export type LongStayQuery = { months: number; startMonth?: string; budget: string; countries?: string[]; cities?: string[]; wishes?: string };
 export const PURPOSE_KINDS = ["festival", "sport", "culture", "season", "music", "food"];
 
 /** A free window two to six weeks out, the usual case for a meet-up; the visitor edits it. */
@@ -99,13 +144,20 @@ export function resolveCountries(text: string, index: Map<string, string>, known
 }
 
 export type TripsPanelProps = {
-  mode: TripMode;
-  onMode: (m: TripMode) => void;
+  mode: PanelMode;
+  onMode: (m: PanelMode) => void;
   month: string | null;
   airports: Airport[];
   gateways: Gateway[];
   /** Country facts by ISO code (public/data/countries.json), for resolving names typed in the long-stay box. */
   countries: Record<string, CountryInfo>;
+  /** Cities with an airport (public/data/cities.json), for the "must include" and "only these cities" pickers. */
+  cities: Record<string, City>;
+  /** The free-form extras of every mode (see TripsExtra). */
+  extra: TripsExtra;
+  onExtra: (e: TripsExtra) => void;
+  /** The A to B mode, whole: its form, state and callbacks. */
+  ab: RouteFinderProps;
   homeLabel: string;
   airlines: Record<string, string>;
   // the camera along the route
@@ -153,7 +205,7 @@ export type TripsPanelProps = {
   group: GroupState;
   groupForm: GroupForm;
   onGroupForm: (f: GroupForm) => void;
-  onGroup: (q: GroupQuery) => void;
+  onGroup: (q: GroupSearch) => void;
   selectedOption: number | null;
   onOption: (i: number | null) => void;
   // purpose
@@ -216,7 +268,7 @@ export function PeriodPicker({ value, onChange, onDone, doneLabel, windowDays }:
   const same = (a: Period, b: Period) => a.from === b.from && a.to === b.to;
   return (
     <div className="period">
-      <div className="chips nowrap">
+      <div className="chips">
         {quick.map((q) => (
           <button key={q.label} className={`chip ghost${same(value, q.p) ? " on" : ""}`} onClick={() => onChange(q.p)}>
             {q.label}
@@ -321,6 +373,145 @@ function BaseCard({ b, active, onClick }: { b: LongStayBase; active: boolean; on
   );
 }
 
+/**
+ * A row of chips that wraps. Past `max` chips the rest hide behind a "more" chip, so a long
+ * row (fourteen regions) never pushes the form down a screen; a chosen chip is always shown.
+ */
+export function MoreChips({ chips, max = 8 }: { chips: { key: string; label: string; on?: boolean; ghost?: boolean; title?: string; onClick: () => void }[]; max?: number }) {
+  const [all, setAll] = useState(false);
+  const hidden = chips.length - max;
+  const shown = all || hidden <= 1 ? chips : chips.filter((c, i) => i < max || c.on);
+  return (
+    <div className="chips">
+      {shown.map((c) => (
+        <button key={c.key} className={`chip${c.ghost ? " ghost" : ""}${c.on ? " on" : ""}`} onClick={c.onClick} title={c.title}>
+          {c.label}
+        </button>
+      ))}
+      {hidden > 1 && (
+        <button className="chip ghost more" onClick={() => setAll(!all)}>
+          {all ? "fewer" : `${chips.length - shown.length} more`}
+        </button>
+      )}
+    </div>
+  );
+}
+
+/** Chosen things as chips with a cross, before a search box. */
+function ChosenChips({ items, onRemove }: { items: { key: string; label: string }[]; onRemove: (key: string) => void }) {
+  if (!items.length) return null;
+  return (
+    <div className="chips">
+      {items.map((it) => (
+        <button key={it.key} className="chip ghost on" onClick={() => onRemove(it.key)} title="remove">
+          {it.label} ×
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/** A country multi-select by name: type, pick from the list, the chosen ones become chips. Codes are ISO2. */
+export function CountryPick({ countries, value, onChange, placeholder, max = 8, inputRef }: { countries: Record<string, CountryInfo>; value: string[]; onChange: (codes: string[]) => void; placeholder?: string; max?: number; inputRef?: Ref<HTMLInputElement> }) {
+  const [q, setQ] = useState("");
+  const hits = useMemo(() => {
+    const s = plain(q);
+    if (s.length < 2) return [];
+    const out: { code: string; name: string }[] = [];
+    for (const [code, info] of Object.entries(countries)) {
+      if (value.includes(code)) continue;
+      const name = info.name || countryName(code);
+      const intl = countryName(code);
+      if (code.toLowerCase() === s || plain(name).startsWith(s) || plain(intl).startsWith(s) || plain(name).includes(` ${s}`)) out.push({ code, name });
+      if (out.length >= 6) break;
+    }
+    return out;
+  }, [q, countries, value]);
+  const add = (code: string) => {
+    if (value.length < max && !value.includes(code)) onChange([...value, code]);
+    setQ("");
+  };
+  return (
+    <div className="pickbox-inline">
+      <ChosenChips items={value.map((c) => ({ key: c, label: countryName(c) }))} onRemove={(c) => onChange(value.filter((x) => x !== c))} />
+      <div className="airportpick">
+        <input
+          ref={inputRef}
+          className="search"
+          placeholder={placeholder ?? "add a country: Vietnam, Georgia, Peru"}
+          value={q}
+          aria-label="Add a country"
+          onChange={(e) => setQ(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && hits[0]) {
+              e.preventDefault();
+              add(hits[0].code);
+            }
+          }}
+        />
+        {hits.length > 0 && (
+          <div className="hits">
+            {hits.map((h) => (
+              <button key={h.code} className="hit" onClick={() => add(h.code)}>
+                <span className="code">{h.code}</span> {h.name}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** A city multi-select by name from cities.json: the chosen ones become chips, the value is their codes. */
+export function CityPick({ cities, value, onChange, placeholder, max = 6 }: { cities: Record<string, City>; value: string[]; onChange: (codes: string[]) => void; placeholder?: string; max?: number }) {
+  const [q, setQ] = useState("");
+  const hits = useMemo(() => {
+    const s = plain(q);
+    if (s.length < 2) return [];
+    const out: { code: string; name: string; country: string; pop: number }[] = [];
+    for (const [code, c] of Object.entries(cities)) {
+      if (value.includes(code)) continue;
+      const n = plain(c.name);
+      if (n.startsWith(s) || n.includes(` ${s}`) || code.toLowerCase() === s) out.push({ code, name: c.name, country: c.country, pop: c.pop ?? 0 });
+    }
+    return out.sort((a, b) => b.pop - a.pop).slice(0, 6);
+  }, [q, cities, value]);
+  const add = (code: string) => {
+    if (value.length < max && !value.includes(code)) onChange([...value, code]);
+    setQ("");
+  };
+  return (
+    <div className="pickbox-inline">
+      <ChosenChips items={value.map((c) => ({ key: c, label: cities[c]?.name ?? c }))} onRemove={(c) => onChange(value.filter((x) => x !== c))} />
+      <div className="airportpick">
+        <input
+          className="search"
+          placeholder={placeholder ?? "add a city: Hanoi, Tbilisi, Cusco"}
+          value={q}
+          aria-label="Add a city"
+          onChange={(e) => setQ(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && hits[0]) {
+              e.preventDefault();
+              add(hits[0].code);
+            }
+          }}
+        />
+        {hits.length > 0 && (
+          <div className="hits">
+            {hits.map((h) => (
+              <button key={h.code} className="hit" onClick={() => add(h.code)}>
+                <span className="code">{h.code}</span> {h.name} <span className="muted">{countryName(h.country)}</span>
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 /** A small airport search: type a code or city, pick from the list. */
 function AirportPick({ airports, onPick }: { airports: Airport[]; onPick: (a: Airport) => void }) {
   const [q, setQ] = useState("");
@@ -360,7 +551,7 @@ function AirportPick({ airports, onPick }: { airports: Airport[]; onPick: (a: Ai
   );
 }
 
-function GroupEditor({ airports, defaults, form, onForm, state, onSearch }: { airports: Airport[]; defaults: string[]; form: GroupForm; onForm: (f: GroupForm) => void; state: GroupState; onSearch: (q: GroupQuery) => void }) {
+function GroupEditor({ airports, defaults, form, onForm, state, onSearch, budget, onBudget }: { airports: Airport[]; defaults: string[]; form: GroupForm; onForm: (f: GroupForm) => void; state: GroupState; onSearch: (q: GroupSearch) => void; budget: number; onBudget: (n: number) => void }) {
   const { members, minNights, maxNights, where, direct } = form;
   // The visitor's airports fill the first member once, when they are known. The flag lives in
   // the form, so a member the visitor emptied on purpose is never refilled, not on a later
@@ -424,25 +615,28 @@ function GroupEditor({ airports, defaults, form, onForm, state, onSearch }: { ai
           </button>
         )}
       </div>
-      <div className="form">
-        <select className="search" value={minNights} onChange={(e) => set({ minNights: Number(e.target.value) })} aria-label="Minimum nights">
-          {[1, 2, 3, 4, 5, 6, 7].map((n) => (
+      <div className="form wrap">
+        <select className="search" style={{ flex: "1 1 110px" }} value={minNights} onChange={(e) => set({ minNights: Number(e.target.value) })} aria-label="Minimum nights">
+          {[1, 2, 3, 4, 5, 6, 7, 10, 14].map((n) => (
             <option key={n} value={n}>
               {n}+ nights
             </option>
           ))}
         </select>
-        <select className="search" value={maxNights} onChange={(e) => set({ maxNights: Number(e.target.value) })} aria-label="Maximum nights">
-          {[2, 3, 4, 5, 6, 7, 10, 14].map((n) => (
+        <select className="search" style={{ flex: "1 1 110px" }} value={maxNights} onChange={(e) => set({ maxNights: Number(e.target.value) })} aria-label="Maximum nights">
+          {[1, 2, 3, 4, 5, 6, 7, 10, 14, 21, 30].map((n) => (
             <option key={n} value={n}>
               up to {n}
             </option>
           ))}
         </select>
-        <input className="search" placeholder="where: anywhere, Italy, Lisbon" value={where} onChange={(e) => set({ where: e.target.value })} />
         <button className={`chip${direct ? " on" : ""}`} onClick={() => set({ direct: !direct })}>
           Direct
         </button>
+      </div>
+      <div className="form wrap">
+        <input className="search" style={{ flex: "2 1 180px" }} placeholder="where: anywhere, Italy, Lisbon, the Balkans" value={where} onChange={(e) => set({ where: e.target.value })} aria-label="Where to meet" />
+        <input className="search" style={{ flex: "1 1 130px" }} type="number" min={0} step={10} placeholder="budget a person, €" value={budget || ""} onChange={(e) => onBudget(Math.max(0, Number(e.target.value) || 0))} aria-label="Budget per person in euros" />
       </div>
       <div className="chips">
         <button
@@ -450,7 +644,7 @@ function GroupEditor({ airports, defaults, form, onForm, state, onSearch }: { ai
           disabled={!ready || state.status === "loading"}
           onClick={() =>
             // The engine gets plain members: the ids are the editor's own.
-            onSearch({ members: members.map((m) => ({ name: m.name.trim(), origins: m.origins, available: m.available.map(({ from, to }) => ({ from, to })) })), minNights, maxNights: Math.max(minNights, maxNights), where: where.trim() || undefined, direct: direct || undefined })
+            onSearch({ members: members.map((m) => ({ name: m.name.trim(), origins: m.origins, available: m.available.map(({ from, to }) => ({ from, to })) })), minNights, maxNights: Math.max(minNights, maxNights), where: where.trim() || undefined, direct: direct || undefined, ...(budget > 0 ? { budgetPerPerson: budget } : {}) })
           }
         >
           {state.status === "loading" ? "Searching…" : "Find where to meet"}
@@ -499,13 +693,18 @@ export default function TripsPanel(p: TripsPanelProps) {
   const shortTrip = p.mode === "short" && p.selectedTrip ? (p.trips?.trips.find((t) => t.id === p.selectedTrip) ?? null) : null;
   const shortRoute = useMemo(() => (shortTrip ? shortLoopRoute(shortTrip, p.homeLabel) : null), [shortTrip, p.homeLabel]);
   const wt = p.wild.trip;
+  const ex = p.extra;
+  const setWildForm = (patch: Partial<WildForm>) => p.onExtra({ ...ex, wild: { ...ex.wild, ...patch } });
+  // "My own countries" has nothing to set; it puts the cursor in the country box below.
+  const wildCountryBox = useRef<HTMLInputElement>(null);
+  const setShortForm = (patch: Partial<ShortForm>) => p.onExtra({ ...ex, short: { ...ex.short, ...patch } });
   // Shown on every form that searches with the exclude list, so the visitor knows why a country is missing.
   const beenNote = p.excludedCount > 0 ? <div className="status muted been-note">Only new countries: {p.excludedCount} excluded; layovers still allowed.</div> : null;
 
   return (
     <>
       <div className="modes" role="tablist">
-        {TRIP_MODES.map((m) => (
+        {PANEL_MODES.map((m) => (
           <button key={m.key} role="tab" aria-selected={p.mode === m.key} className={`mode${p.mode === m.key ? " on" : ""}`} onClick={() => p.onMode(m.key)} title={m.hint}>
             {m.label}
           </button>
@@ -516,18 +715,39 @@ export default function TripsPanel(p: TripsPanelProps) {
         <div className="scroll fade" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
           <div className="status">Fly out, hop between cities by train or coach, fly home from the last one. Ranked by countries and cities per euro and hour.</div>
           {beenNote}
-          <div className="chips nowrap">
-            {[3, 5, 7, 10].map((d) => (
+          <div className="chips">
+            {SHORT_DAYS.map((d) => (
               <button key={d} className={`chip${p.days === d ? " on" : ""}`} onClick={() => p.onDays(d)}>
                 {d} nights
               </button>
             ))}
-            {p.homeHolidays.map((h) => (
-              <button key={h.date} className={`chip ghost${p.around === h.date ? " on" : ""}`} onClick={() => p.onAround(p.around === h.date ? null : h.date)} title={h.name}>
-                {shortDate(h.date)} · {h.localName}
+          </div>
+          {p.homeHolidays.length > 0 && (
+            <div className="chips">
+              {p.homeHolidays.map((h) => (
+                <button key={h.date} className={`chip ghost${p.around === h.date ? " on" : ""}`} onClick={() => p.onAround(p.around === h.date ? null : h.date)} title={h.name}>
+                  {shortDate(h.date)} · {h.localName}
+                </button>
+              ))}
+            </div>
+          )}
+          <div className="chips">
+            {[2, 3, 4].map((n) => (
+              <button key={n} className={`chip ghost${ex.short.cities === n ? " on" : ""}`} onClick={() => setShortForm({ cities: n })} title="How many cities the loop visits">
+                {n} cities
               </button>
             ))}
+            <select className="search slim" value={ex.short.maxGroundHours} onChange={(e) => setShortForm({ maxGroundHours: Number(e.target.value) })} aria-label="Longest ground hop">
+              {[2, 3, 4, 5, 6, 8, 10].map((h) => (
+                <option key={h} value={h}>
+                  hops under {h} h
+                </option>
+              ))}
+            </select>
           </div>
+          <h2>Must include · only these countries</h2>
+          <CityPick cities={p.cities} value={ex.short.mustInclude} onChange={(v) => setShortForm({ mustInclude: v })} placeholder="a city the loop must pass: Porto, Kraków" max={1} />
+          <CountryPick countries={p.countries} value={ex.short.countries} onChange={(v) => setShortForm({ countries: v })} placeholder="only these countries: Portugal, Spain" max={6} />
           {shortTrip && shortRoute && (
             <div className="tripview">
               <HeroNumbers
@@ -585,22 +805,28 @@ export default function TripsPanel(p: TripsPanelProps) {
           <div className="status">Fly out (through a cheaper hub when that wins), chain cheap one-way flights and border hops through a far region, fly home from the last city. Live fares, estimated living costs, a second opinion.</div>
           {beenNote}
           <h2>Where · tap a region on the globe, or here</h2>
-          <div className="chips nowrap">
-            {WILD_REGIONS.map((r) => (
-              <button key={r.key} className={`chip${p.wildRegion === r.key ? " on" : ""}`} onClick={() => p.onWildRegion(r.key)}>
-                {r.label}
-              </button>
-            ))}
-          </div>
+          <MoreChips
+            max={8}
+            chips={[
+              ...WILD_REGIONS.map((r) => ({ key: r.key, label: r.label, on: p.wildRegion === r.key && ex.wild.countries.length === 0, onClick: () => p.onWildRegion(r.key) })),
+              { key: "custom", label: "My own countries", ghost: true, on: ex.wild.countries.length > 0, title: "Pick the countries below instead of a region", onClick: () => wildCountryBox.current?.focus() },
+            ]}
+          />
+          <CountryPick countries={p.countries} value={ex.wild.countries} onChange={(v) => setWildForm({ countries: v })} placeholder="or only these countries: Vietnam, Laos, Cambodia" max={8} inputRef={wildCountryBox} />
+          {ex.wild.countries.length > 0 && <div className="status muted">Region: custom, {ex.wild.countries.map(countryName).join(", ")}. Clear the chips to go back to a region.</div>}
+          <h2>Must include</h2>
+          <CityPick cities={p.cities} value={ex.wild.mustInclude} onChange={(v) => setWildForm({ mustInclude: v })} placeholder="a city the loop must pass: Hanoi, Luang Prabang" max={4} />
           <h2>What you are after</h2>
-          <div className="chips nowrap">
+          <div className="chips">
             {WILD_STYLES.map((st) => (
               <button key={st.key} className={`chip ghost${p.wildStyle === st.key ? " on" : ""}`} onClick={() => p.onWildStyle(st.key)} title={st.hint}>
                 {st.label}
               </button>
             ))}
           </div>
-          <div className="chips nowrap">
+          <textarea className="search wishes" rows={2} maxLength={WISHES_MAX} placeholder="what matters to you, in your words: slow mornings, a night train, no hostels, one beach week" value={ex.wild.wishes} onChange={(e) => setWildForm({ wishes: e.target.value.slice(0, WISHES_MAX) })} aria-label="What matters to you" />
+          {ex.wild.wishes.length >= WISHES_MAX - 60 && <div className="status muted">{WISHES_MAX - ex.wild.wishes.length} characters left</div>}
+          <div className="chips">
             {WILD_BUDGETS.map((b) => (
               <button key={b.key} className={`chip ghost${p.wildBudget === b.key ? " on" : ""}`} onClick={() => p.onWildBudget(b.key)}>
                 {b.label}
@@ -619,6 +845,31 @@ export default function TripsPanel(p: TripsPanelProps) {
               {p.wildVariants > 1 ? "3 versions, ranked" : "1 version"}
             </button>
           </div>
+          <h2>Flights and airports</h2>
+          <div className="chips">
+            <select className="search slim" value={ex.wild.maxHours} onChange={(e) => setWildForm({ maxHours: Number(e.target.value) })} aria-label="Longest single flight">
+              <option value={0}>flights of any length</option>
+              {[3, 4, 6, 8, 10, 12, 16].map((h) => (
+                <option key={h} value={h}>
+                  no flight over {h} h
+                </option>
+              ))}
+            </select>
+            {p.gateways.slice(0, 4).map((g) => (
+              <button key={g.airport.iata} className={`chip ghost${ex.wild.startFrom.includes(g.airport.iata) ? " on" : ""}`} onClick={() => setWildForm({ startFrom: ex.wild.startFrom.includes(g.airport.iata) ? ex.wild.startFrom.filter((x) => x !== g.airport.iata) : [...ex.wild.startFrom, g.airport.iata].slice(0, 3) })} title={`start from ${g.airport.name}`}>
+                {g.airport.iata}
+              </button>
+            ))}
+            {ex.wild.startFrom
+              .filter((c) => !p.gateways.slice(0, 4).some((g) => g.airport.iata === c))
+              .map((c) => (
+                <button key={c} className="chip ghost on" onClick={() => setWildForm({ startFrom: ex.wild.startFrom.filter((x) => x !== c) })} title="remove">
+                  {c} ×
+                </button>
+              ))}
+            {ex.wild.startFrom.length < 3 && <AirportPick airports={p.airports} onPick={(a) => setWildForm({ startFrom: [...new Set([...ex.wild.startFrom, a.iata])].slice(0, 3) })} />}
+          </div>
+          <div className="status muted">{ex.wild.startFrom.length ? `Starts from ${ex.wild.startFrom.join(", ")}.` : "Starts from your own airports; pick others to start elsewhere."}</div>
           <h2>How long</h2>
           <div className="slider">
             <input type="range" min={WILD_MIN_NIGHTS} max={WILD_MAX_NIGHTS} step={1} value={p.wildNights} onChange={(e) => p.onWildNights(Number(e.target.value))} aria-label="Nights" />
@@ -627,15 +878,33 @@ export default function TripsPanel(p: TripsPanelProps) {
               <small> nights</small>
             </b>
           </div>
-          <div className="chips nowrap">
-            {[10, 14, 21, 30, 45, 60, 90].map((n) => (
+          <div className="chips">
+            {[7, 10, 14, 21, 30, 45, 60, 90].map((n) => (
               <button key={n} className={`chip ghost${p.wildNights === n ? " on" : ""}`} onClick={() => p.onWildNights(n)}>
                 {n}
               </button>
             ))}
+          </div>
+          <div className="status muted">{p.wildNights >= 45 ? "Long trips: 5 to 7 bases of 8 to 12 nights." : p.wildNights >= 21 ? "About four to five stops." : "Two or three nights a stop."}</div>
+          <div className="chips">
             <span className="muted" style={{ fontSize: 12.5, alignSelf: "center" }}>
-              {p.wildNights >= 45 ? "long trips: 5 to 7 bases of 8 to 12 nights" : p.wildNights >= 21 ? "about four to five stops" : "two or three nights a stop"}
+              Nights a stop:
             </span>
+            <button className={`chip ghost${ex.wild.stopNights === null ? " on" : ""}`} onClick={() => setWildForm({ stopNights: null })}>
+              let the engine choose
+            </button>
+            {(
+              [
+                [2, 3],
+                [3, 5],
+                [5, 8],
+                [8, 12],
+              ] as [number, number][]
+            ).map(([a, b]) => (
+              <button key={a} className={`chip ghost${ex.wild.stopNights?.[0] === a && ex.wild.stopNights?.[1] === b ? " on" : ""}`} onClick={() => setWildForm({ stopNights: [a, b] })}>
+                {a} to {b}
+              </button>
+            ))}
           </div>
           <h2>When to leave</h2>
           <PeriodPicker value={p.wildPeriod} onChange={p.onWildPeriod} windowDays={WILD_WINDOW_DAYS} />
@@ -819,13 +1088,7 @@ export default function TripsPanel(p: TripsPanelProps) {
           <div className="status">One base for a month or more: the flight in, the flight out, rent, living, all in and per day, ranked. Side trips from the base and the months when it is pleasant.</div>
           {beenNote}
           <h2>Where · tap a region on the globe, or here</h2>
-          <div className="chips nowrap">
-            {WILD_REGIONS.map((r) => (
-              <button key={r.key} className={`chip${p.wildRegion === r.key ? " on" : ""}`} onClick={() => p.onWildRegion(r.key)}>
-                {r.label}
-              </button>
-            ))}
-          </div>
+          <MoreChips max={8} chips={WILD_REGIONS.map((r) => ({ key: r.key, label: r.label, on: p.wildRegion === r.key, onClick: () => p.onWildRegion(r.key) }))} />
           <input className="search" placeholder="or only these countries: Thailand, Vietnam (names or codes)" value={ls.countries} onChange={(e) => setLs({ countries: e.target.value })} aria-label="Only these countries" />
           {ls.countries.trim() && (
             <div className={`status${lsBlocked ? "" : " muted"}`}>
@@ -834,9 +1097,13 @@ export default function TripsPanel(p: TripsPanelProps) {
                 : `${lsCountries.codes.map(countryName).join(", ")}${lsCountries.unresolved.length ? `; not recognised: ${lsCountries.unresolved.join(", ")}` : ""}`}
             </div>
           )}
+          <h2>Only these cities · what matters</h2>
+          <CityPick cities={p.cities} value={ex.longStay.cities} onChange={(v) => p.onExtra({ ...ex, longStay: { ...ex.longStay, cities: v } })} placeholder="only these cities: Chiang Mai, Da Nang" max={6} />
+          <textarea className="search wishes" rows={2} maxLength={WISHES_MAX} placeholder="what matters: fast wifi, a beach in walking distance, cool nights, a gym" value={ex.longStay.wishes} onChange={(e) => p.onExtra({ ...ex, longStay: { ...ex.longStay, wishes: e.target.value.slice(0, WISHES_MAX) } })} aria-label="What matters to you" />
+          {ex.longStay.wishes.length >= WISHES_MAX - 60 && <div className="status muted">{WISHES_MAX - ex.longStay.wishes.length} characters left</div>}
           <h2>How long and when</h2>
-          <div className="chips nowrap">
-            {[1, 2, 3, 4, 6].map((n) => (
+          <div className="chips">
+            {[1, 2, 3, 4, 5, 6].map((n) => (
               <button key={n} className={`chip${ls.months === n ? " on" : ""}`} onClick={() => setLs({ months: n })}>
                 {n} month{n === 1 ? "" : "s"}
               </button>
@@ -858,7 +1125,7 @@ export default function TripsPanel(p: TripsPanelProps) {
             ))}
           </div>
           <div className="chips">
-            <button className="chip on" disabled={p.longStay.status === "loading" || lsBlocked} onClick={() => p.onLongStay({ months: ls.months, startMonth: lsStart || undefined, budget: ls.budget, countries: lsCountries.codes })}>
+            <button className="chip on" disabled={p.longStay.status === "loading" || lsBlocked} onClick={() => p.onLongStay({ months: ls.months, startMonth: lsStart || undefined, budget: ls.budget, countries: lsCountries.codes, cities: ex.longStay.cities, wishes: ex.longStay.wishes.trim() || undefined })}>
               {p.longStay.status === "loading" ? "Pricing bases…" : p.longStay.status === "ok" ? "Search again" : "Find my base"}
             </button>
           </div>
@@ -891,7 +1158,7 @@ export default function TripsPanel(p: TripsPanelProps) {
         <div className="scroll fade" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
           <div className="status">Friends in different cities, one place to meet: the dates everyone can make and the cities cheapest for the whole group, with each person's fare.</div>
           {beenNote}
-          <GroupEditor airports={p.airports} defaults={p.gateways.slice(0, 2).map((g) => g.airport.iata)} form={p.groupForm} onForm={p.onGroupForm} state={p.group} onSearch={p.onGroup} />
+          <GroupEditor airports={p.airports} defaults={p.gateways.slice(0, 2).map((g) => g.airport.iata)} form={p.groupForm} onForm={p.onGroupForm} state={p.group} onSearch={p.onGroup} budget={ex.group.budgetPerPerson} onBudget={(n) => p.onExtra({ ...ex, group: { budgetPerPerson: n } })} />
           {p.group.status === "error" && <div className="status">{p.group.note}</div>}
           {p.group.status === "ok" && p.group.result && (
             <>
@@ -983,8 +1250,8 @@ export default function TripsPanel(p: TripsPanelProps) {
         <div className="scroll fade" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
           <div className="status">Carnivals, fire festivals, marathons, lantern nights, cherry blossom, northern lights: the next two months (or the month you picked), each with the cheapest way there from your airports.</div>
           {beenNote}
-          <div className="chips nowrap">
-            <button className={`chip${p.purposeKinds.length === 0 ? " on" : ""}`} onClick={() => p.onPurposeKinds([])}>
+          <div className="chips">
+            <button className={`chip${p.purposeKinds.length === 0 && !ex.purpose.kindsText.trim() ? " on" : ""}`} onClick={() => { p.onPurposeKinds([]); p.onExtra({ ...ex, purpose: { kindsText: "" } }); }}>
               Everything
             </button>
             {PURPOSE_KINDS.map((k) => (
@@ -993,6 +1260,7 @@ export default function TripsPanel(p: TripsPanelProps) {
               </button>
             ))}
           </div>
+          <input className="search" placeholder="or in your words: jazz, surfing, a tango week, wine harvest" value={ex.purpose.kindsText} onChange={(e) => p.onExtra({ ...ex, purpose: { kindsText: e.target.value.slice(0, 120) } })} aria-label="What kind of event" />
           <div className="chips">
             <button className="chip on" onClick={p.onPurpose} disabled={p.purpose.status === "loading"}>
               {p.purpose.status === "loading" ? "Pricing events…" : p.purpose.status === "ok" ? "Refresh" : "Find events worth flying for"}
@@ -1030,6 +1298,12 @@ export default function TripsPanel(p: TripsPanelProps) {
                   </div>
                 </div>
               ))}
+        </div>
+      )}
+
+      {p.mode === "ab" && (
+        <div className="scroll fade" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          <RouteFinder {...p.ab} />
         </div>
       )}
     </>

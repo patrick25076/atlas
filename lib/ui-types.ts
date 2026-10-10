@@ -8,15 +8,21 @@ export type Origin = { lat: number; lon: number; label: string; source: "gps" | 
 /** "wild" stays a valid view for old links; the globe maps it to the Trips tab in Wild mode. */
 export type View = "chat" | "deals" | "all" | "fly" | "ground" | "trips" | "wild";
 
-/** The modes of the Trips tab. */
-export type TripMode = "short" | "wild" | "longstay" | "group" | "purpose";
+/** The modes of the Trips tab; "ab" is the A to B route finder (/api/route). */
+export type TripMode = "short" | "wild" | "longstay" | "group" | "purpose" | "ab";
 export const TRIP_MODES: { key: TripMode; label: string; hint: string }[] = [
-  { key: "short", label: "Short loops", hint: "fly out, hop by train, fly home: 3 to 10 nights" },
-  { key: "wild", label: "Wild loops", hint: "a far region, many countries, live fares" },
+  { key: "short", label: "Short loops", hint: "fly out, hop by train, fly home: 2 to 21 nights" },
+  { key: "wild", label: "Wild loops", hint: "a far region or your own countries, many stops, live fares" },
   { key: "longstay", label: "Long stay", hint: "one base for a month or more, priced all in" },
   { key: "group", label: "Group", hint: "friends from different cities meet somewhere cheap" },
   { key: "purpose", label: "Purpose", hint: "events worth flying for" },
 ];
+/** The A to B mode's chip; kept apart from TRIP_MODES so a panel that appends its own copy does not draw it twice. */
+export const AB_MODE: { key: TripMode; label: string; hint: string } = { key: "ab", label: "A to B", hint: "the cheapest way from one place to another, by air, rail, coach and ferry" };
+/** Every mode of the Trips tab, A to B last: what the panel should draw. */
+export const ALL_TRIP_MODES: { key: TripMode; label: string; hint: string }[] = [...TRIP_MODES, AB_MODE];
+/** The region key that means "custom countries" in the Wild form (WILD_REGIONS has no chip for it; the form adds a box). */
+export const WILD_CUSTOM_CHIP: { key: string; label: string } = { key: "custom", label: "Custom countries" };
 
 /** Regions a wild trip can go to; labels for the chips (the engine has the countries). */
 export const WILD_REGIONS: { key: string; label: string }[] = [
@@ -139,7 +145,7 @@ export type LongStayBase = {
  * no known city with an airport). failed and partial: searches Kiwi refused, so a base may lack
  * a flight it would otherwise have.
  */
-export type LongStayResult = { bases: LongStayBase[]; searched: number; failed?: number; partial?: true; skipped?: { country: string; reason: string }[]; generatedAt: string; note?: string };
+export type LongStayResult = { bases: LongStayBase[]; searched: number; failed?: number; partial?: true; skipped?: { country: string; reason: string }[]; generatedAt: string; note?: string; constraints?: string[] };
 export type LongStayState = { status: "idle" | "loading" | "ok" | "error"; result?: LongStayResult; note?: string };
 
 export type GroupMember = { name: string; origins: string[]; available: { from: string; to: string }[] };
@@ -154,19 +160,49 @@ export type GroupOption = {
   /** A member already in the city has note "at home", price 0 and no url. */
   perMember: { name: string; price: number; from: string; out: string; back: string; url: string; note?: string }[];
 };
-export type GroupResult = { windows: GroupWindow[]; options: GroupOption[]; searched: number; failed?: number; partial?: true; generatedAt: string };
+/** dropped and note: what the per-person budget took out; where: the places as the engine searched them. */
+export type GroupResult = { windows: GroupWindow[]; options: GroupOption[]; searched: number; failed?: number; partial?: true; generatedAt: string; dropped?: number; note?: string; where?: string };
 export type GroupState = { status: "idle" | "loading" | "ok" | "error"; result?: GroupResult; note?: string };
-export type GroupQuery = { members: GroupMember[]; minNights: number; maxNights: number; where?: string; direct?: boolean };
+/** where: a region word, a city, or countries by name or code, comma separated; budgetPerPerson: euros, drops options above it. */
+export type GroupQuery = { members: GroupMember[]; minNights: number; maxNights: number; where?: string; direct?: boolean; budgetPerPerson?: number };
+
+// ---- The bounds the engines now accept, for the forms (the routes clamp to the same numbers).
+/** Wild loops: nights 5 to 90. */
+export const WILD_NIGHTS = { min: 5, max: 90 } as const;
+/** Short loops: 2 to 21 nights, 2 to 4 cities, a ground leg up to 12 hours. */
+export const SHORT_TRIP_DAYS = { min: 2, max: 21 } as const;
+export const SHORT_TRIP_CITIES = { min: 2, max: 4 } as const;
+export const SHORT_TRIP_GROUND_HOURS = { min: 1, max: 12 } as const;
+/** Long stay: 1 to 6 months. */
+export const LONGSTAY_MONTHS = { min: 1, max: 6 } as const;
+/** Group: 1 to 21 nights in the form (the route accepts up to 30). */
+export const GROUP_NIGHTS = { min: 1, max: 21 } as const;
+/** The region key that means "any countries I name" on /api/wild and /api/longstay (needs `countries`). */
+export const WILD_CUSTOM_REGION = "custom";
+/** The longest flight a wild leg may be capped at, hours door to door (maxFlightHours). */
+export const WILD_MAX_FLIGHT_HOURS = 40;
+
+/**
+ * The free-form extras /api/wild and /api/plan take beyond region, nights, style and budget,
+ * all optional, all strings as they go into the query: countries and prefer take names or
+ * codes ("Vietnam,TH"); mustInclude takes city names or codes ("Hanoi,BKK"); nightsPerStop
+ * a number or a range ("3-5"); maxFlightHours 1 to 40; startFrom airport codes ("LON,PAR");
+ * wishes the traveller's own words. /api/plan must receive exactly what /api/wild received.
+ */
+export type WildExtras = { countries?: string; prefer?: string; maxStops?: string; nightsPerStop?: string; mustInclude?: string; maxFlightHours?: string; startFrom?: string; wishes?: string };
+
+/** The constraints /api/trips reports back (`applied`): the request as the engine read it, with plain lines. */
+export type TripsApplied = { days: number; cities: string; maxGroundMin: number; mustInclude?: string; countries?: string[]; exclude?: string[]; lines: string[] };
 
 // ---- The forms of the Trips tab live in Globe state, so coming back to a mode shows the
 // form that produced the results on the globe.
 /** A member as the visitor builds them: ids are React keys and are stripped before the search. */
 export type GroupWindowForm = { id: string; from: string; to: string };
 export type GroupMemberForm = { id: string; name: string; origins: string[]; available: GroupWindowForm[] };
-/** defaultsApplied: the visitor's airports fill the first member once; a member they emptied stays empty. */
-export type GroupForm = { members: GroupMemberForm[]; minNights: number; maxNights: number; where: string; direct: boolean; defaultsApplied: boolean };
-/** start: null follows the When pill in the top bar, "" is "whenever is cheapest" chosen on purpose, otherwise YYYY-MM. countries: the box as typed, names or codes. */
-export type LongStayForm = { months: number; start: string | null; budget: string; countries: string };
+/** defaultsApplied: the visitor's airports fill the first member once; a member they emptied stays empty. budgetPerPerson: the box as typed, euros or empty. */
+export type GroupForm = { members: GroupMemberForm[]; minNights: number; maxNights: number; where: string; direct: boolean; defaultsApplied: boolean; budgetPerPerson?: string };
+/** start: null follows the When pill in the top bar, "" is "whenever is cheapest" chosen on purpose, otherwise YYYY-MM. countries: the box as typed, names or codes. wishes and mustInclude (cities, names or codes) as typed. */
+export type LongStayForm = { months: number; start: string | null; budget: string; countries: string; wishes?: string; mustInclude?: string };
 
 let idSeq = 0;
 /** A short id for a row the visitor adds; unique within the page, which is all a React key needs. */

@@ -20,16 +20,25 @@ export type RankedTrip = WildTrip & { variant: string; rank: number; score: numb
 export async function buildWildVariants(p: Omit<WildParams, "tradeoff" | "noHubs" | "onProgress">, n = 3, onProgress?: (line: string) => void): Promise<RankedTrip[]> {
   const chosen = VARIANTS.slice(0, Math.max(1, Math.min(VARIANTS.length, n)));
   const gw = mainGateway(p.gateways);
+  // A variant may build, find nothing (null) or refuse the request with a plain sentence
+  // (a must city on the been list, too few nights, every way in over the hours cap). The
+  // sentences are kept: when no variant builds and one of them refused, the caller gets
+  // that refusal instead of the generic "no way into that region".
+  const rejections: Error[] = [];
   const results = await Promise.all(
     chosen.map(async (v) => {
       // The departure window is part of the key: a dated build (from, to) must never read or
       // overwrite the undated variant files, or December trips would answer other dates.
       // The been list is part of the key too (a token), so an excluded build never reads a plain one.
-      const custom = customKey(p.countries, p.prefer, p.maxStops, p.nightsPerStop, v.tradeoff, v.noHubs, p.from, p.to, p.exclude);
+      // The extra constraints (must cities, hours, start airports, wishes, a nights range) are in the key too.
+      const custom = customKey(p.countries, p.prefer, p.maxStops, p.nightsPerStop, v.tradeoff, v.noHubs, p.from, p.to, p.exclude, { mustInclude: p.mustInclude, maxFlightHours: p.maxFlightHours, startFrom: p.startFrom, wishes: p.wishes, nightsPerStopMax: p.nightsPerStopMax });
       const path = wildPath(gw, p.region, p.month, p.nights, p.style, p.budget, custom);
       const stored = await readJson<WildTrip>(path);
       if (stored && stored.ageHours < 24) return { v, trip: stored.body };
-      const built = await buildWild({ ...p, tradeoff: v.tradeoff, noHubs: v.noHubs, onProgress: (line) => onProgress?.(`${v.label}: ${line}`) }).catch(() => null);
+      const built = await buildWild({ ...p, tradeoff: v.tradeoff, noHubs: v.noHubs, onProgress: (line) => onProgress?.(`${v.label}: ${line}`) }).catch((err: unknown) => {
+        rejections.push(err instanceof Error ? err : new Error(String(err)));
+        return null;
+      });
       if (!built) return { v, trip: null };
       const judge = await judgeTrip(built);
       const trip = { ...built, judge: judge ?? undefined };
@@ -38,6 +47,7 @@ export async function buildWildVariants(p: Omit<WildParams, "tradeoff" | "noHubs
     }),
   );
   const ok = results.filter((r): r is { v: Variant; trip: WildTrip } => !!r.trip);
+  if (!ok.length && rejections.length) throw rejections[0];
   // Score: the judge's verdict first, then cheaper per day, then fewer hours in transit.
   const scored = ok.map(({ v, trip }) => ({ ...trip, variant: v.label, rank: 0, score: Math.round(((trip.judge?.score ?? 50) * 1.0 - trip.totals.perDay * 0.15 - trip.totals.hoursInAir * 0.2) * 10) / 10 }));
   scored.sort((a, b) => b.score - a.score);

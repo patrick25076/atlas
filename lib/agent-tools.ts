@@ -5,6 +5,15 @@
 // widget question. Each answer is compact (a dozen items) so the model reads it whole; the
 // deals it returns carry enough to draw cards and pins on the globe. No tool throws: a
 // failure comes back as { error } with a one-line reason so the agent can say so and go on.
+//
+// Reliability rules (scripts/check-tools.ts checks them, docs/plans/chat-reliability.md
+// explains them): every result carries `searched` (Kiwi searches spent now) and `source`
+// (live, memo, boards, memory, data, feed, web, ...), so the model can say where a price came
+// from; a live tool that cannot search (Kiwi's breaker open, the daily budget spent, every
+// search refused) answers from what is known (tonight's boards, the fare memory, a stored
+// trip) under a plain rate-limit note instead of { error }; an unknown place gets a note with
+// close matches; a past or oddly written date gets a one-line correction; long builds report
+// what they have when the time runs out. { error } is kept for inputs that cannot be acted on.
 import { jsonSchema, tool, type JSONValue } from "ai";
 import citiesJson from "@/public/data/cities.json";
 import countriesJson from "@/public/data/countries.json";
@@ -17,13 +26,14 @@ import { haversineKm, nearestGateways } from "./geo";
 import { reachFrom } from "./ground";
 import { dealsFor } from "./deals-source";
 import { findDeals } from "./finder";
-import { findCombos } from "./combos";
-import { kiwiDate, nightsOf, searchFlight } from "./kiwi";
+import { findCombos, neighboursOf } from "./combos";
+import { BUDGET_MESSAGE, kiwiBudgetSpent, kiwiDate, kiwiStats, kiwiThrottled, nightsOf, searchFlight, THROTTLED_MESSAGE } from "./kiwi";
 import { buildWild, customKey, wildPath, REGIONS, STOPOVER_PROGRAMMES, type Budget, type Region, type Style, type Tradeoff, type WildTrip } from "./wild";
 import { buildWildVariants, VARIANTS } from "./wild-variants";
 import { hotelDeals } from "./hotel-deals";
 import { purposeTrips } from "./purpose";
-import { fareHistory, hasDb } from "./db";
+import { cheapestSeen, fareHistory, hasDb, type FareSeen } from "./db";
+import { isoDay as realDay } from "./params";
 import { judgeTrip } from "./judge";
 import { planDays, planPath, type Plan } from "./plan";
 import { readJson, writeJson } from "./boards-store";
@@ -34,10 +44,11 @@ import { hasLiteApi, hotelsNear, liteApiLive } from "./liteapi";
 import { allFares, hasToken } from "./travelpayouts";
 import { hasTavily, webSearch } from "./tavily";
 import { mainGateway, resolveGateway } from "./board";
+import { cheapestWay, resolvePlace, type RouteLeg, type RouteOption, type RouteResult } from "./route-finder";
 import { isGem, type FameFile } from "./gems";
 import { scanCheapest, type ScanMonth } from "./scan";
-import { longStay } from "./longstay";
-import { groupTrip, type GroupMember } from "./group";
+import { longStay, LongStayInputError } from "./longstay";
+import { GroupInputError, groupTrip, groupWindows, type GroupMember } from "./group";
 import { bestMonths } from "./climate";
 import { priceInsight } from "./insights";
 import { WIDGET_KINDS, type WidgetKind, type WidgetSpec } from "./chat-widgets";
@@ -65,6 +76,13 @@ export type AgentContext = {
   been?: BeenPrefs;
   /** ISO2 countries no search may land or sleep in: the been list when "only new" is on, else empty. */
   exclude?: string[];
+  /**
+   * Called with the parameters a tool is about to hand an engine (cheapest_way, wild_trip,
+   * long_stay, group_trip), just before the call: the harness reads the deadline and budget
+   * fields through it. A throw from it stops the tool before any search leaves (safe() turns
+   * it into { error }), which is how the harness checks the parameters at no cost.
+   */
+  trace?: (engine: string, params: Record<string, unknown>) => void;
 };
 
 /** The `exclude` and `allow` inputs every searching tool takes: the same shape and the same
@@ -228,20 +246,218 @@ const MAX_VARIANTS_LONG = 2;
 /** What one wild variant costs to build when nothing is stored: the way in (origins by countries),
  * the chain and the way home come to about sixty Kiwi searches. Used to size variants by budget. */
 const WILD_SEARCHES_PER_VARIANT = 60;
+/** How long one chat turn waits for a wild build before answering with what is stored; the
+ * build goes on in the background and is stored when done. The chat route allows 300 s in all,
+ * and the model needs some of that to write. */
+const WILD_BUILD_MS = Math.max(30_000, Number(process.env.WILD_BUILD_MS) || 170_000);
+/** The same cap for a long stay or a group trip: the engines answer what they priced so far. */
+const LONG_BUILD_MS = Math.max(30_000, Number(process.env.LONG_BUILD_MS) || 150_000);
+/** The engines get a deadline this much before the race fires, so they close their answer
+ * (the way home, the bases priced so far) and hand it back whole; the race is the last resort. */
+const DEADLINE_MARGIN_MS = 10_000;
+/** How long one chat turn's tools may run in all: the route allows 300 s and the model needs
+ * the rest to write. cheapest_way's own deadline never reaches past this. */
+const TURN_MS = Math.max(60_000, Number(process.env.CHAT_TURN_MS) || 270_000);
+/** Searches cheapest_way may spend from the turn's budget: twelve, twenty-four when the
+ * traveller asked to look harder ("search harder", "every option"). */
+const ROUTE_SEARCHES = 12;
+const ROUTE_SEARCHES_HARDER = 24;
+/** How long cheapest_way lets the route engine run: its own default, longer when asked to
+ * look harder; always cut to what is left of the turn, and the engine floors it at ten seconds. */
+const ROUTE_DEADLINE_MS = 90_000;
+const ROUTE_DEADLINE_HARDER_MS = 150_000;
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 /** Big countries where the way home from another city is worth pricing in the same scan. */
 export const OPEN_JAW_COUNTRIES = ["United States", "Canada", "Brazil", "Australia", "China", "India", "Japan", "Indonesia", "Mexico", "Argentina", "Russia"];
 
-/** Wraps a tool body: whatever goes wrong comes back as { error } in one line, never a throw. */
-function safe<A, R>(fn: (a: A) => Promise<R>): (a: A) => Promise<R | { error: string }> {
+/** The one sentence every fallback answer carries, so the model says it in one line. */
+export const RATE_NOTE = "live prices are rate-limited, this is from tonight's boards and the fare memory";
+/** The sentence when it is only this turn's budget that is spent: nothing is rate-limited,
+ * a new message searches at once. Never joined with RATE_NOTE. */
+export const TURN_NOTE = "this turn's search budget is spent; ask again in a new message for live prices";
+/** Where a result came from; the model is told to say so when it quotes a price. */
+export type Source = "live" | "memo" | "boards" | "memory" | "stored" | "data" | "feed" | "web" | "liteapi" | "foursquare" | "travelpayouts" | "model" | "none";
+type Plain = { searched: number; source: Source; note: string; count: 0 };
+/** A plain note answer: no data, but a sentence the model can act on. Never an empty object.
+ * `count: 0` is what the chat's chip reads to show the note in amber instead of a tick. */
+const plain = (note: string, source: Source = "none", searched = 0): Plain => ({ searched, source, note, count: 0 });
+
+/** True for the errors Kiwi's gate throws when live prices are off: the breaker, the daily budget. */
+const isRateLimit = (msg: string) => msg.includes(THROTTLED_MESSAGE) || msg.includes(BUDGET_MESSAGE) || /rate-limit|throttl|429|403/i.test(msg);
+/** True while no live search can leave this process: the breaker is open or the budget is spent. */
+const liveOff = () => kiwiThrottled() || kiwiBudgetSpent();
+
+/** Wraps a tool body: whatever goes wrong comes back as { error } in one line, never a throw.
+ * A throw caused by Kiwi's throttle is not an error of the request: it becomes a note, so
+ * the model says live prices are off and offers to retry, instead of reporting a failure. */
+function safe<A, R>(fn: (a: A) => Promise<R>): (a: A) => Promise<R | { error: string } | Plain> {
   return async (a) => {
     try {
       return await fn(a);
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      return { error: msg.replace(/\s+/g, " ").slice(0, 160) || "failed" };
+      const msg = (err instanceof Error ? err.message : String(err)).replace(/\s+/g, " ").slice(0, 160) || "failed";
+      if (isRateLimit(msg)) return plain(`${RATE_NOTE}; nothing stored matched this request, so there is no price to show. Offer to try again in a few minutes.`);
+      return { error: msg };
     }
   };
 }
+
+/** A bounded edit distance, for "did you mean" over city names; stops counting past `max`. */
+function editDistance(a: string, b: string, max = 3): number {
+  if (Math.abs(a.length - b.length) > max) return max + 1;
+  let prev = Array.from({ length: b.length + 1 }, (_, i) => i);
+  for (let i = 1; i <= a.length; i++) {
+    const cur = [i];
+    let rowMin = i;
+    for (let j = 1; j <= b.length; j++) {
+      const v = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+      cur.push(v);
+      if (v < rowMin) rowMin = v;
+    }
+    if (rowMin > max) return max + 1;
+    prev = cur;
+  }
+  return prev[b.length];
+}
+
+/** The cities in cities.json that look like what was typed: a prefix or a word inside the name
+ * first, then names within three edits; biggest first within each group, five at most. */
+export function closeCities(name: string, limit = 5): string[] {
+  const q = fold(name);
+  if (!q || q.length < 2) return [];
+  const label = ([, c]: [string, City]) => `${c.name} (${COUNTRIES[c.country]?.name ?? c.country})`;
+  const starts = CITY_LIST.filter(([, c]) => fold(c.name).startsWith(q)).sort(byPop);
+  const inside = CITY_LIST.filter(([, c]) => !fold(c.name).startsWith(q) && fold(c.name).includes(q)).sort(byPop);
+  const near = q.length >= 4 ? CITY_LIST.filter(([, c]) => editDistance(fold(c.name), q) <= (q.length >= 7 ? 3 : 2)).sort(byPop) : [];
+  const out: string[] = [];
+  for (const hit of [...starts, ...inside, ...near]) {
+    const l = label(hit);
+    if (!out.includes(l)) out.push(l);
+    if (out.length >= limit) break;
+  }
+  return out;
+}
+
+/** The note for a place we do not know: what was typed and the closest names, so the model
+ * can pick one or ask, instead of a dead end. */
+function unknownPlace(what: string, raw: string): Plain {
+  const close = closeCities(raw);
+  return plain(`${what} "${raw}" is not a city or airport we know${close.length ? `; close matches: ${close.join(", ")}` : "; try the nearest big city or its airport code"}`, "data");
+}
+
+const MONTH_ABBR = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
+const WEEKDAYS = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
+const pad2 = (n: string | number) => String(n).padStart(2, "0");
+
+/**
+ * A day written any of the usual ways, as YYYY-MM-DD: ISO, "2026-11-5", "14/11/2026",
+ * "14.11.2026", "14 November 2026", "Nov 14 2026", "today", "tomorrow", "next friday". A
+ * year-less "14 November" is placed in the next twelve months from `today`; a weekday is the
+ * coming one. Words are read only when a month name AND a day number are really there: the
+ * engine's own Date.parse keeps a bare year out of "this weekend 2026" and answers 1 January,
+ * so it is never used. Null when nothing readable is there, and never a throw.
+ */
+export function parseDay(s: unknown, today: string): string | null {
+  if (typeof s !== "string") return null;
+  const raw = s.trim();
+  if (!raw) return null;
+  const strict = realDay(raw);
+  if (strict) return strict;
+  let m = raw.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+  if (m) return realDay(`${m[1]}-${pad2(m[2])}-${pad2(m[3])}`);
+  m = raw.match(/^(\d{1,2})[./-](\d{1,2})[./-](\d{4})$/);
+  if (m) return realDay(`${m[3]}-${pad2(m[2])}-${pad2(m[1])}`);
+  const q = fold(raw).replace(/[,.]/g, " ").replace(/\s+/g, " ").trim();
+  // Relative words, from the traveller's own calendar day.
+  if (q === "today" || q === "now" || q === "tonight" || q === "asap") return today;
+  if (q === "tomorrow") return addDays(today, 1);
+  if (q === "day after tomorrow" || q === "the day after tomorrow") return addDays(today, 2);
+  // "friday", "this friday", "next friday", "on friday": the coming one, never today itself.
+  const wd = q.match(/^(?:on |this |next |coming |this coming )?(sun|mon|tue|wed|thu|fri|sat)[a-z]*$/);
+  if (wd) {
+    const target = WEEKDAYS.findIndex((d) => d.startsWith(wd[1]));
+    const cur = new Date(`${today}T12:00:00Z`).getUTCDay();
+    const delta = ((target - cur + 7) % 7) || 7;
+    return addDays(today, delta);
+  }
+  // Words with a month name and a day number: "14 November 2026", "Nov 14", "November 14, 2026".
+  const monthHit = q.match(/\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\b/);
+  const dayHit = q.replace(/\b\d{4}\b/g, " ").match(/\b(\d{1,2})(?:st|nd|rd|th)?\b/);
+  if (!monthHit || !dayHit) return null;
+  const month = MONTH_ABBR.indexOf(monthHit[1]) + 1;
+  const day = Number(dayHit[1]);
+  if (month < 1 || day < 1 || day > 31) return null;
+  const yearHit = q.match(/\b(\d{4})\b/);
+  const year = yearHit ? Number(yearHit[1]) : Number(today.slice(0, 4));
+  const iso = realDay(`${year}-${pad2(month)}-${pad2(day)}`);
+  if (!iso) return null;
+  if (!yearHit && iso < today) return realDay(`${year + 1}-${pad2(month)}-${pad2(day)}`);
+  return iso;
+}
+
+/** A day as parseDay reads it, with a one-line note saying how a non-ISO input was read, so
+ * the answer can state the interpretation ("next friday" read as 2026-10-16). */
+function readDay(s: unknown, today: string, what: string): { day: string | null; note?: string } {
+  const day = parseDay(s, today);
+  if (!day) return { day: null, note: typeof s === "string" && s.trim() ? `${what} "${String(s).trim()}" is not a date I can read; use YYYY-MM-DD` : `${what} is needed as YYYY-MM-DD` };
+  const raw = typeof s === "string" ? s.trim() : "";
+  return raw === day ? { day } : { day, note: `${what} "${raw}" read as ${day}` };
+}
+
+/** A day that must be in the future: a past one moves to today, with a one-line note. */
+function futureDay(s: unknown, today: string, what: string): { day: string | null; note?: string } {
+  const r = readDay(s, today, what);
+  if (!r.day) return r;
+  if (r.day < today) return { day: today, note: `${what} ${r.day} is in the past; searched from today (${today}) instead` };
+  return r;
+}
+
+/** A deal from the fare memory, so a remembered fare draws like any other card. */
+function dealFromFare(f: FareSeen): Deal {
+  const cityCode = CITY_OF_AIRPORT.get(f.dst) ?? (CITIES[f.dst] ? f.dst : f.dst);
+  const known = CITIES[cityCode];
+  const airport = AIRPORT_BY_IATA.get(f.dst);
+  return { gw: f.src, dst: f.dst, dstCity: cityCode, city: known?.name ?? airport?.city ?? f.dst, country: known?.country ?? airport?.country ?? "", price: Math.round(f.price), out: f.out, back: f.back ?? "", nights: f.nights ?? 0, stops: f.stops, carriers: f.carriers, outMin: Math.round(f.hours * 60), backMin: 0, url: f.url };
+}
+
+/** What is known without a live search: tonight's boards for the traveller's airports and
+ * the fare memory, for a place (a city, a country, an airport, or nothing for "anywhere")
+ * inside a departure window. The answer says which source it came from. */
+async function knownFares(gateways: string[], origins: string[], place: string | undefined, from?: string, to?: string, month?: string, turn = false): Promise<{ source: Source; deals: Deal[]; fares: FareSeen[]; note: string }> {
+  const city = place ? findCity(place) : null;
+  const cc = city ? city[1].country : countryCode(place);
+  const airports = place ? airportsArg(place, []) : [];
+  const inWindow = (d: { out: string }) => (!from || d.out >= from) && (!to || d.out <= to);
+  let deals: Deal[] = [];
+  try {
+    const src = await dealsFor(gateways, month);
+    deals = src.deals.filter((d) => (city ? d.dstCity === city[0] || fold(d.city) === fold(city[1].name) : cc ? d.country === cc : true) && inWindow(d)).slice(0, 6);
+  } catch {
+    // no store and no fallback file: the memory may still answer
+  }
+  let fares: FareSeen[] = [];
+  if (airports.length && from && to) {
+    try {
+      const one = await cheapestSeen(origins, airports, from, to, 30, city?.[1].name);
+      const hist = await fareHistory(origins[0] ?? gateways[0], airports[0], from, to, 8);
+      fares = [...(one ? [one] : []), ...hist.filter((h) => !one || h.url !== one.url)].slice(0, 8);
+    } catch {
+      // the memory is optional
+    }
+  }
+  const source: Source = deals.length ? "boards" : fares.length ? "memory" : "none";
+  const has = [deals.length ? "tonight's boards" : "", fares.length ? "the fare memory" : ""].filter(Boolean);
+  // The turn's own budget is not a rate limit: the note then says a new message works at once.
+  const note = turn
+    ? `${TURN_NOTE}; ${has.length ? `shown from ${has.join(" and ")}` : "nothing stored matches this request"}`
+    : has.length
+      ? `${RATE_NOTE} (${has.join(" and ")}; a board fare was searched last night, a remembered fare is what someone saw in the last 30 days). Offer to try live again in a few minutes.`
+      : `${RATE_NOTE}; nothing stored matches this request. Offer to try again in a few minutes.`;
+  return { source, deals, fares, note };
+}
+
+/** A fare memory row shaped like a reprice itinerary, so the same cards draw it. */
+const itinFromFare = (f: FareSeen) => ({ price: Math.round(f.price), to: f.dst, out: f.out, back: f.back ?? undefined, nights: f.nights, stops: f.stops, via: [] as string[], carriers: f.carriers, hours: f.hours, url: f.url, seenAt: f.seenAt.slice(0, 10) });
 
 /** The model reads a tool result on every step of every later turn, so the `raw` payload
  * (whole Deal arrays, a WildTrip) only travels to the browser: the compact fields say the same. */
@@ -318,6 +534,10 @@ export function atlasTools(ctx: AgentContext) {
   // anything now, and only once (the same scan asked twice in a turn is one run), so a result
   // is charged when its generatedAt is after the turn began and has not been charged before.
   const turnStart = Date.now();
+  /** Milliseconds this turn's tools may still run; a tool's own deadline never reaches past it. */
+  const turnLeftMs = () => Math.max(0, turnStart + TURN_MS - Date.now());
+  /** The parameters handed to an engine, shown to the harness first (see AgentContext.trace). */
+  const trace = (engine: string, params: Record<string, unknown>) => ctx.trace?.(engine, params);
   const charged = new Set<string>();
   const builtNow = (r: { generatedAt?: string } | null | undefined): boolean => {
     const at = r?.generatedAt;
@@ -394,8 +614,9 @@ export function atlasTools(ctx: AgentContext) {
       description: "The traveller's airports with drive time, size and whether a nightly price board exists. Use for 'which airport should I fly from'.",
       inputSchema: jsonSchema<Record<string, never>>({ type: "object", properties: {} }),
       execute: safe(async () => {
-        if (!ctx.origin) return { airports: gateways.map((g) => ({ iata: g })) };
-        return nearestGateways(AIRPORTS, ctx.origin.lat, ctx.origin.lon, { maxKm: 350, limit: 6 }).map((g) => ({ iata: g.airport.iata, name: g.airport.name, city: g.airport.city, size: g.airport.size, driveMinutes: g.driveMin, km: Math.round(g.km), searchedNightly: gateways.includes(g.airport.iata) }));
+        if (!ctx.origin) return { searched: 0, source: "data" as Source, count: gateways.length, airports: gateways.map((g) => ({ iata: g, name: AIRPORT_BY_IATA.get(g)?.name, city: AIRPORT_BY_IATA.get(g)?.city, searchedNightly: true })), note: "the traveller's exact location is unknown; these are the airports the app searches nightly" };
+        const airports = nearestGateways(AIRPORTS, ctx.origin.lat, ctx.origin.lon, { maxKm: 350, limit: 6 }).map((g) => ({ iata: g.airport.iata, name: g.airport.name, city: g.airport.city, size: g.airport.size, driveMinutes: g.driveMin, km: Math.round(g.km), searchedNightly: gateways.includes(g.airport.iata) }));
+        return { searched: 0, source: "data" as Source, count: airports.length, airports, ...(airports.length ? {} : { note: "no airport within 350 km of the traveller's location in the airports file" }) };
       }),
     }),
 
@@ -419,10 +640,15 @@ export function atlasTools(ctx: AgentContext) {
       }),
       execute: safe(async (a) => {
         const exclude = excludeOf(a.exclude, a.allow);
-        const cc = countryCode(a.country);
+        // A country by name or code; a city name in the country field ("Lisbon") means its
+        // country; anything else is a note with close matches, never a silent empty list.
+        const countryRaw = (a.country ?? "").trim();
+        const cc = countryCode(countryRaw) ?? (countryRaw ? findCity(countryRaw)?.[1].country : undefined);
+        if (countryRaw && !cc) return { ...unknownPlace("country", countryRaw), source: "boards" as Source, count: 0, deals: [] };
         // A country the traveller has been to and does not want again: say so, read nothing.
-        if (cc && !countryAllowed(cc, exclude)) return { count: 0, deals: [], note: excludedNote([cc]) };
-        const src = await dealsFor(gateways, a.month ?? ctx.month);
+        if (cc && !countryAllowed(cc, exclude)) return { searched: 0, source: "boards" as Source, count: 0, deals: [], note: excludedNote([cc]) };
+        const month = a.month && /^\d{4}-\d{2}$/.test(a.month) ? a.month : ctx.month;
+        const src = await dealsFor(gateways, month);
         const seen = new Set<string>();
         const out: Deal[] = [];
         for (const d of filterByCountry(src.deals, exclude)) {
@@ -439,14 +665,15 @@ export function atlasTools(ctx: AgentContext) {
           out.push(d);
           if (out.length >= Math.min(20, a.limit ?? 10)) break;
         }
-        return { searchedOn: src.updated.slice(0, 10), airports: src.gateways, count: out.length, ...excludedSummary(exclude, [], a.exclude), deals: out.map((d) => ({ ...compactDeal(d), weekendHighC: weekendMax(d.dstCity) })), raw: out };
+        const filters = [a.maxPrice != null ? `under €${a.maxPrice}` : "", a.direct ? "direct" : "", a.warm ? "warm this weekend" : "", cc ? nameOf(cc) : "", a.city ? a.city : "", a.gems ? "hidden gems" : "", a.minNights != null || a.maxNights != null ? `${a.minNights ?? 2} to ${a.maxNights ?? 7} nights` : ""].filter(Boolean);
+        return { searched: 0, source: "boards" as Source, searchedOn: src.updated.slice(0, 10), airports: src.gateways, count: out.length, ...excludedSummary(exclude, [], a.exclude), ...(out.length ? {} : { note: `no board deal from ${src.gateways.join(", ")} matches ${filters.join(", ") || "the filters"} (${src.deals.length} deals on the boards); loosen a filter or use find_getaways for a live search` }), deals: out.map((d) => ({ ...compactDeal(d), weekendHighC: weekendMax(d.dstCity) })), raw: out };
       }),
       toModelOutput: withoutRaw,
     }),
 
     find_getaways: tool({
       description: "A live search for a trip inside a period: 'between 20 and 30 October, 3 to 6 nights, away on the 26th, from any of my airports, anywhere or a country, direct, home may land at another of my airports'. About 20 live Kiwi searches, half a minute. Use whenever the traveller gives dates or a period and the place is open (anywhere, a region, a country). Several countries: a comma list in where. Excluded (been) countries are taken out of where before searching and never land; layovers through them are fine.",
-      inputSchema: jsonSchema<{ from: string; to: string; include?: string; minNights?: number; maxNights?: number; direct?: boolean; maxHours?: number; where?: string; origins?: string[]; returnTo?: string[]; tricks?: boolean; exclude?: string[]; allow?: string[] }>({
+      inputSchema: jsonSchema<{ from: string; to: string; include?: string; minNights?: number; maxNights?: number; direct?: boolean; maxHours?: number; where?: string; origins?: string[]; returnTo?: string[]; tricks?: boolean; exhaustive?: boolean; exclude?: string[]; allow?: string[] }>({
         type: "object",
         properties: {
           from: { type: "string", description: "YYYY-MM-DD, start of the period" },
@@ -460,32 +687,56 @@ export function atlasTools(ctx: AgentContext) {
           origins: { type: "array", items: { type: "string" }, description: "IATA codes or city names; default the traveller's airports" },
           returnTo: { type: "array", items: { type: "string" }, description: "other home airports the flight back may land at (open-jaw)" },
           tricks: { type: "boolean", description: "also scan hidden-city one-ways (risky; only when asked)" },
+          exhaustive: { type: "boolean", description: "true when the traveller says 'anywhere' or 'the cheapest possible': the engine goes through many more targets (nearby airports, hubs, ground legs) and spends more searches" },
           ...BEEN_PROPS,
         },
         required: ["from", "to"],
       }),
       execute: safe(async (a) => {
-        if (!isoDay(a.from) || !isoDay(a.to)) return { error: "from and to must be YYYY-MM-DD" };
-        // A period that ends before it starts, or starts in the past, would search nothing.
-        if (a.to < a.from) return { error: `the period ends (${a.to}) before it starts (${a.from})` };
-        if (a.from < ctx.today) return { error: `the period starts in the past (${a.from}); today is ${ctx.today}` };
+        // Dates written any usual way; a past start moves to today; an end before the start
+        // becomes a week after it. Each correction is one line in the answer, not a refusal.
+        const corrections: string[] = [];
+        const f = futureDay(a.from, ctx.today, "the period start");
+        if (!f.day) return { error: f.note! };
+        if (f.note) corrections.push(f.note);
+        const t = readDay(a.to, ctx.today, "the period end");
+        if (!t.day) return { error: t.note! };
+        if (t.note) corrections.push(t.note);
+        let to = t.day;
+        if (to < f.day) {
+          corrections.push(`the period ended (${to}) before it started (${f.day}); searched ${f.day} to ${addDays(f.day, 7)} instead`);
+          to = addDays(f.day, 7);
+        }
+        const from = f.day;
+        const include = parseDay(a.include, ctx.today);
         const origins = codesOf(a.origins, gateways);
-        if (!origins.length) return { error: `unknown airport or city in origins: ${(a.origins ?? []).join(", ")}` };
+        if (!origins.length) return { ...unknownPlace("origin", (a.origins ?? []).join(", ")), found: 0, deals: [] };
         // Been countries asked for by name are dropped before any search is sent; when every
         // place asked for is one of them there is nothing to search, and the answer says so.
         const exclude = excludeOf(a.exclude, a.allow);
         const { kept, dropped } = splitWhere(a.where, exclude);
-        if (!kept.length && dropped.length) return { searched: 0, found: 0, deals: [], note: excludedNote(dropped) };
-        const over = exhausted();
-        if (over) return over;
+        if (!kept.length && dropped.length) return { searched: 0, source: "none" as Source, found: 0, deals: [], note: excludedNote(dropped) };
         // A comma list of countries is one search per country per target; four is the cap.
         const where = kept.slice(0, 4).join(",") || "anywhere";
-        const r = await findDeals({ origins, from: a.from, to: a.to, include: isoDay(a.include) ? a.include : undefined, minNights: a.minNights ?? 2, maxNights: a.maxNights ?? 7, direct: a.direct, maxHours: a.maxHours, where, returnTo: codesOf(a.returnTo, []), tricks: a.tricks, exclude });
+        const corrected = corrections.length ? { corrected: corrections.join("; ") } : {};
+        // Known fares stand in when nothing live can be searched: the breaker, the budget, the
+        // turn's cap, or a run in which every search was refused.
+        const fallback = async (reason: string, searched = 0, turn = false) => {
+          const known = await knownFares(gateways, origins, kept.length === 1 ? kept[0] : undefined, from, to, from.slice(0, 7), turn);
+          const deals = filterByCountry([...known.deals, ...known.fares.map(dealFromFare)], exclude).filter((d) => d.nights >= (a.minNights ?? 2) && d.nights <= (a.maxNights ?? 7) || !d.nights).slice(0, 10);
+          return { searched, source: known.source, found: deals.length, ...corrected, ...excludedSummary(exclude, dropped, a.exclude), note: `${reason}; ${known.note}`, deals: deals.map(compactDeal), raw: deals };
+        };
+        if (liveOff()) return fallback(kiwiThrottled() ? "Kiwi is throttling this address for a few minutes" : "today's live search budget is spent");
+        const over = exhausted();
+        if (over) return fallback(over.error, 0, true);
+        const r = await findDeals({ origins, from, to, include: include ?? undefined, minNights: a.minNights ?? 2, maxNights: a.maxNights ?? 7, direct: a.direct, maxHours: a.maxHours, where, returnTo: codesOf(a.returnTo, []), tricks: a.tricks, exclude, ...(a.exhaustive ? { exhaustive: true, origin: ctx.origin } : {}) });
         spend(r.searched);
         const seen = new Set<string>();
         const deals = filterByCountry(r.deals, exclude);
+        if (!deals.length && r.failed > 0 && r.failed >= r.searched) return fallback(`every live search was refused (${r.failed} of ${r.searched})`, r.searched);
         const top = deals.filter((d) => !seen.has(d.dstCity + (d.backTo ?? "")) && seen.add(d.dstCity + (d.backTo ?? ""))).slice(0, 14);
-        return { searched: r.searched, found: deals.length, openJaw: r.openJaw, ...excludedSummary(exclude, dropped, a.exclude), ...(r.note ? { note: r.note } : {}), deals: top.map(compactDeal), raw: top };
+        const note = r.note ?? (r.failed ? `${r.failed} of ${r.searched} searches failed (Kiwi refused); the list may be missing places` : !deals.length ? `no fare found for ${where} between ${from} and ${to} from ${origins.join(", ")} with ${a.minNights ?? 2} to ${a.maxNights ?? 7} nights${a.direct ? ", direct only" : ""}; widen the dates or the nights` : undefined);
+        return { searched: r.searched, source: "live" as Source, found: deals.length, openJaw: r.openJaw, ...corrected, ...excludedSummary(exclude, dropped, a.exclude), ...(note ? { note } : {}), deals: top.map(compactDeal), raw: top };
       }),
       toModelOutput: withoutRaw,
     }),
@@ -510,19 +761,49 @@ export function atlasTools(ctx: AgentContext) {
       execute: safe(async (a) => {
         if (!a.to?.trim()) return { error: "a destination is needed" };
         const origins = codesOf(a.origins, gateways).slice(0, 3);
-        if (!origins.length) return { error: `unknown airport or city in origins: ${(a.origins ?? []).join(", ")}` };
+        if (!origins.length) return { ...unknownPlace("origin", (a.origins ?? []).join(", ")), to: a.to.trim(), best: null, months: [] };
         const exclude = excludeOf(a.exclude, a.allow);
         const dst = findCity(a.to);
         // A city in a been country, or the country itself: nothing to scan, and no search spent.
         const dstCountry = dst ? dst[1].country : countryCode(a.to);
-        if (dstCountry && !countryAllowed(dstCountry, exclude)) return { to: dst?.[1].name ?? a.to.trim(), searched: 0, best: null, months: [], note: excludedNote([dstCountry]) };
+        if (dstCountry && !countryAllowed(dstCountry, exclude)) return { to: dst?.[1].name ?? a.to.trim(), searched: 0, source: "none" as Source, best: null, months: [], note: excludedNote([dstCountry]) };
         // Coming home from another city of a been country would mean a stay there: the
         // open-jaw leg is dropped and the answer says so.
         const jawCountry = countryCode(a.openJawFrom?.trim()) ?? findCity(a.openJawFrom ?? "")?.[1].country;
         const jawDropped = !!jawCountry && !countryAllowed(jawCountry, exclude);
-        const over = exhausted();
-        if (over) return over;
         const to = dst ? (dst[1].airports.length === 1 ? dst[1].airports[0] : dst[0]) : a.to.trim();
+        const label = dst?.[1].name ?? a.to.trim();
+        // A place that is neither a city, a country nor a code we know still goes to Kiwi
+        // (it resolves many names), but the answer says so, and an empty calendar then lists
+        // close matches instead of looking like "no flights".
+        const unknown = !dst && !dstCountry && !/^[A-Za-z]{3}$/.test(a.to.trim());
+        // The calendar from what is known: the memory's cheapest fare per month into the
+        // destination's airports, then the boards. Used when nothing live can be searched.
+        const fallback = async (reason: string, months: string[], searched = 0, turn = false) => {
+          const airports = airportsArg(a.to, []);
+          const rows: ScanMonth[] = [];
+          for (const month of months) {
+            const [y, m] = month.split("-").map(Number);
+            const first = `${month}-01`;
+            const last = new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10);
+            const f = airports.length ? await cheapestSeen(origins, airports, first, last, 30, dst?.[1].name).catch(() => null) : null;
+            rows.push(f ? { month, cheapest: Math.round(f.price), out: f.out, back: f.back ?? undefined, nights: f.nights ?? undefined, stops: f.stops, carriers: f.carriers, url: f.url, from: f.src, to: f.dst, remembered: true } : { month, cheapest: null });
+          }
+          const known = await knownFares(gateways, origins, a.to, undefined, undefined, undefined);
+          for (const d of known.deals) {
+            const i = rows.findIndex((r) => r.month === d.out.slice(0, 7));
+            if (i >= 0 && (rows[i].cheapest == null || d.price < rows[i].cheapest!)) rows[i] = { month: d.out.slice(0, 7), cheapest: d.price, out: d.out, back: d.back, nights: d.nights, stops: d.stops, carriers: d.carriers, url: d.url, from: d.gw, to: d.dst, toCity: d.city, remembered: true };
+          }
+          const priced = rows.filter((r) => r.cheapest != null);
+          const best = priced.sort((x, y) => x.cheapest! - y.cheapest!)[0] ?? null;
+          const raw = filterByCountry(rows.map((m) => dealFromMonth(m, origins, to, dst, label)).filter((d): d is Deal => !!d), exclude);
+          return { to: label, origins, searched, source: (priced.length ? (known.deals.length ? "boards" : "memory") : "none") as Source, oneWay: !!a.oneWay, ...excludedSummary(exclude, [], a.exclude), note: turn ? `${reason}; ${priced.length ? `${priced.length} of ${months.length} months have a remembered fare` : `nothing stored for ${label} yet`}` : `${reason}; ${priced.length ? `${RATE_NOTE} (${priced.length} of ${months.length} months have a remembered fare)` : `${RATE_NOTE}; nothing stored for ${label} yet`}. Offer to try live again in a few minutes.`, best: best ? row(best) : null, months: rows.map(row), openJaw: [], raw };
+        };
+        const monthsOf = (n: number, start?: string) => {
+          const base = start ? `${start}-01` : `${ctx.today.slice(0, 7)}-01`;
+          const [y, m] = base.split("-").map(Number);
+          return Array.from({ length: n }, (_, i) => new Date(Date.UTC(y, m - 1 + i, 1)).toISOString().slice(0, 7));
+        };
         // Long-haul nights only when the place (a city, or a country's middle) is really far
         // from where the traveller starts; Italy from Brașov is a short break, not two weeks.
         const here = originPoint();
@@ -534,23 +815,33 @@ export function atlasTools(ctx: AgentContext) {
         const minNights = Math.max(1, Math.round(a.minNights ?? (far ? 7 : 3)));
         const maxNights = Math.max(minNights, Math.round(a.maxNights ?? (far ? 14 : 7)));
         const startMonth = a.startMonth && /^\d{4}-\d{2}$/.test(a.startMonth) ? a.startMonth : undefined;
+        // A month whose search failed (Kiwi refused) is unknown, not empty: the calendar says so.
+        const row = (m: ScanMonth) => ({ month: m.month, cheapest: m.cheapest, out: m.out, back: m.back, nights: m.nights, perNight: m.cheapest != null && m.nights ? Math.round(m.cheapest / m.nights) : undefined, stops: m.stops, airline: m.carriers?.[0], from: m.from, homeFrom: m.openJawTo, url: m.url, url2: m.url2, also: m.also?.slice(0, 2).map((x) => ({ cheapest: x.cheapest, out: x.out, back: x.back })), ...(m.failed ? { failed: true } : {}), ...(m.remembered ? { remembered: true } : {}) });
+        if (liveOff()) return fallback(kiwiThrottled() ? "Kiwi is throttling this address for a few minutes" : "today's live search budget is spent", monthsOf(months, startMonth));
+        const over = exhausted();
+        if (over) return fallback(over.error, monthsOf(months, startMonth), 0, true);
         const r = await scanCheapest({ origins, to, months, minNights, maxNights, oneWay: a.oneWay, openJawFrom, startMonth, exclude });
         // A memoised calendar (the same scan within the hour) made no live search now.
-        spend(builtNow(r) ? r.searched : 0);
-        const label = dst?.[1].name ?? a.to.trim();
-        // A month whose search failed (Kiwi refused) is unknown, not empty: the calendar says so.
-        const row = (m: ScanMonth) => ({ month: m.month, cheapest: m.cheapest, out: m.out, back: m.back, nights: m.nights, perNight: m.cheapest != null && m.nights ? Math.round(m.cheapest / m.nights) : undefined, stops: m.stops, airline: m.carriers?.[0], from: m.from, homeFrom: m.openJawTo, url: m.url, url2: m.url2, also: m.also?.slice(0, 2).map((x) => ({ cheapest: x.cheapest, out: x.out, back: x.back })), ...(m.failed ? { failed: true } : {}) });
+        const live = builtNow(r);
+        spend(live ? r.searched : 0);
+        // Every month refused: the calendar from the memory and the boards, under the note.
+        if (r.months.length && r.failed >= r.months.length && !r.months.some((m) => m.cheapest != null)) return fallback(`every live search was refused (${r.failed})`, r.months.map((m) => m.month), live ? r.searched : 0);
         // A country scan may land a month in a been country: that pin is dropped (the engine
         // skips such months itself once it knows the list; this keeps the globe honest anyway).
         const raw = filterByCountry(r.months.map((m) => dealFromMonth(m, origins, to, dst, label)).filter((d): d is Deal => !!d), exclude);
+        const remembered = r.months.filter((m) => m.remembered).length;
+        const empty = !r.months.some((m) => m.cheapest != null);
+        const note = r.failed ? `${r.failed} search${r.failed === 1 ? "" : "es"} failed (Kiwi refused); those months are unknown, not empty` : r.note ? r.note : empty ? (unknown ? unknownPlace("destination", a.to.trim()).note : `no fare found to ${label} in these ${r.months.length} months from ${origins.join(", ")} with ${minNights} to ${maxNights} nights; try more nights, another airport or a nearby city`) : remembered >= r.months.length ? `every month came from the fare memory (fares seen in the last day), no live search was needed` : remembered ? `${remembered} month${remembered === 1 ? "" : "s"} came from the fare memory (seen in the last day), the rest live` : undefined;
         return {
           to: label,
           origins: r.origins,
           nights: `${minNights} to ${maxNights}`,
           oneWay: !!a.oneWay,
-          searched: r.searched,
+          searched: live ? r.searched : 0,
+          source: (live ? (remembered && remembered >= r.months.length ? "memory" : "live") : "memo") as Source,
           ...excludedSummary(exclude, jawDropped && jawCountry ? [`open-jaw via ${nameOf(jawCountry)}`] : [], a.exclude),
-          ...(r.failed ? { failed: r.failed, note: `${r.failed} search${r.failed === 1 ? "" : "es"} failed (Kiwi refused); those months are unknown, not empty` } : r.note ? { note: r.note } : {}),
+          ...(r.failed ? { failed: r.failed } : {}),
+          ...(note ? { note } : {}),
           best: r.best ? row(r.best) : null,
           months: r.months.map(row),
           openJaw: r.openJaw.slice(0, 6).map(row),
@@ -568,18 +859,47 @@ export function atlasTools(ctx: AgentContext) {
         required: ["from", "to", "depart"],
       }),
       execute: safe(async (a) => {
-        if (!isoDay(a.depart)) return { error: "depart must be YYYY-MM-DD" };
+        const d = futureDay(a.depart, ctx.today, "the departure");
+        if (!d.day) return { error: d.note! };
+        const depart = d.day;
+        const corrected = d.note ? { corrected: d.note } : {};
         // A named destination in a been country is an answer, not a search; an open destination
         // ("anywhere") is searched and the landings in been countries are dropped afterwards.
         const exclude = excludeOf(a.exclude, a.allow);
         const toCountry = placeCountry(a.to);
-        if (toCountry && !countryAllowed(toCountry, exclude)) return { searched: 0, found: 0, itineraries: [], note: excludedNote([toCountry]) };
-        const over = exhausted();
-        if (over) return over;
+        if (toCountry && !countryAllowed(toCountry, exclude)) return { searched: 0, source: "none" as Source, found: 0, itineraries: [], note: excludedNote([toCountry]) };
         const flex = Math.min(5, Math.max(0, Math.round(a.flexDays ?? 2)));
-        const back = a.nights ? addDays(a.depart, Math.min(90, Math.max(1, Math.round(a.nights)))) : null;
-        spend(1);
-        const r = await searchFlight({ flyFrom: placeArg(a.from, gateways.join(",")), flyTo: placeArg(a.to, "anywhere"), departureDate: kiwiDate(a.depart), departureDateFlexDays: flex, ...(back ? { returnDate: kiwiDate(back), returnDateFlexDays: flex } : {}) });
+        const nights = a.nights ? Math.min(90, Math.max(1, Math.round(a.nights))) : null;
+        const back = nights ? addDays(depart, nights) : null;
+        const from = placeArg(a.from, gateways.join(","));
+        const originCodes = from.split(",").map((x) => airportArg(x, "")).filter(Boolean);
+        // The route from what is known: the memory's fares around the date, the board deal
+        // for the city when there is one. Used when nothing live can be searched.
+        const fallback = async (reason: string, searched = 0, turn = false) => {
+          const known = await knownFares(gateways, originCodes.length ? originCodes : gateways, a.to, addDays(depart, -flex), addDays(depart, flex), depart.slice(0, 7), turn);
+          // Return fares first when a return was asked for, one-ways first otherwise; both are shown.
+          const fares = [...known.fares].sort((x, y) => Number(nights ? y.back != null : y.back == null) - Number(nights ? x.back != null : x.back == null) || x.price - y.price).slice(0, 6);
+          const deals = known.deals.slice(0, 4);
+          return { searched, source: known.source, found: fares.length + deals.length, ...corrected, ...excludedSummary(exclude, [], a.exclude), note: `${reason}; ${known.note}`, itineraries: fares.map(itinFromFare), deals: deals.map(compactDeal), raw: deals };
+        };
+        if (liveOff()) return fallback(kiwiThrottled() ? "Kiwi is throttling this address for a few minutes" : "today's live search budget is spent");
+        const over = exhausted();
+        if (over) return fallback(over.error, 0, true);
+        // The gate memoises a search for a day: only a search that really left the process
+        // counts against the turn and is reported as live; a memo hit is "memo", searched 0.
+        const before = kiwiStats().today;
+        let r;
+        try {
+          r = await searchFlight({ flyFrom: from, flyTo: placeArg(a.to, "anywhere"), departureDate: kiwiDate(depart), departureDateFlexDays: flex, ...(back ? { returnDate: kiwiDate(back), returnDateFlexDays: flex } : {}) });
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          const sentFailed = Math.max(0, kiwiStats().today - before);
+          spend(sentFailed);
+          if (isRateLimit(msg)) return fallback("the live search was refused", sentFailed);
+          throw err;
+        }
+        const sentNow = Math.max(0, kiwiStats().today - before);
+        spend(sentNow);
         // Where an itinerary lands (the outbound's last airport), by country: cities.json first,
         // then the airports file, the way the boards resolve a gateway.
         const landsIn = (code: string) => resolveGateway(code)?.country ?? AIRPORT_BY_IATA.get(code)?.country;
@@ -589,8 +909,155 @@ export function atlasTools(ctx: AgentContext) {
           .slice(0, 6)
           .map((it) => ({ price: Math.round(it.price), to: it.outbound.to, out: it.outbound.departureTime.slice(0, 16), back: it.inbound?.departureTime.slice(0, 16), nights: nightsOf(it), stops: Math.max(it.outbound.stops, it.inbound?.stops ?? 0), via: it.outbound.route.slice(1, -1), carriers: [...new Set([...it.outbound.segments, ...(it.inbound?.segments ?? [])].map((s) => s.carrierName))], hours: Math.round(it.outbound.durationSeconds / 360) / 10, url: it.bookingUrl }));
         const droppedN = r.itineraries.length - kept.length;
-        return { searched: 1, found: items.length, ...excludedSummary(exclude, droppedN ? [`${droppedN} itinerar${droppedN === 1 ? "y" : "ies"} landing in a been country`] : [], a.exclude), itineraries: items };
+        const unknownTo = !placeCountry(a.to) && !/^(anywhere|[A-Za-z]{3})$/i.test((a.to ?? "").trim());
+        const note = items.length ? undefined : droppedN ? `every itinerary landed in a been country` : unknownTo ? unknownPlace("destination", a.to).note : `no itinerary found ${from} to ${a.to} around ${depart}${nights ? ` for ${nights} nights` : ", one way"} (${flex} days flex); try more flex or a nearby airport`;
+        return { searched: sentNow, source: (sentNow ? "live" : "memo") as Source, found: items.length, ...corrected, ...excludedSummary(exclude, droppedN ? [`${droppedN} itinerar${droppedN === 1 ? "y" : "ies"} landing in a been country`] : [], a.exclude), ...(note ? { note } : {}), itineraries: items };
       }),
+    }),
+
+    cheapest_way: tool({
+      description: "The cheapest way from one place to another (and the fastest): one engine that already checks the direct fare, the nearby airports of both sides, a train or coach to a bigger airport then a flight, a flight then ground, two tickets through a hub, open-jaw landings and the ground graph alone, from the fare memory first and then live. Use FIRST whenever the traveller asks how to get from A to B or the cheapest way somewhere. from defaults to where the traveller is. Returns the options ranked (kind, title, total, hours, stops, why, booking links), the cheapest and the fastest, and what was considered, so you can say it. About 12 Kiwi searches at most, under a minute; 24 with harder. Each option says nonstop (true only when no flight leg stops; kind 'direct' means the nearest airports, not a nonstop flight) and the answer says whether each end was placed (an unplaced end is a name nobody could put on the map, so never say 'from X' for it).",
+      inputSchema: jsonSchema<{ from?: string; to: string; depart?: string; flex?: number; nights?: number; oneWay?: boolean; maxHours?: number; harder?: boolean; exclude?: string[]; allow?: string[] }>({
+        type: "object",
+        properties: {
+          from: { type: "string", description: "a city, an airport code, a place name or 'lat,lon'; default the traveller's place" },
+          to: { type: "string", description: "a city, an airport code, a place name or 'lat,lon'" },
+          depart: { type: "string", description: "YYYY-MM-DD; default three weeks out" },
+          flex: { type: "number", description: "days either side, 0 to 3, default 2" },
+          nights: { type: "number", description: "nights there for a return, default 4; set oneWay for no return" },
+          oneWay: { type: "boolean" },
+          maxHours: { type: "number", description: "door to door; options longer than this are dropped" },
+          harder: { type: "boolean", description: "true when the traveller says 'search harder', 'look harder', 'exhaust', 'every option': twice the searches (24) and more time for the hubs" },
+          ...BEEN_PROPS,
+        },
+        required: ["to"],
+      }),
+      execute: safe(async (a) => {
+        const to = String(a.to ?? "").trim();
+        if (!to) return { error: "a destination is needed" };
+        // The traveller's place when no origin is given: its name when the engine knows it (a
+        // city, an airport's town), else their location as lat,lon (the engine resolves it to
+        // the nearest airports) with the name put back on the answer afterwards, so the model
+        // never reads "45.66, 25.60" as a place; with no location at all, their main airport.
+        const given = String(a.from ?? "").trim();
+        const originName = ctx.origin?.label?.trim() ?? "";
+        const originKnown = !!originName && !!resolvePlace(originName);
+        const coord = ctx.origin ? `${ctx.origin.lat.toFixed(2)}, ${ctx.origin.lon.toFixed(2)}` : "";
+        const from = given || (ctx.origin ? (originKnown ? originName : `${ctx.origin.lat.toFixed(3)},${ctx.origin.lon.toFixed(3)}`) : gateways[0]);
+        const relabel = !given && !!ctx.origin && !originKnown && !!originName;
+        const fixName = (s: string) => (relabel && s === coord ? originName : s);
+        const fixText = (s: string) => (relabel && coord ? s.split(coord).join(originName) : s);
+        const corrections: string[] = [];
+        // The departure the engine prices: the day given, else three weeks out (the engine's
+        // own default, computed here so the answer always says the day and the globe can
+        // redraw the same window).
+        let depart = addDays(ctx.today, 21);
+        if (a.depart != null && String(a.depart).trim()) {
+          const d = futureDay(a.depart, ctx.today, "the departure");
+          if (!d.day) return { error: d.note! };
+          if (d.note) corrections.push(d.note);
+          depart = d.day;
+        } else corrections.push(`no departure given; priced ${depart}, three weeks out, say so`);
+        const flex = Math.min(3, Math.max(0, Math.round(a.flex ?? 2)));
+        const nights = a.oneWay ? null : Math.min(60, Math.max(1, Math.round(a.nights ?? 4)));
+        // The engine never searches a window that starts in the past (Kiwi would answer
+        // nothing and the empty answer would be memoised): a departure within flex days of
+        // today is searched from today, and the answer says so. The engine trims against the
+        // server's UTC day, not the browser's (ctx.today may be a day ahead or behind it), so
+        // the line is decided against that same day, or it could name a day the engine did
+        // not search from, or fire when the engine did not trim.
+        const engineToday = new Date().toISOString().slice(0, 10);
+        if (addDays(depart, -flex) < engineToday) corrections.push(`the window around ${depart} with ${flex} days flex would start before today; searched from today (${engineToday}) to ${addDays(depart, flex)} instead`);
+        const corrected = corrections.length ? { corrected: corrections.join("; ") } : {};
+        const exclude = excludeOf(a.exclude, a.allow);
+        const toCountry = placeCountry(to);
+        if (toCountry && !countryAllowed(toCountry, exclude)) return { searched: 0, source: "none" as Source, options: [], note: excludedNote([toCountry]) };
+        // The engine spends from the turn's budget: at most ROUTE_SEARCHES (twice that when
+        // the traveller asked to look harder), fewer when the turn has less left (the engine
+        // floors its budget at one, so a spent turn is answered with the usual note before it
+        // runs). When live prices are off the budget of one is never sent: Kiwi's gate refuses
+        // it inside the process (or the engine skips it while the breaker is open), and the
+        // engine answers from the fare memory and the ground graph alone; the tool's own note
+        // then says so (the engine's note for an empty answer under a budget of one reads
+        // "no way found", which is not what happened).
+        const offBefore = liveOff();
+        if (!offBefore) {
+          const over = exhausted();
+          if (over) return { ...plain(`${over.error}; cheapest_way needs at least one live search`), options: [] };
+        }
+        const harder = a.harder === true;
+        const budgetNow = offBefore ? 1 : Math.min(harder ? ROUTE_SEARCHES_HARDER : ROUTE_SEARCHES, searchesLeft());
+        // The engine's clock: its usual limit (longer when asked to look harder), and never
+        // past what is left of the turn, so the tool cannot outlast the turn it runs in.
+        const deadlineMs = Math.max(10_000, Math.min(harder ? ROUTE_DEADLINE_HARDER_MS : ROUTE_DEADLINE_MS, turnLeftMs() - DEADLINE_MARGIN_MS));
+        const query = { from, to, depart, flex, nights: nights ?? undefined, oneWay: !!a.oneWay, maxHours: a.maxHours, exclude, budget: budgetNow, deadlineMs };
+        trace("cheapestWay", query);
+        // The engine counts memo hits as searches and its whole answer is memoised for an
+        // hour: what left the process now is the gate's own count, and that is what the turn
+        // is charged and the answer calls live.
+        const before = kiwiStats().today;
+        const r: RouteResult = await cheapestWay(query);
+        const sentNow = Math.max(0, kiwiStats().today - before);
+        spend(sentNow);
+        // The origin's name put back everywhere the engine wrote its coordinates: the labels,
+        // the legs (from, fromName, to, toName; the way back lands at the origin too), the
+        // titles and the why lines. The raw payload is relabelled first and the compact fields
+        // are read from it, so a card or a globe path that reads raw legs never prints
+        // "45.66, 25.60" as a town. The option objects are mapped once, so the cheapest and
+        // the fastest stay the same objects as their entries in the list.
+        const fixLeg = (l: RouteLeg): RouteLeg => ({ ...l, from: fixName(l.from), fromName: fixName(l.fromName), to: fixName(l.to), toName: fixName(l.toName) });
+        const fixOption = (o: RouteOption): RouteOption => ({ ...o, title: fixText(o.title), why: fixText(o.why), legs: o.legs.map(fixLeg), ...(o.back ? { back: o.back.map(fixLeg) } : {}) });
+        const fixed = new Map(r.options.map((o) => [o, relabel ? fixOption(o) : o] as const));
+        const pick = (o: RouteOption | null): RouteOption | null => (o ? (fixed.get(o) ?? (relabel ? fixOption(o) : o)) : null);
+        const raw: RouteResult = relabel ? { ...r, from: { ...r.from, label: originName }, options: [...fixed.values()], cheapest: pick(r.cheapest), fastest: pick(r.fastest), considered: r.considered.map(fixText), ...(r.note ? { note: fixText(r.note) } : {}) } : r;
+        // A fly leg taken from the fare memory (RouteLeg.remembered) says so on its line.
+        const leg = (l: RouteLeg) => `${l.kind} ${l.fromName || l.from} to ${l.toName || l.to}${l.date ? ` on ${l.date}` : ""}, ${Math.round((l.minutes / 60) * 10) / 10} h${l.price != null ? `, €${l.price}${l.estimated ? " (estimate)" : ""}` : ""}${l.carrier ? `, ${l.carrier}` : ""}${l.remembered ? " (remembered fare)" : ""}`;
+        // nonstop is the engine's own flag (true only when no flight leg stops); kind "direct"
+        // means the nearest airports on both sides and may well be a one-stop ticket.
+        const compact = (o: RouteOption) => ({ kind: o.kind, title: o.title, total: o.total, hours: o.hours, stops: o.stops, nonstop: o.nonstop === true, why: o.why, legs: o.legs.map(leg), ...(o.back?.length ? { back: o.back.map(leg), backTotal: o.backTotal } : {}), urls: o.urls.slice(0, 4), cheapest: raw.cheapest === o || undefined, fastest: raw.fastest === o || undefined });
+        const live = sentNow > 0;
+        // The engine's count without a search leaving: the same question within the hour.
+        const memoHit = !live && r.searched > 0;
+        const failedAll = r.failed > 0 && r.failed >= r.searched && !live;
+        // A remembered fare: the engine lists its sources (RouteResult.sources, "memory" when
+        // an option was built from the fare memory) and marks such legs (RouteLeg.remembered).
+        const fromMemory = r.sources.includes("memory");
+        // An end the engine could not place (no data of ours knows it, Kiwi found nothing): the
+        // answer says so, so the model never writes "from X" for a name nobody could map.
+        const placed = { from: r.from.placed !== false, to: r.to.placed !== false };
+        const fromLabel = relabel ? originName : r.from.label;
+        // The note is decided from the tool's own state first: when live prices were off
+        // before the run, or every search of the run was refused, it is the rate-limit
+        // sentence, whatever the engine wrote (under a budget of one the engine's own note for
+        // an empty answer says no way was found, when nothing was searched). The engine's
+        // detail for that case is still in `considered` ("1 search not made while Kiwi
+        // throttles this address"). Otherwise the engine's note leads.
+        const fallback = offBefore || failedAll;
+        const offReason = offBefore ? (kiwiThrottled() ? "Kiwi is throttling this address for a few minutes" : "today's live search budget is spent") : "every live search was refused";
+        const note = fallback
+          ? `${offReason}; ${RATE_NOTE}; ${r.options.length ? "the fares shown are remembered ones and ground estimates, no live search was made" : "nothing stored between these places yet"}. Offer to try again in a few minutes.`
+          : (r.note ?? (!r.options.length ? `no way found between ${fromLabel} and ${r.to.label} around ${depart}; try another date or a nearby city` : live ? (r.failed ? `${r.failed} of ${r.searched} live searches failed (Kiwi refused); some options may be missing` : undefined) : memoHit ? "the same question was answered within the hour, no new search was made" : "answered from the fare memory and the ground graph, no live search was needed"));
+        return {
+          from: fromLabel,
+          to: r.to.label,
+          depart,
+          flex,
+          nights,
+          placed,
+          searched: sentNow,
+          source: (live ? "live" : memoHit ? "memo" : fromMemory ? "memory" : "data") as Source,
+          ...corrected,
+          ...excludedSummary(exclude, [], a.exclude),
+          ...(!placed.from || !placed.to ? { unplaced: `${[!placed.from ? fromLabel : "", !placed.to ? r.to.label : ""].filter(Boolean).join(" and ")} could not be placed on the map; name the nearest city or airport instead` } : {}),
+          considered: raw.considered.slice(0, 12),
+          ...(note ? { note: fixText(note) } : {}),
+          cheapest: raw.cheapest ? compact(raw.cheapest) : null,
+          fastest: raw.fastest && raw.fastest !== raw.cheapest ? compact(raw.fastest) : null,
+          options: raw.options.slice(0, 6).map(compact),
+          raw,
+        };
+      }),
+      toModelOutput: withoutRaw,
     }),
 
     two_city_combos: tool({
@@ -601,34 +1068,51 @@ export function atlasTools(ctx: AgentContext) {
         required: ["from", "dst", "city", "out", "back", "price"],
       }),
       execute: safe(async (a) => {
-        const over = exhausted();
-        if (over) return over;
         const exclude = excludeOf(a.exclude, a.allow);
-        const city = findCity(a.city)?.[0] ?? a.city.toUpperCase();
+        const cityHit = findCity(a.city ?? "");
+        if (!cityHit && !CITIES[(a.city ?? "").toUpperCase()]) return { ...unknownPlace("destination city", a.city ?? ""), combos: [] };
+        const city = cityHit?.[0] ?? a.city.toUpperCase();
         const from = airportArg(a.from, gateways[0]) || gateways[0];
-        const dst = airportArg(a.dst, "") || a.dst.toUpperCase();
-        const r = await findCombos(from, dst, city, a.out, a.back, a.price, { exclude });
+        const dst = airportArg(a.dst, "") || CITIES[city]?.airports[0] || a.dst.toUpperCase();
+        const out = parseDay(a.out, ctx.today);
+        const back = parseDay(a.back, ctx.today);
+        if (!out || !back) return { error: `the deal's dates are needed as YYYY-MM-DD (got out ${a.out}, back ${a.back})` };
+        const base = Number.isFinite(a.price) ? Math.round(a.price) : 0;
+        // The neighbours are known without a search: when nothing live can be searched the
+        // answer still names them with the ground leg, under the rate-limit note.
+        const neighbours = () => neighboursOf(city).filter((n) => countryAllowed(CITIES[n.code]?.country, exclude)).slice(0, 4).map((n) => ({ next: CITIES[n.code]?.name ?? n.code, country: CITIES[n.code]?.country, ground: `${n.mode} ${Math.round((n.minutes / 60) * 10) / 10} h${n.estimated ? " (estimate)" : ""}` }));
+        if (liveOff()) return { searched: 0, source: "data" as Source, base, note: `${kiwiThrottled() ? "Kiwi is throttling this address for a few minutes" : "today's live search budget is spent"}; ${RATE_NOTE}. The neighbours reachable by ground are listed unpriced; offer to price them in a few minutes.`, combos: neighbours() };
+        const over = exhausted();
+        if (over) return { searched: 0, source: "data" as Source, base, note: `${over.error}; the neighbours are listed unpriced`, combos: neighbours() };
+        const r = await findCombos(from, dst, city, out, back, base, { exclude });
         spend(r.searched);
-        return { base: r.base, outOneWay: r.outPrice, ...excludedSummary(exclude, [], a.exclude), ...(r.note ? { note: r.note } : {}), combos: filterByCountry(r.combos, exclude).slice(0, 4).map((c) => ({ next: c.name, country: c.country, ground: `${c.groundMode} ${Math.round((c.groundMin / 60) * 10) / 10} h${c.estimated ? " (estimate)" : ""}`, homeFromThere: c.inPrice, total: c.total, saves: c.saves, outUrl: r.outUrl, homeUrl: c.inUrl })) };
+        const combos = filterByCountry(r.combos, exclude).slice(0, 4).map((c) => ({ next: c.name, country: c.country, ground: `${c.groundMode} ${Math.round((c.groundMin / 60) * 10) / 10} h${c.estimated ? " (estimate)" : ""}`, homeFromThere: c.inPrice, total: c.total, saves: c.saves, outUrl: r.outUrl, homeUrl: c.inUrl }));
+        const note = r.note ?? (!combos.length ? (r.outPrice == null && r.searched ? (liveOff() ? `the live searches were refused; ${RATE_NOTE}; the neighbours are listed unpriced` : `no one-way fare found ${from} to ${dst} on ${out}; the combos need it`) : !neighboursOf(city).length ? `${CITIES[city]?.name ?? city} has no neighbour with an airport within five hours by ground` : `no neighbour of ${CITIES[city]?.name ?? city} had a one-way home on ${back}`) : undefined);
+        return { searched: r.searched, source: "live" as Source, base: r.base, outOneWay: r.outPrice, ...excludedSummary(exclude, [], a.exclude), ...(note ? { note } : {}), combos: combos.length ? combos : neighbours() };
       }),
     }),
 
     wild_trip: tool({
-      description: "A long multi-country loop (7 to 90 nights) into a far region: fly out (via a cheaper hub when that wins), chain cheap one-way flights and border hops through the region, fly home (any of the traveller's airports, plus the last leg to their door), with living costs per stop, visas, a stopover night in a hub when it costs about the same, and a model's verdict. Long trips get longer stays (60 nights is 5 to 7 bases of 8 to 12 nights). Regions: " + Object.entries(REGIONS).map(([k, v]) => `${k} (${v.label})`).join(", ") + ". Style: experiences, beaches, food, cities, slow. Budget: backpacker, mid, comfort. Tradeoff: price, balanced, comfort. variants=3 builds the balanced, cheapest and comfortable versions and ranks them. noHubs skips the positioning hub. Either month (YYYY-MM) or an explicit departure window from/to (a window works with variants too; one wider than ten days is clipped to its first ten). Optional custom country list, countries to favour, max stops, nights per stop. Cost: about sixty Kiwi searches per variant that is not already built (one to two minutes each), so variants=3 is about 180 when none is stored, more than one turn's budget of " + TURN_SEARCH_BUDGET + "; the tool builds only as many variants as the budget left allows (stored ones are free), and a trip built in the last day is served at no cost. Default to one variant; say so before calling. Excluded (been) countries never become a stop or the optional hub night; flying through a hub there to position is fine.",
-      inputSchema: jsonSchema<{ region: Region; nights?: number; style?: Style; budget?: Budget; month?: string; from?: string; to?: string; countries?: string[]; prefer?: string[]; maxStops?: number; nightsPerStop?: number; stopover?: boolean; tradeoff?: Tradeoff; noHubs?: boolean; variants?: number; exclude?: string[]; allow?: string[] }>({
+      description: "A long multi-country loop (5 to 90 nights) into a far region (or region 'custom' with a countries list anywhere): fly out (via a cheaper hub when that wins), chain cheap one-way flights and border hops through the region, fly home (any of the traveller's airports, plus the last leg to their door), with living costs per stop, visas, a stopover night in a hub when it costs about the same, and a model's verdict. Long trips get longer stays (60 nights is 5 to 7 bases of 8 to 12 nights). Regions: " + Object.entries(REGIONS).map(([k, v]) => `${k} (${v.label})`).join(", ") + ". Style: experiences, beaches, food, cities, slow. Budget: backpacker, mid, comfort. Tradeoff: price, balanced, comfort. variants=3 builds the balanced, cheapest and comfortable versions and ranks them. noHubs skips the positioning hub. Either month (YYYY-MM) or an explicit departure window from/to (a window works with variants too; one wider than ten days is clipped to its first ten). Optional custom country list, countries to favour, max stops, nights per stop (or a range with nightsPerStopMax), cities the chain must pass through, a cap on hours per flight, airports to start from, and the traveller's own wishes in words. Cost: about sixty Kiwi searches per variant that is not already built (one to two minutes each), so variants=3 is about 180 when none is stored, more than one turn's budget of " + TURN_SEARCH_BUDGET + "; the tool builds only as many variants as the budget left allows (stored ones are free), and a trip built in the last day is served at no cost. Default to one variant; say so before calling. Excluded (been) countries never become a stop or the optional hub night; flying through a hub there to position is fine.",
+      inputSchema: jsonSchema<{ region: Region; nights?: number; style?: Style; budget?: Budget; month?: string; from?: string; to?: string; countries?: string[]; prefer?: string[]; maxStops?: number; nightsPerStop?: number; nightsPerStopMax?: number; mustInclude?: string[]; maxFlightHours?: number; startFrom?: string[]; wishes?: string; stopover?: boolean; tradeoff?: Tradeoff; noHubs?: boolean; variants?: number; exclude?: string[]; allow?: string[] }>({
         type: "object",
         properties: {
-          region: { type: "string", enum: Object.keys(REGIONS) },
-          nights: { type: "number", description: "7 to 90, default 14" },
+          region: { type: "string", enum: Object.keys(REGIONS), description: "a far region, or 'custom' with countries. Whenever countries is given the trip is keyed as region 'custom' whatever region is named here (the engine, /api/wild and the Wild tab do the same), so the key the tool returns says custom" },
+          nights: { type: "number", description: "5 to 90, default 14" },
           style: { type: "string", enum: ["experiences", "beaches", "food", "cities", "slow"] },
           budget: { type: "string", enum: ["backpacker", "mid", "comfort"] },
           month: { type: "string", description: "YYYY-MM" },
           from: { type: "string", description: "YYYY-MM-DD, earliest departure (used instead of month)" },
           to: { type: "string", description: "YYYY-MM-DD, latest departure" },
-          countries: { type: "array", items: { type: "string" }, description: "ISO2 codes to restrict to, e.g. ['VN','TH']" },
-          prefer: { type: "array", items: { type: "string" }, description: "ISO2 codes to favour" },
-          maxStops: { type: "number" },
+          countries: { type: "array", items: { type: "string" }, description: "countries to restrict to, names or ISO2 codes, up to 8 (required with region 'custom')" },
+          prefer: { type: "array", items: { type: "string" }, description: "countries to favour, names or ISO2 codes" },
+          maxStops: { type: "number", description: "1 to 8" },
           nightsPerStop: { type: "number" },
+          nightsPerStopMax: { type: "number", description: "with nightsPerStop, the top of the range a stop may run (the cheapest day wins)" },
+          mustInclude: { type: "array", items: { type: "string" }, description: "cities the chain must pass through, names or codes, up to 8" },
+          maxFlightHours: { type: "number", description: "the longest any flight may take, 1 to 40 hours door to door" },
+          startFrom: { type: "array", items: { type: "string" }, description: "IATA codes to fly out from instead of the traveller's airports (up to 3); the way home still lands at theirs" },
+          wishes: { type: "string", description: "the traveller's own words about the trip ('temples and street food, no beaches'), up to 300 characters" },
           stopover: { type: "boolean", description: "allow a hub night on the way home, default true" },
           tradeoff: { type: "string", enum: ["price", "balanced", "comfort"] },
           noHubs: { type: "boolean", description: "fly only from the traveller's own airports" },
@@ -638,36 +1122,103 @@ export function atlasTools(ctx: AgentContext) {
         required: ["region"],
       }),
       execute: safe(async (a) => {
-        if (!Object.hasOwn(REGIONS, a.region)) return { error: `unknown region ${a.region}; one of ${Object.keys(REGIONS).join(", ")}` };
-        const nights = Math.min(90, Math.max(7, Math.round(a.nights ?? 14)));
-        const style = a.style ?? "experiences";
-        const budget = a.budget ?? "mid";
-        const month = a.month ?? ctx.month;
-        const from = isoDay(a.from) ? a.from : undefined;
-        const to = isoDay(a.to) ? a.to : undefined;
+        // A region written as its label ("Southeast Asia") or loosely is matched to its key.
+        const regionKey = (Object.keys(REGIONS) as Region[]).find((k) => k === a.region || fold(k) === fold(String(a.region ?? "")) || fold(REGIONS[k].label) === fold(String(a.region ?? "")));
+        if (!regionKey) return { error: `unknown region ${a.region}; one of ${Object.keys(REGIONS).join(", ")}` };
+        const nights = Math.min(90, Math.max(5, Math.round(a.nights ?? 14)));
+        const style = (["experiences", "beaches", "food", "cities", "slow"] as Style[]).includes(a.style as Style) ? a.style! : "experiences";
+        const budget = (["backpacker", "mid", "comfort"] as Budget[]).includes(a.budget as Budget) ? a.budget! : "mid";
+        const month = a.month && /^\d{4}-\d{2}$/.test(a.month) ? a.month : ctx.month;
+        const corrections: string[] = [];
+        let from = parseDay(a.from, ctx.today) ?? undefined;
+        let to = parseDay(a.to, ctx.today) ?? undefined;
+        if (from && from < ctx.today) {
+          corrections.push(`the departure window started in the past (${from}); moved to today`);
+          from = ctx.today;
+        }
+        if (from && to && to < from) {
+          corrections.push(`the window ended (${to}) before it started (${from}); set to ${from} plus ten days`);
+          to = addDays(from, 10);
+        }
+        const corrected = corrections.length ? { corrected: corrections.join("; ") } : {};
         // Been countries drop out of a custom list and the favourites before the build; a list
         // that was all been countries is an answer, not a build.
         const exclude = excludeOf(a.exclude, a.allow);
-        const given = a.countries?.map((c) => c.toUpperCase()).filter((c) => /^[A-Z]{2}$/.test(c));
+        const given = a.countries?.map((c) => countryCode(String(c ?? "").trim()) ?? String(c ?? "").trim().toUpperCase()).filter((c) => /^[A-Z]{2}$/.test(c)).slice(0, 8);
         const countries = given?.filter((c) => countryAllowed(c, exclude));
-        if (given?.length && !countries?.length) return { error: excludedNote(given) };
-        const prefer = a.prefer?.map((c) => c.toUpperCase()).filter((c) => /^[A-Z]{2}$/.test(c) && countryAllowed(c, exclude));
+        if (given?.length && !countries?.length) return plain(excludedNote(given));
+        if (a.countries?.length && !given?.length) return plain(`none of ${a.countries.join(", ")} is a country I know; use names or ISO2 codes (VN, TH)`, "data");
+        if (regionKey === "custom" && !countries?.length) return plain("region custom needs a countries list (names or codes); pick a region or name the countries", "data");
+        // A country list replaces the region's list whatever region was named: the engine
+        // labels the trip by its countries and /api/wild and /api/plan store it under region
+        // custom, so the chat keys it the same way and the Wild tab finds the same trip.
+        a = { ...a, region: countries?.length ? "custom" : regionKey };
+        const prefer =a.prefer?.map((c) => countryCode(String(c ?? "").trim()) ?? String(c ?? "").trim().toUpperCase()).filter((c) => /^[A-Z]{2}$/.test(c) && countryAllowed(c, exclude));
+        // The engine's finer constraints, bounded here so a wild input never reaches it: they
+        // shape the stored trip's key too (customKey's extras), so plan_days finds the trip.
+        const strList = (v: unknown, max: number, len: number) => (Array.isArray(v) ? v.map((x) => String(x ?? "").trim().slice(0, len)).filter(Boolean).slice(0, max) : []);
+        const mustInclude = strList(a.mustInclude, 8, 40);
+        const startFrom = strList(a.startFrom, 3, 3).map((x) => x.toUpperCase()).filter((x) => /^[A-Z]{3}$/.test(x));
+        const maxFlightHours = Number.isFinite(a.maxFlightHours) && a.maxFlightHours! > 0 ? Math.min(40, Math.max(1, Math.round(a.maxFlightHours!))) : undefined;
+        const wishes = typeof a.wishes === "string" && a.wishes.trim() ? a.wishes.trim().slice(0, 300) : undefined;
+        const nightsPerStopMax = Number.isFinite(a.nightsPerStopMax) && a.nightsPerStop && a.nightsPerStopMax! > a.nightsPerStop ? Math.round(a.nightsPerStopMax!) : undefined;
+        const extras = { ...(mustInclude.length ? { mustInclude } : {}), ...(startFrom.length ? { startFrom } : {}), ...(maxFlightHours ? { maxFlightHours } : {}), ...(wishes ? { wishes } : {}), ...(nightsPerStopMax ? { nightsPerStopMax } : {}) };
         const summarise = (trip: WildTrip) => ({
           title: trip.title,
           dates: `${trip.outDate} to ${trip.backDate}`,
           totals: trip.totals,
           legs: trip.legs.map((l) => (l.kind === "fly" ? `${l.date} fly ${l.fromName} → ${l.toName} €${l.price}, ${l.hours} h, ${l.stops ? `${l.stops} stop` : "direct"}` : `${l.date} ${l.mode} ${l.fromName} → ${l.toName} ~${Math.round(l.minutes / 60)} h`)),
           stops: trip.stops.map((s) => `${s.name} (${s.country}) ${s.nights} nights, about €${s.perDay}/day${s.visa ? `, ${s.visa}` : ""}${s.note ? `; ${s.note}` : ""}`),
-          judge: trip.judge,
+          ...(trip.constraints?.length ? { constraints: trip.constraints } : {}),
+          ...(trip.judge ? { judge: trip.judge } : { judge: null }),
         });
         // The key plan_days needs to find the stored trip again: the same custom suffix the
         // trip was written under, window and been list included (lib/wild.ts customKey takes
         // from, to and exclude), which is also what lib/wild-variants.ts keys each ranked
         // version on. A build with countries excluded never answers for a plain one.
-        const keyOf = (tradeoff?: Tradeoff, noHubs?: boolean) => ({ region: a.region, nights, style, budget, month, custom: customKey(countries, prefer, a.maxStops, a.nightsPerStop, tradeoff, noHubs, from, to, exclude.length ? exclude : undefined) });
+        const keyOf = (tradeoff?: Tradeoff, noHubs?: boolean) => ({ region: a.region, nights, style, budget, month, custom: customKey(countries, prefer, a.maxStops, a.nightsPerStop, tradeoff, noHubs, from, to, exclude.length ? exclude : undefined, extras) });
+        /** The key of the undated copy of the same loop (no month, no window), when that is
+         * what answers: its month is the literal "next" so plan_days reads the file it was
+         * stored under (wildPath writes "next" for no month) whatever month the app has
+         * selected, and never the dated path, where no such trip exists. */
+        const undatedKeyOf = (tradeoff?: Tradeoff, noHubs?: boolean) => ({ region: a.region, nights, style, budget, month: "next", custom: customKey(countries, prefer, a.maxStops, a.nightsPerStop, tradeoff, noHubs, undefined, undefined, exclude.length ? exclude : undefined, extras) });
         const gw = mainGateway(gateways);
-        const params = { gateways, home: ctx.home, region: a.region, month, from, to, nights, style, budget, origin: ctx.origin, stopover: a.stopover, countries, prefer, maxStops: a.maxStops, nightsPerStop: a.nightsPerStop, exclude };
-        const pathOf = (tradeoff?: Tradeoff, noHubs?: boolean) => wildPath(gw, a.region, month, nights, style, budget, keyOf(tradeoff, noHubs).custom);
+        // The engine's deadline sits a little before the race fires: past it the chain stops
+        // growing and the way home is searched from the stops found, so a time-capped turn
+        // gets a whole (shorter) loop back instead of only a stored copy or a note.
+        const deadline = Date.now() + WILD_BUILD_MS - DEADLINE_MARGIN_MS;
+        const params = { gateways, home: ctx.home, region: a.region, month, from, to, nights, style, budget, origin: ctx.origin, stopover: a.stopover, countries, prefer, maxStops: a.maxStops, nightsPerStop: a.nightsPerStop, exclude, deadline, ...extras };
+        /** The loop came back after its deadline: it was closed early, and the answer says so. */
+        const cutShort = (trip: WildTrip): { partial?: true; note?: string } => (Date.now() > deadline && Date.parse(trip.generatedAt) > deadline ? { partial: true, note: `the build reached its time cap, so the loop was closed from the stops found by then and may be shorter than asked; ask again in two minutes for a fuller one` } : {});
+        /** A refusal the engine states in a plain sentence (a must city on the been list, too
+         * few nights, an unknown start airport): the sentence as is, so the model repeats it. A
+         * throttle sentence is a rate limit, answered with the stored copy when there is one. */
+        const refusal = (err: unknown, tradeoff?: Tradeoff, noHubs?: boolean) => {
+          const msg = (err instanceof Error ? err.message : String(err)).replace(/\s+/g, " ").trim() || "the build failed";
+          if (isRateLimit(msg)) return partial(msg, tradeoff, noHubs);
+          return Promise.resolve({ ...plain(msg, "data"), ...corrected, ...excludedSummary(exclude, [], a.exclude), key: keyOf(tradeoff, noHubs) });
+        };
+        const pathOf =(tradeoff?: Tradeoff, noHubs?: boolean) => wildPath(gw, a.region, month, nights, style, budget, keyOf(tradeoff, noHubs).custom);
+        // What answers when a build cannot run or finish: the same trip stored earlier (any
+        // age), then the undated version of the same loop, each under a plain note. A build
+        // that ran out of time keeps going in the background and is stored, so the next ask
+        // (a minute later) is served from the store at no cost.
+        const storedAnyAge = async (tradeoff?: Tradeoff, noHubs?: boolean): Promise<{ trip: WildTrip; ageHours: number; dated: boolean } | null> => {
+          const same = await readJson<WildTrip>(pathOf(tradeoff, noHubs)).catch(() => null);
+          if (same) return { trip: same.body, ageHours: same.ageHours, dated: true };
+          if (month || from) {
+            const undated = await readJson<WildTrip>(wildPath(gw, a.region, undefined, nights, style, budget, undatedKeyOf(tradeoff, noHubs).custom)).catch(() => null);
+            if (undated) return { trip: undated.body, ageHours: undated.ageHours, dated: false };
+          }
+          return null;
+        };
+        /** The key of the copy that answered: the dated one, or the undated loop's own key. */
+        const keyOfCopy = (dated: boolean, tradeoff?: Tradeoff, noHubs?: boolean) => (dated ? keyOf(tradeoff, noHubs) : undatedKeyOf(tradeoff, noHubs));
+        const partial = async (reason: string, tradeoff?: Tradeoff, noHubs?: boolean, searched = 0) => {
+          const got = await storedAnyAge(tradeoff, noHubs);
+          if (got) return { ...summarise(got.trip), ...corrected, ...excludedSummary(exclude, [], a.exclude), searched, source: "stored" as Source, ...(got.dated ? {} : { undated: true }), note: `${reason}; this is the ${got.dated ? "same" : "undated"} loop built ${Math.round(got.ageHours)} hours ago, from the store${got.dated ? "" : " (built for no particular dates, so its days are not the ones asked)"}${liveOff() ? `; ${RATE_NOTE}` : ""}`, key: keyOfCopy(got.dated, tradeoff, noHubs), raw: got.trip };
+          return { ...corrected, ...excludedSummary(exclude, [], a.exclude), searched, source: "none" as Source, note: `${reason}; no version of this loop is stored yet${liveOff() ? `. ${RATE_NOTE}; offer to build it in a few minutes` : ". Offer to ask again in two minutes: the build goes on in the background and is stored when done"}`, key: keyOf(tradeoff, noHubs) };
+        };
         if ((a.variants ?? 1) > 1) {
           // The engine builds and ranks the versions (dated windows included, each stored under
           // its own window key); the chat caps them like the wild route: three, two past 28 nights.
@@ -687,48 +1238,106 @@ export function atlasTools(ctx: AgentContext) {
             toBuild = fresh.slice(0, wanted).filter((f) => !f).length;
           }
           if (toBuild > 0) {
+            if (liveOff()) return partial(kiwiThrottled() ? "Kiwi is throttling this address for a few minutes, so no version could be built" : "today's live search budget is spent, so no version could be built", VARIANTS[0].tradeoff, VARIANTS[0].noHubs);
             const over = exhausted();
-            if (over) return over;
+            if (over) return partial(over.error, VARIANTS[0].tradeoff, VARIANTS[0].noHubs);
           }
-          const ranked = await buildWildVariants(params, wanted);
+          // The variants build in parallel and each is stored as it finishes; past the time
+          // cap the ones done so far are read back and ranked, the rest go on in the background.
+          trace("buildWildVariants", { ...params, variants: wanted });
+          const building = buildWildVariants(params, wanted);
+          let ranked: Awaited<typeof building> | null;
+          try {
+            ranked = await Promise.race([building, sleep(WILD_BUILD_MS).then(() => null)]);
+          } catch (err) {
+            // No variant built and one refused with a plain sentence (the wrapper rethrows the first).
+            return refusal(err, VARIANTS[0].tradeoff, VARIANTS[0].noHubs);
+          }
+          if (!ranked) {
+            void building.catch(() => null);
+            const done = (await Promise.all(VARIANTS.slice(0, wanted).map(async (v) => ({ v, got: await storedAnyAge(v.tradeoff, v.noHubs) })))).filter((x): x is { v: (typeof VARIANTS)[number]; got: NonNullable<Awaited<ReturnType<typeof storedAnyAge>>> } => !!x.got);
+            if (!done.length) return partial(`the build did not finish in ${Math.round(WILD_BUILD_MS / 1000)} seconds`, VARIANTS[0].tradeoff, VARIANTS[0].noHubs);
+            const spentNow = done.reduce((n, x) => n + (builtNow(x.got.trip) ? x.got.trip.searched ?? 0 : 0), 0);
+            spend(spentNow);
+            // Only a copy built for these dates is a version that is ready; an undated copy of
+            // the same loop (storedAnyAge falls back to it) is listed after them, marked as
+            // such, with its own key, so plan_days reads the file it is stored under and the
+            // model never presents its days as the ones asked for.
+            const ready = done.filter((x) => x.got.dated);
+            const undated = done.filter((x) => !x.got.dated);
+            const list = [...ready, ...undated];
+            const undatedLine = undated.length ? `; ${undated.length === 1 ? "one version is" : `${undated.length} versions are`} the undated loop built earlier (${undated.map((x) => x.v.label).join(", ")}), shown in its place with its own key, its days not the ones asked` : "";
+            return { ...corrected, ...excludedSummary(exclude, [], a.exclude), searched: spentNow, source: "stored" as Source, note: `the build did not finish in ${Math.round(WILD_BUILD_MS / 1000)} seconds; ${ready.length} of ${wanted} versions are ready${undatedLine} (the rest keep building and are stored; ask again in two minutes for the full ranking)`, ranked: list.map((x, i) => ({ rank: i + 1, variant: x.v.label, key: keyOfCopy(x.got.dated, x.v.tradeoff, x.v.noHubs), ...(x.got.dated ? {} : { undated: true }), ...summarise(x.got.trip) })), key: keyOfCopy(list[0].got.dated, list[0].v.tradeoff, list[0].v.noHubs), raw: list[0].got.trip };
+          }
           // Only the variants built during this turn cost searches; a stored one carries the
           // count of the run that made it. (A built variant that the engine dropped as a
           // duplicate of another chain is not charged; it is rare and errs on the cheap side.)
-          spend(ranked.reduce((n, t) => n + (builtNow(t) ? t.searched ?? 0 : 0), 0));
-          if (!ranked.length) return { error: "no way into that region on those dates from here; try another month or region" };
+          const spent = ranked.reduce((n, t) => n + (builtNow(t) ? t.searched ?? 0 : 0), 0);
+          spend(spent);
+          if (!ranked.length) return partial(liveOff() ? "every live search was refused" : "no way into that region on those dates from here; try another month or region", VARIANTS[0].tradeoff, VARIANTS[0].noHubs, spent);
           const variantKey = (label: string) => {
             const v = VARIANTS.find((x) => x.label === label) ?? VARIANTS[0];
             return keyOf(v.tradeoff, v.noHubs);
           };
-          return { ...excludedSummary(exclude, [], a.exclude), ranked: ranked.map((t) => ({ rank: t.rank, variant: t.variant, score: t.score, key: variantKey(t.variant), ...summarise(t) })), key: variantKey(ranked[0].variant), raw: ranked[0] };
+          // Any ranked version closed at the deadline makes the answer partial, not only the
+          // first: a fresh stored variant may rank above the one built (and cut) just now.
+          const cut = ranked.map((t) => ({ variant: t.variant, ...cutShort(t) })).find((c) => c.partial);
+          const fewer = ranked.length < wanted ? `${ranked.length} of ${wanted} versions could be built` : "";
+          const cutNote = cut?.note ? `${cut.variant}: ${cut.note}` : "";
+          return { ...corrected, ...excludedSummary(exclude, [], a.exclude), searched: spent, source: (spent ? "live" : "stored") as Source, ...(cut?.partial ? { partial: true } : {}), ...(fewer || cutNote ? { note: [fewer, cutNote].filter(Boolean).join("; ") } : {}), ranked: ranked.map((t) => ({ rank: t.rank, variant: t.variant, score: t.score, key: variantKey(t.variant), ...summarise(t) })), key: variantKey(ranked[0].variant), raw: ranked[0] };
         }
         const key = keyOf(a.tradeoff, a.noHubs);
         const path = pathOf(a.tradeoff, a.noHubs);
-        const stored = await readJson<WildTrip>(path);
+        const stored = await readJson<WildTrip>(path).catch(() => null);
         let trip = stored && stored.ageHours < 24 ? stored.body : null;
+        let spent = 0;
         if (!trip) {
           // The budget is checked only once a build is really needed: a stored trip is free.
+          if (liveOff()) return partial(kiwiThrottled() ? "Kiwi is throttling this address for a few minutes, so the loop could not be built" : "today's live search budget is spent, so the loop could not be built", a.tradeoff, a.noHubs);
           const over = exhausted();
-          if (over) return over;
-          const built = await buildWild({ ...params, tradeoff: a.tradeoff, noHubs: a.noHubs });
-          if (!built) return { error: "no way into that region on those dates from here; try another month or region" };
-          spend(built.searched);
-          const judge = await judgeTrip(built);
-          trip = { ...built, judge: judge ?? undefined };
-          await writeJson(path, trip).catch(() => null);
+          if (over) return partial(over.error, a.tradeoff, a.noHubs);
+          // The build is capped in time: the engine closes the loop at its deadline, and a
+          // build still running at the race goes on in the background and is stored with its
+          // verdict, so the next ask is served from the store.
+          trace("buildWild", { ...params, tradeoff: a.tradeoff, noHubs: a.noHubs });
+          const building = buildWild({ ...params, tradeoff: a.tradeoff, noHubs: a.noHubs }).then(async (built) => {
+            if (!built) return null;
+            const judge = await judgeTrip(built).catch(() => null);
+            const full: WildTrip = { ...built, judge: judge ?? undefined };
+            await writeJson(path, full).catch(() => null);
+            return full;
+          });
+          // undefined means the clock won, null means the engine found no way in.
+          let built: WildTrip | null | undefined;
+          try {
+            built = await Promise.race([building, sleep(WILD_BUILD_MS).then(() => undefined)]);
+          } catch (err) {
+            return refusal(err, a.tradeoff, a.noHubs);
+          }
+          if (built === undefined) {
+            void building.catch(() => null);
+            return partial(`the build did not finish in ${Math.round(WILD_BUILD_MS / 1000)} seconds`, a.tradeoff, a.noHubs);
+          }
+          if (!built) return partial(liveOff() ? "every live search was refused" : "no way into that region on those dates from here; try another month or region", a.tradeoff, a.noHubs);
+          spent = built.searched ?? 0;
+          spend(spent);
+          trip = built;
         }
-        return { ...summarise(trip), ...excludedSummary(exclude, [], a.exclude), key, raw: trip };
+        const cut = spent ? cutShort(trip) : {};
+        return { ...summarise(trip), ...corrected, ...excludedSummary(exclude, [], a.exclude), searched: spent, source: (spent ? "live" : "stored") as Source, ...(cut.partial ? { partial: true, note: cut.note } : spent ? {} : { note: `served from the store (built ${Math.round(stored?.ageHours ?? 0)} hours ago, no search spent)` }), key, raw: trip };
       }),
       toModelOutput: withoutRaw,
     }),
 
     long_stay: tool({
-      description: "Bases for living somewhere for a month or more: for a region or a country list, the flight in, the flight out, rent and monthly living per base, the total and per day, why each base, side trips, visa, climate. Use for 'two months in Southeast Asia this winter', 'where could I work remotely cheaply'. Bounded to about 20 live searches. Bases in excluded (been) countries are never proposed; a flight through one is fine.",
-      inputSchema: jsonSchema<{ region?: string; countries?: string[]; months?: number; startMonth?: string; budget?: "backpacker" | "mid" | "comfort"; style?: string; gateways?: string[]; exclude?: string[]; allow?: string[] }>({
+      description: "Bases for living somewhere for a month or more: for a region, a country list or named cities, the flight in, the flight out, rent and monthly living per base, the total and per day, why each base, side trips, visa, climate. Use for 'two months in Southeast Asia this winter', 'where could I work remotely cheaply'. About 16 to 20 live searches, a minute or two; not run when the turn's budget is spent. Bases in excluded (been) countries are never proposed; a flight through one is fine.",
+      inputSchema: jsonSchema<{ region?: string; countries?: string[]; mustInclude?: string[]; wishes?: string; months?: number; startMonth?: string; budget?: "backpacker" | "mid" | "comfort"; style?: string; gateways?: string[]; exclude?: string[]; allow?: string[] }>({
         type: "object",
         properties: {
-          region: { type: "string", enum: Object.keys(REGIONS), description: "one of the wild regions" },
-          countries: { type: "array", items: { type: "string" }, description: "ISO2 codes instead of a region" },
+          region: { type: "string", enum: Object.keys(REGIONS), description: "one of the wild regions, or 'custom' with countries or mustInclude" },
+          countries: { type: "array", items: { type: "string" }, description: "countries instead of a region, names or ISO2 codes" },
+          mustInclude: { type: "array", items: { type: "string" }, description: "only these cities as bases (names or codes, up to 8); their countries are the list" },
+          wishes: { type: "string", description: "the traveller's own words ('warm, by the sea, good coffee'), up to 300 characters; tilts the ranking and is answered in each base's why" },
           months: { type: "number", description: "how long, 1 to 6, default 2" },
           startMonth: { type: "string", description: "YYYY-MM" },
           budget: { type: "string", enum: ["backpacker", "mid", "comfort"] },
@@ -739,20 +1348,54 @@ export function atlasTools(ctx: AgentContext) {
       }),
       execute: safe(async (a) => {
         const exclude = excludeOf(a.exclude, a.allow);
-        const given = a.countries?.map((c) => countryCode(c) ?? c.toUpperCase()).filter((c) => /^[A-Z]{2}$/.test(c));
+        const given = a.countries?.map((c) => countryCode(String(c ?? "").trim()) ?? String(c ?? "").trim().toUpperCase()).filter((c) => /^[A-Z]{2}$/.test(c));
         // A country list of been countries only is an answer, not twenty searches.
         const countries = given?.filter((c) => countryAllowed(c, exclude));
-        if (given?.length && !countries?.length) return { error: excludedNote(given) };
-        if (!a.region && !countries?.length) return { error: "a region or a country list is needed" };
-        if (a.region && !Object.hasOwn(REGIONS, a.region)) return { error: `unknown region ${a.region}` };
+        if (given?.length && !countries?.length) return plain(excludedNote(given));
+        if (a.countries?.length && !given?.length) return plain(`none of ${a.countries.join(", ")} is a country I know; use names or ISO2 codes (PT, TH)`, "data");
+        const mustInclude = Array.isArray(a.mustInclude) ? a.mustInclude.map((x) => String(x ?? "").trim().slice(0, 40)).filter(Boolean).slice(0, 8) : [];
+        const wishes = typeof a.wishes === "string" && a.wishes.trim() ? a.wishes.trim().slice(0, 300) : undefined;
+        const region = a.region ? (Object.keys(REGIONS) as Region[]).find((k) => k === a.region || fold(k) === fold(a.region!) || fold(REGIONS[k].label) === fold(a.region!)) : undefined;
+        if (!region && !countries?.length && !mustInclude.length) return { error: a.region ? `unknown region ${a.region}; one of ${Object.keys(REGIONS).join(", ")}` : "a region, a country list or cities are needed" };
         const from = codesOf(a.gateways, gateways);
-        if (!from.length) return { error: `unknown airport or city in gateways: ${(a.gateways ?? []).join(", ")}` };
-        const over = exhausted();
-        if (over) return over;
+        if (!from.length) return { ...unknownPlace("gateway", (a.gateways ?? []).join(", ")), bases: [] };
         const months = Math.min(6, Math.max(1, Math.round(a.months ?? 2)));
         const startMonth = a.startMonth && /^\d{4}-\d{2}$/.test(a.startMonth) ? a.startMonth : undefined;
-        const r = await longStay({ gateways: from, home: ctx.home, region: a.region, countries, months, startMonth, budget: a.budget, style: a.style, origin: ctx.origin, exclude });
-        spend(r.searched);
+        // Sixteen to twenty searches is most of a turn: when the turn's budget is spent or
+        // live prices are off the engine is not run at all (it has no search budget of its
+        // own), and the answer is a plain note naming the next step.
+        const over = exhausted();
+        if (over) return { months, searched: 0, source: "none" as Source, bases: [], note: `${over.error}; the long stay was not priced` };
+        if (liveOff()) return { months, searched: 0, source: "none" as Source, bases: [], note: `${kiwiThrottled() ? "Kiwi is throttling this address for a few minutes" : "today's live search budget is spent"}; ${RATE_NOTE}; the long stay was not priced. Offer to price the bases in a few minutes.` };
+        // The engine prices the bases it can and marks the flights it could not get; a search
+        // refused mid-run leaves that base unpriced under a note. Past the time cap, the
+        // promise is left to finish and the answer says so. An input the engine cannot act on
+        // (an unknown city, custom with no countries) is its plain sentence, not a failure.
+        let r;
+        try {
+          // The engine's deadline sits a little before the race fires: past it no further base
+          // is priced and the ones done so far come back with partial: true and the engine's
+          // note, so a time-capped turn still gets priced bases; the race is the last resort.
+          const deadline = Date.now() + LONG_BUILD_MS - DEADLINE_MARGIN_MS;
+          const query = { gateways: from, home: ctx.home, region: region, countries, months, startMonth, budget: a.budget, style: a.style, origin: ctx.origin, exclude, deadline, ...(mustInclude.length ? { mustInclude } : {}), ...(wishes ? { wishes } : {}) };
+          trace("longStay", query);
+          const building = longStay(query);
+          r = await Promise.race([building, sleep(LONG_BUILD_MS).then(() => null)]);
+          if (!r) {
+            void building.catch(() => null);
+            // The engine keeps no memo of a run cut short; only Kiwi's gate remembers the
+            // searches already made (a day), so a retry repeats the pricing but faster.
+            return { months, searched: 0, source: "none" as Source, bases: [], note: `the long stay did not finish pricing in ${Math.round(LONG_BUILD_MS / 1000)} seconds; ask again in a minute: the searches already made are remembered by the gate, so the retry is quicker` };
+          }
+        } catch (err) {
+          if (err instanceof LongStayInputError) return { months, ...plain(err.message, "data"), bases: [] };
+          throw err;
+        }
+        // builtNow marks the result as charged, so it is asked once: a run memoised by the
+        // engine (the same ask within its window) costs nothing now and is reported as memo.
+        const built = builtNow(r);
+        spend(built ? r.searched : 0);
+        const liveNote = liveOff() ? (kiwiThrottled() ? "Kiwi is throttling this address for a few minutes" : "today's live search budget is spent") : "";
         const bases = filterByCountry(r.bases, exclude).slice(0, 8);
         // The nights of a base are the days the engine counted between its two flights
         // (LongStayBase.days), not a nominal months x 30: the costs were counted for those days.
@@ -761,11 +1404,21 @@ export function atlasTools(ctx: AgentContext) {
           .filter((b) => b.flightIn)
           .map((b) => ({ gw: b.flightIn!.from, dst: CITIES[b.code]?.airports[0] ?? b.code, dstCity: b.code, city: b.name, country: b.country, price: Math.round(b.flightIn!.price + (b.flightOut?.price ?? 0)), out: b.flightIn!.date, back: b.flightOut?.date ?? "", nights: nightsOf(b), stops: 0, carriers: [], outMin: 0, backMin: 0, url: b.flightIn!.url, ...(b.flightOut ? { backTo: b.flightOut.to, url2: b.flightOut.url } : {}) }));
         const skipped = (r.skipped ?? []).slice(0, 12).map((x) => ({ country: COUNTRIES[x.country]?.name ?? x.country, reason: x.reason }));
+        const priced = bases.filter((b) => b.flightIn).length;
+        // The engine's own note when it stopped at its deadline ("N bases not priced in time"),
+        // so the model says the list is short and offers to ask again.
+        const cutAt = r.partial ? r.note.search(/\d+ bases? not priced in time/) : -1;
+        const cutNote = cutAt >= 0 ? r.note.slice(cutAt) : "";
+        const note = r.failed && !priced ? `${liveNote || "every live search was refused"}; ${RATE_NOTE}: the bases, rent and living costs are from the data, the flights are unpriced. Offer to price them in a few minutes.` : r.failed ? `${r.failed} search${r.failed === 1 ? "" : "es"} failed (Kiwi refused); ${priced} of ${bases.length} bases have flights, the others are unpriced${cutNote ? `; ${cutNote}` : ""}` : !bases.length ? `no base left for ${region ? REGIONS[region].label : countries?.map(nameOf).join(", ")}: ${skipped.map((s) => `${s.country} (${s.reason})`).join(", ") || "no known city there"}` : cutNote || undefined;
         return {
           months,
-          searched: r.searched,
+          searched: built ? r.searched : 0,
+          source: (r.failed && !priced ? "data" : built ? "live" : "memo") as Source,
           ...excludedSummary(exclude, [], a.exclude),
-          ...(r.failed ? { failed: r.failed, note: `${r.failed} search${r.failed === 1 ? "" : "es"} failed (Kiwi refused); a base may lack a flight it would otherwise have` } : {}),
+          ...(r.partial ? { partial: true } : {}),
+          ...(r.failed ? { failed: r.failed } : {}),
+          ...(r.constraints?.length ? { constraints: r.constraints } : {}),
+          ...(note ? { note } : {}),
           bases: bases.map((b) => ({ base: b.name, country: COUNTRIES[b.country]?.name ?? b.country, code: b.code, days: nightsOf(b), flightIn: b.flightIn ? `€${b.flightIn.price} on ${b.flightIn.date} from ${b.flightIn.from}` : "not found", flightOut: b.flightOut ? `€${b.flightOut.price} on ${b.flightOut.date} to ${b.flightOut.to}` : "not found", rentPerMonth: b.rent, livingPerMonth: b.monthlyLiving, total: b.total, perDay: b.perDay, why: b.why.slice(0, 4), sideTrips: b.sideTrips.slice(0, 4).map((s) => `${s.name} ${Math.round(s.minutes / 60)} h by ${s.mode}`), visa: b.visa, climate: b.climate ? { tmax: b.climate.tmax, rain: b.climate.rain } : undefined, urlIn: b.flightIn?.url, urlOut: b.flightOut?.url })),
           // Countries of the region left out (a travel warning, too expensive, no known city) and why.
           ...(skipped.length ? { skipped } : {}),
@@ -778,7 +1431,7 @@ export function atlasTools(ctx: AgentContext) {
 
     group_trip: tool({
       description: "Several people from different cities meet somewhere: give each person's name, home airports or city, and the dates they are free; the tool finds the windows that fit everyone (or almost), then the cities where the sum of their fares is lowest, with a fare per person and booking links. Use for 'me and two friends, I am in Brasov, Ana in Cluj, free 7 to 16 Nov'. About 25 to 45 live searches. Meeting cities in excluded (been) countries are never proposed; connections through them are fine.",
-      inputSchema: jsonSchema<{ members: { name: string; origins: string[]; available: { from: string; to: string }[] }[]; minNights?: number; maxNights?: number; where?: string; direct?: boolean; exclude?: string[]; allow?: string[] }>({
+      inputSchema: jsonSchema<{ members: { name: string; origins: string[]; available: { from: string; to: string }[] }[]; minNights?: number; maxNights?: number; where?: string; direct?: boolean; budgetPerPerson?: number; exclude?: string[]; allow?: string[] }>({
         type: "object",
         properties: {
           members: {
@@ -795,8 +1448,9 @@ export function atlasTools(ctx: AgentContext) {
           },
           minNights: { type: "number", description: "default 2" },
           maxNights: { type: "number", description: "default 4 for a weekend" },
-          where: { type: "string", description: "a city, country or region to meet in; omit for anywhere" },
+          where: { type: "string", description: "a city, a country or a region to meet in, or a comma list of country names ('Portugal, Spain'); omit for anywhere" },
           direct: { type: "boolean" },
+          budgetPerPerson: { type: "number", description: "euros a person at most; options where anyone pays more are dropped and the answer says how many" },
           ...BEEN_PROPS,
         },
         required: ["members"],
@@ -805,18 +1459,34 @@ export function atlasTools(ctx: AgentContext) {
         // Each person flies from their own airports, never from the traveller's: a town we
         // cannot resolve is an error naming the person, so the agent asks with a people widget.
         const members: GroupMember[] = [];
+        const corrections: string[] = [];
         for (const m of (a.members ?? []).slice(0, 8)) {
           const name = String(m?.name ?? "").slice(0, 40) || "someone";
-          const given = Array.isArray(m?.origins) ? m.origins.map((o) => String(o ?? "")) : [];
+          const given = Array.isArray(m?.origins) ? m.origins.map((o) => String(o ?? "")) : typeof (m as { origins?: unknown })?.origins === "string" ? [String((m as { origins?: unknown }).origins)] : [];
           const origins = codesOf(given, []);
-          if (!origins.length) return { error: `${name}: unknown airport or city ${given.join(", ") || "(none given)"}; ask for the nearest airport` };
-          members.push({ name, origins, available: (Array.isArray(m.available) ? m.available : []).filter((w) => w && isoDay(w.from) && isoDay(w.to)).slice(0, 6) });
+          if (!origins.length) return { ...unknownPlace(`${name}'s home`, given.join(", ") || "(none given)"), note: `${unknownPlace(`${name}'s home`, given.join(", ") || "(none given)").note}; ask for the nearest airport with a people widget`, windows: [], options: [] };
+          // Dates written any usual way; a window in the past is dropped with a line saying so.
+          const available = (Array.isArray(m.available) ? m.available : [])
+            .map((w) => {
+              const f = readDay(w?.from, ctx.today, `${name}'s window start`);
+              const t = readDay(w?.to, ctx.today, `${name}'s window end`);
+              for (const n of [f.note, t.note]) if (n) corrections.push(n);
+              return { from: f.day, to: t.day };
+            })
+            .filter((w): w is { from: string; to: string } => !!w.from && !!w.to)
+            .map((w) => (w.to < w.from ? { from: w.to, to: w.from } : w))
+            .filter((w) => {
+              if (w.to < ctx.today) corrections.push(`${name}'s window ${w.from} to ${w.to} is in the past and was dropped`);
+              return w.to >= ctx.today;
+            })
+            .map((w) => (w.from < ctx.today ? { from: ctx.today, to: w.to } : w))
+            .slice(0, 6);
+          members.push({ name, origins, available });
         }
         if (members.length < 2) return { error: "at least two people with their airports and free dates are needed" };
         const bad = members.find((m) => !m.available.length);
-        if (bad) return { error: `${bad.name} has no dates (YYYY-MM-DD from and to)` };
-        const over = exhausted();
-        if (over) return over;
+        if (bad) return { error: `${bad.name} has no dates (YYYY-MM-DD from and to)${corrections.length ? `; ${corrections.join("; ")}` : ""}` };
+        const corrected = corrections.length ? { corrected: corrections.join("; ") } : {};
         const minNights = Math.max(1, Math.round(a.minNights ?? 2));
         const maxNights = Math.max(minNights, Math.round(a.maxNights ?? 4));
         // The engine prices every target for every airport group for three windows, so the
@@ -825,15 +1495,49 @@ export function atlasTools(ctx: AgentContext) {
         // A meeting country the traveller has been to is dropped from the list before searching.
         const exclude = excludeOf(a.exclude, a.allow);
         const { kept, dropped } = splitWhere(a.where, exclude);
-        if (!kept.length && dropped.length) return { searched: 0, windows: [], options: [], note: excludedNote(dropped) };
+        if (!kept.length && dropped.length) return { searched: 0, source: "none" as Source, windows: [], options: [], note: excludedNote(dropped) };
         const where = kept.slice(0, groups > 2 ? 2 : 4).join(",") || undefined;
-        const r = await groupTrip({ members, minNights, maxNights, where, direct: a.direct, exclude });
-        spend(r.searched);
+        // The common windows cost nothing: when live prices are off they are the answer, with
+        // the note, so the group still learns when they can all go.
+        const windowsOnly = (reason: string, turn = false) => ({ searched: 0, source: "data" as Source, ...corrected, ...excludedSummary(exclude, dropped, a.exclude), note: turn ? `${reason}; the windows everyone is free are listed unpriced` : `${reason}; ${RATE_NOTE}. The windows everyone is free are listed unpriced; offer to price the cities in a few minutes.`, windows: groupWindows(members, minNights, maxNights).slice(0, 6).map((w) => ({ dates: `${w.from} to ${w.to}`, nights: w.nights, everyone: w.everyone, compromises: w.compromises })), options: [] });
+        if (liveOff()) return windowsOnly(kiwiThrottled() ? "Kiwi is throttling this address for a few minutes" : "today's live search budget is spent");
+        const over = exhausted();
+        if (over) return windowsOnly(over.error, true);
+        const budgetPerPerson = Number.isFinite(a.budgetPerPerson) && a.budgetPerPerson! > 0 ? Math.round(a.budgetPerPerson!) : undefined;
+        let r;
+        try {
+          // The engine's deadline sits a little before the race fires: past it no further
+          // window is priced and the options found come back with partial: true and the
+          // engine's note ("N windows not priced in time"); the race is the last resort.
+          const deadline = Date.now() + LONG_BUILD_MS - DEADLINE_MARGIN_MS;
+          const query = { members, minNights, maxNights, where, direct: a.direct, exclude, deadline, ...(budgetPerPerson ? { budgetPerPerson } : {}) };
+          trace("groupTrip", query);
+          const building = groupTrip(query);
+          r = await Promise.race([building, sleep(LONG_BUILD_MS).then(() => null)]);
+          if (!r) {
+            void building.catch(() => null);
+            return { ...windowsOnly(`the group search did not finish in ${Math.round(LONG_BUILD_MS / 1000)} seconds`), note: `the group search did not finish in ${Math.round(LONG_BUILD_MS / 1000)} seconds; the windows are listed, ask again in a minute for the priced cities` };
+          }
+        } catch (err) {
+          // An input the engine cannot price (a region with every country excluded, an unknown
+          // meeting place) is a note with the windows, not a failure.
+          if (err instanceof GroupInputError) return { ...windowsOnly(err.message), note: err.message };
+          throw err;
+        }
+        const built = builtNow(r);
+        spend(built ? r.searched : 0);
         const options = filterByCountry(r.options, exclude).slice(0, 6);
         const raw: Deal[] = options.map((o) => ({ gw: o.perMember[0]?.from ?? members[0].origins[0], dst: CITIES[o.dstCity]?.airports[0] ?? o.dstCity, dstCity: o.dstCity, city: o.city, country: o.country, price: Math.round(o.total), out: o.window.from, back: o.window.to, nights: o.window.nights, stops: 0, carriers: [], outMin: 0, backMin: 0, url: o.perMember[0]?.url ?? "" }));
+        const note = r.note ?? (!options.length ? (r.failed ? `every live search was refused (${r.failed}); ${RATE_NOTE}; the windows are listed unpriced` : !r.windows.length ? "no window fits everyone's dates with these nights; ask for more flexible dates" : r.dropped ? `${r.dropped} option${r.dropped === 1 ? "" : "s"} dropped: someone would pay more than €${budgetPerPerson}; raise the budget or widen the place` : `no city had a fare for everyone in ${r.windows.length} window${r.windows.length === 1 ? "" : "s"}${where ? ` in ${where}` : ""}; widen the place or the nights`) : r.failed ? `${r.failed} search${r.failed === 1 ? "" : "es"} failed (Kiwi refused); a city may be missing` : undefined);
         return {
-          searched: r.searched,
+          searched: built ? r.searched : 0,
+          source: (r.failed && !options.length ? "data" : built ? "live" : "memo") as Source,
+          ...corrected,
           ...excludedSummary(exclude, dropped, a.exclude),
+          ...(r.partial ? { partial: true } : {}),
+          ...(r.where ? { where: r.where } : {}),
+          ...(r.dropped ? { dropped: r.dropped } : {}),
+          ...(note ? { note } : {}),
           windows: r.windows.slice(0, 6).map((w) => ({ dates: `${w.from} to ${w.to}`, nights: w.nights, everyone: w.everyone, compromises: w.compromises })),
           options: options.map((o) => ({ city: o.city, country: COUNTRIES[o.country]?.name ?? o.country, dates: `${o.window.from} to ${o.window.to}`, nights: o.window.nights, everyone: o.window.everyone, total: o.total, perMember: o.perMember.map((m) => ({ name: m.name, price: m.price, from: m.from, out: m.out, back: m.back, url: m.url, note: m.note })) })),
           raw,
@@ -846,11 +1550,11 @@ export function atlasTools(ctx: AgentContext) {
       description: "The best months to visit a city by climate (monthly highs and rain, scored), from the climate data. Instant. Use when the traveller is flexible on when, or asks 'when is good for X'.",
       inputSchema: jsonSchema<{ city: string }>({ type: "object", properties: { city: { type: "string" } }, required: ["city"] }),
       execute: safe(async ({ city }) => {
-        const hit = findCity(city);
-        if (!hit) return { error: `no city named ${city}` };
+        const hit = findCity(city ?? "");
+        if (!hit) return unknownPlace("city", city ?? "");
         const r = bestMonths(hit[0]);
-        if (!r) return { error: `no climate data for ${hit[1].name}` };
-        return { city: hit[1].name, best: r.best.map((m) => MONTH_NAMES[m - 1]), months: r.months.map((m) => ({ month: MONTH_NAMES[m.m - 1], highC: m.tmax, rainMm: m.rain, score: m.score })) };
+        if (!r) return plain(`no climate normals for ${hit[1].name} in the data; the nearest big city may have them`, "data");
+        return { searched: 0, source: "data" as Source, city: hit[1].name, best: r.best.map((m) => MONTH_NAMES[m - 1]), months: r.months.map((m) => ({ month: MONTH_NAMES[m.m - 1], highC: m.tmax, rainMm: m.rain, score: m.score })) };
       }),
     }),
 
@@ -867,8 +1571,8 @@ export function atlasTools(ctx: AgentContext) {
         // every airport, at most four a side, and the pair with the most history answers.
         const srcs = airportsArg(a.from, [gateways[0]]);
         const dsts = airportsArg(a.to, []);
-        if (!srcs.length) return { error: `unknown airport or city ${a.from}` };
-        if (!dsts.length) return { error: `a destination airport or city is needed (${a.to || "none given"} is not one we know)` };
+        if (!srcs.length) return { ...unknownPlace("origin", a.from), verdict: "unknown" as const };
+        if (!dsts.length) return { ...unknownPlace("destination", a.to || "(none given)"), verdict: "unknown" as const };
         // Return fares against return fares, one-ways against one-ways: an open-jaw scan fills
         // the memory with one-way fares for the same route and month.
         const opts = { oneWay: !!a.oneWay, minNights: Number.isFinite(a.minNights) ? a.minNights : undefined, maxNights: Number.isFinite(a.maxNights) ? a.maxNights : undefined };
@@ -880,12 +1584,12 @@ export function atlasTools(ctx: AgentContext) {
         const airports = pairs.length > 1 ? { airportsTried: [...new Set(dsts)] } : {};
         // Null from every pair means the memory itself did not answer (no database), which is
         // not the same as a route nobody has searched yet.
-        if (!best) return { error: "the fare memory is not available right now (no database)" };
-        if (!best.r!.samples) return { route, month: a.month, verdict: "unknown", samples: 0, note: "no fare history for this route yet", ...airports };
+        if (!best) return { searched: 0, source: "none" as Source, route, month: a.month, verdict: "unknown" as const, samples: 0, note: "the fare memory is not available right now (no database); say the price cannot be judged against history", ...airports };
+        if (!best.r!.samples) return { searched: 0, source: "memory" as Source, route, month: a.month, verdict: "unknown" as const, samples: 0, note: "no fare history for this route yet", ...airports };
         const r = best.r!;
         // Fewer than three days of history is no history: the median of one or two fares says nothing.
-        if (r.samples < 3) return { route, month: a.month, ...r, verdict: "unknown" as const, note: `only ${r.samples} day${r.samples === 1 ? "" : "s"} of fares seen; not enough to judge`, ...airports };
-        return { route, month: a.month, ...r, ...airports };
+        if (r.samples < 3) return { searched: 0, source: "memory" as Source, route, month: a.month, ...r, verdict: "unknown" as const, note: `only ${r.samples} day${r.samples === 1 ? "" : "s"} of fares seen; not enough to judge`, ...airports };
+        return { searched: 0, source: "memory" as Source, route, month: a.month, ...r, ...airports };
       }),
     }),
 
@@ -916,7 +1620,7 @@ export function atlasTools(ctx: AgentContext) {
         if (Array.isArray(d.people)) {
           defaults.people = sanitizePeople(d.people);
         }
-        return { widget: true, kind, question: String(a.question ?? "").slice(0, 160) || "Which do you prefer?", options: options.length ? options : undefined, defaults: Object.keys(defaults).length ? defaults : undefined };
+        return { widget: true, kind, question: String(a.question ?? "").slice(0, 160) || "Which do you prefer?", ...(options.length ? { options } : {}), ...(Object.keys(defaults).length ? { defaults } : {}) };
         function sanitizePeople(rows: unknown[]) {
           return rows
             .filter((r): r is Record<string, unknown> => !!r && typeof r === "object")
@@ -930,21 +1634,36 @@ export function atlasTools(ctx: AgentContext) {
       description: "Travel with a purpose: the events worth flying for inside a window (carnivals, festivals, marathons, fire festivals, lantern nights, seasons like cherry blossom or northern lights), each with the cheapest way there from the traveller's airports (tonight's boards, then a live search for the nearest few). Use for 'something special to go to in November', 'Halloween somewhere cool', 'a marathon abroad'. Events in excluded (been) countries are hidden; flying through one is fine.",
       inputSchema: jsonSchema<{ from: string; to: string; kinds?: string[]; live?: number; exclude?: string[]; allow?: string[] }>({
         type: "object",
-        properties: { from: { type: "string", description: "YYYY-MM-DD" }, to: { type: "string", description: "YYYY-MM-DD" }, kinds: { type: "array", items: { type: "string", enum: ["festival", "sport", "culture", "season", "music", "food"] } }, live: { type: "number", description: "how many unpriced events to price live (default 4, slow)" }, ...BEEN_PROPS },
+        properties: { from: { type: "string", description: "YYYY-MM-DD" }, to: { type: "string", description: "YYYY-MM-DD" }, kinds: { type: "array", items: { type: "string" }, description: "free words: a kind (festival, sport, culture, season, music, food), a word of an event's name (carnival, marathon, lantern), a city, a country code" }, live: { type: "number", description: "how many unpriced events to price live (default 4, slow)" }, ...BEEN_PROPS },
         required: ["from", "to"],
       }),
       execute: safe(async (a) => {
-        if (!isoDay(a.from) || !isoDay(a.to)) return { error: "from and to must be YYYY-MM-DD" };
-        const over = exhausted();
-        if (over) return over;
+        const f = futureDay(a.from, ctx.today, "the window start");
+        if (!f.day) return { error: f.note! };
+        const t = readDay(a.to, ctx.today, "the window end");
+        if (!t.day) return { error: t.note! };
+        let to = t.day;
+        const corrections = [f.note, t.note].filter((n): n is string => !!n);
+        if (to < f.day) {
+          corrections.push(`the window ended before it started; set to ${f.day} plus 30 days`);
+          to = addDays(f.day, 30);
+        }
+        const corrected = corrections.length ? { corrected: corrections.join("; ") } : {};
         const exclude = excludeOf(a.exclude, a.allow);
-        const live = Math.min(6, Math.max(0, Math.round(a.live ?? 4)));
-        const r = await purposeTrips(gateways, a.from, a.to, { live, kinds: a.kinds as never, exclude });
+        // The events and the board fares cost nothing; only the unpriced ones are searched
+        // live, and not at all when live prices are off or the turn's budget is spent.
+        const over = exhausted();
+        const blocked = liveOff() || !!over;
+        const live = blocked ? 0 : Math.min(6, Math.max(0, Math.round(a.live ?? 4)));
+        const kinds = Array.isArray(a.kinds) ? a.kinds.map((k) => String(k ?? "").trim().slice(0, 40)).filter(Boolean).slice(0, 8) : undefined;
+        const r = await purposeTrips(gateways, f.day, to, { live, kinds, exclude });
         // The engine counts the searches it really sent (a memoised answer sends none).
         spend(r.searched ?? live);
         // An event in a been country is not a reason to go back there.
         const events = r.filter((t) => countryAllowed(t.event.country, exclude));
-        return { searched: r.searched ?? live, ...excludedSummary(exclude, [], a.exclude), ...(r.failed ? { failed: r.failed, note: `${r.failed} live search${r.failed === 1 ? "" : "es"} failed (Kiwi refused); those events are unpriced, not absent` } : {}), events: events.slice(0, 12).map((t) => ({ event: t.event.name, city: t.event.city, country: t.event.country, dates: `${t.event.start} to ${t.event.end}`, kind: t.event.kind, note: t.event.note, cheapestTrip: t.deal ? compactDeal(t.deal) : null, priced: t.source })), raw: events.map((t) => t.deal).filter((d): d is Deal => !!d) };
+        const priced = events.filter((t) => t.deal).length;
+        const note = r.failed ? `${r.failed} live search${r.failed === 1 ? "" : "es"} failed (Kiwi refused); those events are unpriced, not absent` : blocked && events.length > priced ? `${over ? over.error : kiwiThrottled() ? "Kiwi is throttling this address for a few minutes" : "today's live search budget is spent"}; ${priced} of ${events.length} events are priced from tonight's boards, the rest are listed unpriced` : !events.length ? `no event worth the trip is known between ${f.day} and ${to}${a.kinds?.length ? ` of kind ${a.kinds.join(", ")}` : ""}; widen the window or drop the kind` : undefined;
+        return { searched: r.searched ?? live, source: ((r.searched ?? 0) > 0 ? "live" : priced ? "boards" : "data") as Source, ...corrected, ...excludedSummary(exclude, [], a.exclude), ...(r.failed ? { failed: r.failed } : {}), ...(note ? { note } : {}), events: events.slice(0, 12).map((t) => ({ event: t.event.name, city: t.event.city, country: t.event.country, dates: `${t.event.start} to ${t.event.end}`, kind: t.event.kind, note: t.event.note, cheapestTrip: t.deal ? compactDeal(t.deal) : null, priced: t.source })), raw: events.map((t) => t.deal).filter((d): d is Deal => !!d) };
       }),
       toModelOutput: withoutRaw,
     }),
@@ -952,7 +1671,7 @@ export function atlasTools(ctx: AgentContext) {
     stopover_programmes: tool({
       description: "Airlines that give a free or very cheap hotel night in their hub on the way (Turkish Airlines in Istanbul, Qatar in Doha, TAP in Lisbon, Icelandair, Finnair, Emirates, Singapore). Use when a route goes through one of these hubs or the traveller asks about layover hacks.",
       inputSchema: jsonSchema<Record<string, never>>({ type: "object", properties: {} }),
-      execute: async () => Object.entries(STOPOVER_PROGRAMMES).map(([hub, p]) => ({ hub, airline: p.airline, note: p.note })),
+      execute: async () => ({ searched: 0, source: "data" as Source, count: Object.keys(STOPOVER_PROGRAMMES).length, programmes: Object.entries(STOPOVER_PROGRAMMES).map(([hub, p]) => ({ hub, airline: p.airline, note: p.note })) }),
     }),
 
     hotel_deals: tool({
@@ -960,16 +1679,19 @@ export function atlasTools(ctx: AgentContext) {
       inputSchema: jsonSchema<{ country?: string; limit?: number; exclude?: string[]; allow?: string[] }>({ type: "object", properties: { country: { type: "string", description: "only this country (name or ISO code), optional" }, limit: { type: "number", description: "default 10, max 20" }, ...BEEN_PROPS } }),
       execute: safe(async (a) => {
         const exclude = excludeOf(a.exclude, a.allow);
-        const cc = countryCode(a.country);
-        if (cc && !countryAllowed(cc, exclude)) return { status: "ok", note: excludedNote([cc]), deals: [] };
+        const countryRaw = (a.country ?? "").trim();
+        const cc = countryCode(countryRaw) ?? (countryRaw ? findCity(countryRaw)?.[1].country : undefined);
+        if (countryRaw && !cc) return { ...unknownPlace("country", countryRaw), status: "ok", deals: [] };
+        if (cc && !countryAllowed(cc, exclude)) return { searched: 0, source: "data" as Source, status: "ok", note: excludedNote([cc]), deals: [] };
         const r = await hotelDeals();
         const deals = filterByCountry(r.deals, exclude).filter((d) => !cc || d.country === cc).slice(0, Math.min(20, Math.max(1, Math.round(a.limit ?? 10))));
         return {
+          searched: 0,
+          source: "liteapi" as Source,
           status: r.status,
-          note: r.note ?? (r.status === "ok" && !deals.length ? (cc ? `no hotel deal in ${COUNTRIES[cc]?.name ?? cc} tonight` : "no city is a deal tonight: nowhere is 25% under its own typical price") : undefined),
+          note: r.note ?? (!deals.length ? (r.status === "ok" ? (cc ? `no hotel deal in ${COUNTRIES[cc]?.name ?? cc} tonight` : "no city is a deal tonight: nowhere is 25% under its own typical price") : `the hotel snapshots are ${r.status}; no deal to show yet`) : `${deals.length} cities at least 25% under their own recent median`),
           snapshots: r.snapshots,
-          weekend: r.latest ? `${r.latest.checkin} to ${r.latest.checkout}` : undefined,
-          citiesTracked: r.latest?.cities,
+          ...(r.latest ? { weekend: `${r.latest.checkin} to ${r.latest.checkout}`, citiesTracked: r.latest.cities } : {}),
           deals: deals.map((d) => ({ city: d.city, country: COUNTRIES[d.country]?.name ?? d.country, hotel: d.hotel, stars: d.stars, rating: d.rating, perNight: Math.round(d.price), typical: d.typical, below: `${d.below}%`, nights: `${d.checkin} to ${d.checkout}` })),
         };
       }),
@@ -985,13 +1707,14 @@ export function atlasTools(ctx: AgentContext) {
               // with the most fares seen is the history shown.
               const srcs = airportsArg(a.from, [gateways[0]]);
               const dsts = airportsArg(a.to, []);
-              if (!srcs.length || !dsts.length) return { error: `unknown airport or city: ${!srcs.length ? a.from : a.to}` };
-              const dateFrom = isoDay(a.dateFrom) ? a.dateFrom : undefined;
-              const dateTo = isoDay(a.dateTo) ? a.dateTo : undefined;
+              if (!srcs.length) return { ...unknownPlace("origin", a.from ?? ""), fares: [] };
+              if (!dsts.length) return { ...unknownPlace("destination", a.to ?? ""), fares: [] };
+              const dateFrom = parseDay(a.dateFrom, ctx.today) ?? undefined;
+              const dateTo = parseDay(a.dateTo, ctx.today) ?? undefined;
               const pairs = srcs.flatMap((src) => dsts.map((dst) => ({ src, dst })));
               const results = await Promise.all(pairs.map(async (p) => ({ ...p, fares: await fareHistory(p.src, p.dst, dateFrom, dateTo, 25) })));
               const best = results.sort((x, y) => y.fares.length - x.fares.length)[0];
-              return { route: `${best.src} to ${best.dst}`, ...(pairs.length > 1 ? { airportsTried: [...new Set(dsts)] } : {}), fares: best.fares };
+              return { searched: 0, source: "memory" as Source, route: `${best.src} to ${best.dst}`, count: best.fares.length, ...(pairs.length > 1 ? { airportsTried: [...new Set(dsts)] } : {}), ...(best.fares.length ? {} : { note: `nobody on Atlas has searched ${best.src} to ${best.dst}${dateFrom || dateTo ? " for those dates" : ""} yet; scan_cheapest or reprice_route would fill the memory` }), fares: best.fares };
             }),
           }),
         }
@@ -1015,17 +1738,30 @@ export function atlasTools(ctx: AgentContext) {
         // The key as wild_trip returned it, or the same fields flattened: both address the file.
         const a = { ...(raw.key && typeof raw.key === "object" ? raw.key : {}), ...Object.fromEntries(Object.entries(raw).filter(([k, v]) => k !== "key" && v != null)) } as { region?: Region; nights?: number; style?: Style; budget?: Budget; month?: string; custom?: string };
         if (!a.region || !Object.hasOwn(REGIONS, a.region)) return { error: "the trip's key (region, nights, style, budget, month, custom) as wild_trip returned it is needed" };
-        const nights = Math.min(90, Math.max(7, Math.round(a.nights ?? 14)));
-        const tripPath = wildPath(mainGateway(gateways), a.region, a.month ?? ctx.month, nights, a.style ?? "experiences", a.budget ?? "mid", a.custom ?? "");
+        const nights = Math.min(90, Math.max(5, Math.round(a.nights ?? 14)));
+        // A trip built with a countries list is stored under region custom whatever region was
+        // named (wild_trip's key says so); a key written back with the named region still
+        // finds it, so the chat and the Wild tab read the same trip.
+        const gw = mainGateway(gateways);
+        const regions: Region[] = a.region === "custom" ? ["custom"] : [a.region, "custom"];
+        let tripPath = wildPath(gw, regions[0], a.month ?? ctx.month, nights, a.style ?? "experiences", a.budget ?? "mid", a.custom ?? "");
+        let trip = await readJson<WildTrip>(tripPath).catch(() => null);
+        if (!trip && regions[1]) {
+          const alt = wildPath(gw, regions[1], a.month ?? ctx.month, nights, a.style ?? "experiences", a.budget ?? "mid", a.custom ?? "");
+          const under = await readJson<WildTrip>(alt).catch(() => null);
+          if (under) {
+            tripPath = alt;
+            trip = under;
+          }
+        }
         const path = planPath(tripPath);
-        const stored = await readJson<Plan>(path);
-        if (stored && stored.ageHours < 72) return { highlights: stored.body.highlights, days: stored.body.days, food: stored.body.food, monthly: stored.body.monthly, total: stored.body.total };
-        const trip = await readJson<WildTrip>(tripPath);
-        if (!trip) return { error: "build the trip first with wild_trip" };
+        const stored = await readJson<Plan>(path).catch(() => null);
+        if (stored && stored.ageHours < 72) return { searched: 0, source: "stored" as Source, highlights: stored.body.highlights, days: stored.body.days, food: stored.body.food, monthly: stored.body.monthly, total: stored.body.total };
+        if (!trip) return plain("no trip is stored under that key; build it first with wild_trip (the key it returns is what plan_days needs)", "none");
         const plan = await planDays(trip.body, path);
-        if (!plan) return { error: "the planner did not answer; try again" };
+        if (!plan) return plain("the planner did not answer; the trip is there, offer to try the plan again", "model");
         await writeJson(path, plan).catch(() => null);
-        return { highlights: plan.highlights, days: plan.days, food: plan.food, monthly: plan.monthly, total: plan.total };
+        return { searched: 0, source: "model" as Source, highlights: plan.highlights, days: plan.days, food: plan.food, monthly: plan.monthly, total: plan.total };
       }),
     }),
 
@@ -1033,10 +1769,12 @@ export function atlasTools(ctx: AgentContext) {
       description: "What to see and do in a city from the Wikivoyage guide (names, a line each, photos exist), its festivals, and what the country is known for doing and eating.",
       inputSchema: jsonSchema<{ city: string }>({ type: "object", properties: { city: { type: "string" } }, required: ["city"] }),
       execute: safe(async ({ city }) => {
-        const hit = findCity(city);
-        const name = hit ? hit[1].name : city;
-        const [s, g] = await Promise.all([getSights(name), hit ? countryGuide(COUNTRIES[hit[1].country]?.name ?? hit[1].country) : null]);
-        return { city: name, see: s?.see.slice(0, 8).map((x) => `${x.name}${x.desc ? `: ${x.desc.slice(0, 110)}` : ""}`), do: s?.do.slice(0, 6).map((x) => `${x.name}${x.desc ? `: ${x.desc.slice(0, 110)}` : ""}`), eat: s?.eat.slice(0, 5).map((x) => `${x.name}${x.desc ? `: ${x.desc.slice(0, 90)}` : ""}`), festivals: s?.events.slice(0, 5), countryDo: g?.do.slice(0, 5), countryEat: g?.eat.slice(0, 4), guideUrl: s?.url };
+        const hit = findCity(city ?? "");
+        const name = hit ? hit[1].name : (city ?? "").trim();
+        if (!name) return { error: "a city is needed" };
+        const [s, g] = await Promise.all([getSights(name).catch(() => null), hit ? countryGuide(COUNTRIES[hit[1].country]?.name ?? hit[1].country).catch(() => null) : null]);
+        if (!s && !g) return hit ? plain(`no Wikivoyage guide for ${name} in the data; web_search can fill in`, "data") : unknownPlace("city", name);
+        return { searched: 0, source: "data" as Source, city: name, see: s?.see.slice(0, 8).map((x) => `${x.name}${x.desc ? `: ${x.desc.slice(0, 110)}` : ""}`) ?? [], do: s?.do.slice(0, 6).map((x) => `${x.name}${x.desc ? `: ${x.desc.slice(0, 110)}` : ""}`) ?? [], eat: s?.eat.slice(0, 5).map((x) => `${x.name}${x.desc ? `: ${x.desc.slice(0, 90)}` : ""}`) ?? [], festivals: s?.events.slice(0, 5) ?? [], countryDo: g?.do.slice(0, 5) ?? [], countryEat: g?.eat.slice(0, 4) ?? [], ...(s?.url ? { guideUrl: s.url } : { note: `no city guide for ${name}; the country notes are shown` }) };
       }),
     }),
 
@@ -1044,17 +1782,17 @@ export function atlasTools(ctx: AgentContext) {
       description: "What's on in a city in the next weeks from the city's own open event feed (20 cities have one: Paris, Madrid, Lisbon, Bologna, Berlin, Helsinki, New York, Chicago, San Francisco, Brisbane, Taipei and more). Says so when a city has none.",
       inputSchema: jsonSchema<{ city: string; days?: number }>({ type: "object", properties: { city: { type: "string" }, days: { type: "number", description: "default 30" } }, required: ["city"] }),
       execute: safe(async ({ city, days }) => {
-        const hit = findCity(city);
-        if (!hit) return { error: `no city named ${city}` };
+        const hit = findCity(city ?? "");
+        if (!hit) return { ...unknownPlace("city", city ?? ""), events: [] };
         const [, c] = hit;
         const near = sourcesNear(c.lat, c.lon);
-        if (!near.length) return { city: c.name, events: [], note: "no open event feed for this city; use web_search for what's on" };
+        if (!near.length) return { searched: 0, source: "feed" as Source, city: c.name, events: [], note: "no open event feed for this city; use web_search for what's on" };
         const from = ctx.today;
         // One to sixty days ahead: the feeds are cached for three hours and list the coming weeks.
         const to = addDays(from, Math.min(60, Math.max(1, Math.round(Number(days) || 30))));
         const lists = await Promise.all(near.map((s) => s.fetch(from, to).catch(() => [])));
         const ev = lists.flat().filter((e) => !isNoise(e.name, e.kind)).sort((a, b) => a.date.localeCompare(b.date)).slice(0, 12);
-        return { city: c.name, sources: near.map((s) => s.attribution), events: ev.map((e) => ({ date: e.date, name: e.name, venue: e.venue, kind: e.kind, url: e.url })) };
+        return { searched: 0, source: "feed" as Source, city: c.name, sources: near.map((s) => s.attribution), count: ev.length, ...(ev.length ? {} : { note: `the feed for ${c.name} lists nothing between ${from} and ${to}; it may be down or empty, use web_search` }), events: ev.map((e) => ({ date: e.date, name: e.name, venue: e.venue, kind: e.kind, url: e.url })) };
       }),
     }),
 
@@ -1064,12 +1802,12 @@ export function atlasTools(ctx: AgentContext) {
             description: "Rated restaurants near a city centre that are good value (Foursquare rating 8+/10, price tier 1 or 2) with a tip each, or the best sweet places. Use for 'where should I eat in X', 'best ice cream in X'.",
             inputSchema: jsonSchema<{ city: string; sweet?: boolean }>({ type: "object", properties: { city: { type: "string" }, sweet: { type: "boolean" } }, required: ["city"] }),
             execute: safe(async ({ city, sweet }) => {
-              const hit = findCity(city);
-              if (!hit) return { error: `no city named ${city}` };
+              const hit = findCity(city ?? "");
+              if (!hit) return { ...unknownPlace("city", city ?? ""), places: [] };
               const [, c] = hit;
               const r = sweet ? await sweetsNear(c.lat, c.lon) : await goodValueEats(c.lat, c.lon);
-              if (r.status !== "ok") return { error: r.note ?? r.status };
-              return r.places.map((p) => ({ name: p.name, rating: p.rating, price: "€".repeat(p.price ?? 1), category: p.category, address: p.address, tip: p.tip }));
+              if (r.status !== "ok") return { searched: 0, source: "foursquare" as Source, city: c.name, places: [], note: `the restaurant ratings are not available (${r.note ?? r.status}); web_search can stand in` };
+              return { searched: 0, source: "foursquare" as Source, city: c.name, count: r.places.length, ...(r.places.length ? {} : { note: `no rated ${sweet ? "sweet place" : "good value restaurant"} near the centre of ${c.name} in Foursquare; web_search can stand in` }), places: r.places.map((p) => ({ name: p.name, rating: p.rating, price: "€".repeat(p.price ?? 1), category: p.category, address: p.address, tip: p.tip })) };
             }),
           }),
         }
@@ -1081,16 +1819,24 @@ export function atlasTools(ctx: AgentContext) {
             description: `The cheapest decent hotels near a city centre for given nights (LiteAPI, live prices${liteApiLive() ? "" : "; sandbox key: test prices, say so"}). A city in an excluded (been) country gets a note instead of hotels: a hotel night there is a stay there.`,
             inputSchema: jsonSchema<{ city: string; checkin: string; checkout: string; exclude?: string[]; allow?: string[] }>({ type: "object", properties: { city: { type: "string" }, checkin: { type: "string" }, checkout: { type: "string" }, ...BEEN_PROPS }, required: ["city", "checkin", "checkout"] }),
             execute: safe(async (a) => {
-              const { city, checkin, checkout } = a;
-              const hit = findCity(city);
-              if (!hit) return { error: `no city named ${city}` };
-              if (!isoDay(checkin) || !isoDay(checkout)) return { error: "checkin and checkout must be YYYY-MM-DD" };
+              const { city } = a;
+              const hit = findCity(city ?? "");
+              if (!hit) return { ...unknownPlace("city", city ?? ""), status: "skipped", hotels: [] };
+              const ci = futureDay(a.checkin, ctx.today, "check-in");
+              if (!ci.day) return { error: ci.note! };
+              let checkout = parseDay(a.checkout, ctx.today);
+              const corrections = ci.note ? [ci.note] : [];
+              if (!checkout || checkout <= ci.day) {
+                corrections.push(`check-out ${checkout ?? `"${a.checkout ?? ""}"`} is not after check-in; set to ${addDays(ci.day, 2)}`);
+                checkout = addDays(ci.day, 2);
+              }
+              const corrected = corrections.length ? { corrected: corrections.join("; ") } : {};
               const [, c] = hit;
               // Sleeping in a been country is a stay there: the note answers, no hotel is fetched.
               const exclude = excludeOf(a.exclude, a.allow);
-              if (!countryAllowed(c.country, exclude)) return { status: "skipped", note: excludedNote([c.country]), hotels: [] };
-              const r = await hotelsNear(c.lat, c.lon, checkin, checkout, ctx.home);
-              return { status: r.status, note: r.note, hotels: r.hotels.map((h) => ({ name: h.name, stars: h.stars, guests: h.rating, perNight: h.perNight, total: h.total })) };
+              if (!countryAllowed(c.country, exclude)) return { searched: 0, source: "liteapi" as Source, status: "skipped", note: excludedNote([c.country]), hotels: [] };
+              const r = await hotelsNear(c.lat, c.lon, ci.day, checkout, ctx.home);
+              return { searched: 0, source: "liteapi" as Source, city: c.name, status: r.status, nights: `${ci.day} to ${checkout}`, ...corrected, note: r.note ?? (r.hotels.length ? `${r.hotels.length} hotels near the centre${liteApiLive() ? "" : " (sandbox prices)"}` : `no hotel priced near ${c.name} for ${ci.day} to ${checkout}; try other dates`), hotels: r.hotels.map((h) => ({ name: h.name, stars: h.stars, guests: h.rating, perNight: h.perNight, total: h.total })) };
             }),
           }),
         }
@@ -1104,12 +1850,12 @@ export function atlasTools(ctx: AgentContext) {
             execute: safe(async (a) => {
               const { origin, limit } = a;
               const from = airportArg(origin, gateways[0]);
-              if (!from) return { error: `unknown airport or city ${origin}` };
+              if (!from) return { ...unknownPlace("origin", origin ?? ""), fares: [] };
               // The country a fare lands in: its city when we know one, else the airports file.
               const exclude = excludeOf(a.exclude, a.allow);
               const landsIn = (dst: string) => CITIES[CITY_OF_AIRPORT.get(dst) ?? ""]?.country ?? AIRPORT_BY_IATA.get(dst)?.country;
               const fares = (await allFares({ origin: from })).filter((f) => countryAllowed(landsIn(f.dst), exclude)).sort((a, b) => a.price - b.price).slice(0, Math.min(30, limit ?? 15));
-              return { ...excludedSummary(exclude, [], a.exclude), fares: fares.map((f) => ({ to: f.dst, city: CITIES[CITY_OF_AIRPORT.get(f.dst) ?? ""]?.name, price: f.price, date: f.departureAt.slice(0, 10), stops: f.transfers, url: f.url })) };
+              return { searched: 0, source: "travelpayouts" as Source, origin: from, count: fares.length, ...excludedSummary(exclude, [], a.exclude), ...(fares.length ? {} : { note: `no cached one-way fare out of ${from} in Travelpayouts; the boards or a live search may still have fares` }), fares: fares.map((f) => ({ to: f.dst, city: CITIES[CITY_OF_AIRPORT.get(f.dst) ?? ""]?.name, price: f.price, date: f.departureAt.slice(0, 10), stops: f.transfers, url: f.url })) };
             }),
           }),
         }
@@ -1117,18 +1863,26 @@ export function atlasTools(ctx: AgentContext) {
 
     ground_reach: tool({
       description: "Towns reachable by train, coach or ferry from where the traveller is, within a time limit (expected door-to-door minutes from timetables, Europe only), biggest first.",
-      inputSchema: jsonSchema<{ maxHours?: number; limit?: number }>({ type: "object", properties: { maxHours: { type: "number", description: "default 5, max 10" }, limit: { type: "number" } } }),
+      inputSchema: jsonSchema<{ maxHours?: number; limit?: number; from?: string }>({ type: "object", properties: { maxHours: { type: "number", description: "default 5, max 10" }, limit: { type: "number" }, from: { type: "string", description: "a city to start from instead of the traveller's location" } } }),
       execute: safe(async (a) => {
-        if (!ctx.origin) return { error: "the traveller's location is unknown" };
+        // From a named city, else the traveller's location, else their main airport.
+        const named = a.from ? findCity(a.from) : null;
+        if (a.from && !named) return { ...unknownPlace("start", a.from), towns: [] };
+        const start = named ? { lat: named[1].lat, lon: named[1].lon, label: named[1].name } : ctx.origin ?? (() => {
+          const g = resolveGateway(gateways[0]);
+          return g ? { lat: g.lat, lon: g.lon, label: g.label } : null;
+        })();
+        if (!start) return plain("the traveller's location is unknown and no city was given; ask where they start", "data");
         const max = Math.min(600, Math.max(60, Math.round((a.maxHours ?? 5) * 60)));
-        const r = reachFrom(ctx.origin.lat, ctx.origin.lon, max);
+        const r = reachFrom(start.lat, start.lon, max);
         const seen = new Set<string>();
-        return r.reached
+        const towns = r.reached
           .filter((s) => s.pop >= 15_000)
           .sort((x, y) => y.pop - x.pop)
           .filter((s) => !seen.has(s.town ?? s.name) && seen.add(s.town ?? s.name))
           .slice(0, Math.min(25, a.limit ?? 12))
           .map((s) => ({ town: s.town ?? s.name, population: s.pop, minutes: s.minutes, changes: s.changes, mode: s.mode }));
+        return { searched: 0, source: "data" as Source, from: start.label, maxHours: max / 60, count: towns.length, ...(towns.length ? {} : { note: `no town of 15,000 people within ${max / 60} hours of ${start.label} by train, coach or ferry in the timetables (the graph covers Europe, North America and parts of Asia)` }), towns };
       }),
     }),
 
@@ -1136,11 +1890,14 @@ export function atlasTools(ctx: AgentContext) {
       description: "Facts about a city and its country: population, how known it is, counts of restaurants, bars, nightlife, culture, nature, currency and rate, plugs, languages, visa for the traveller's passport, travel warning, this weekend's high.",
       inputSchema: jsonSchema<{ city: string }>({ type: "object", properties: { city: { type: "string" } }, required: ["city"] }),
       execute: safe(async ({ city }) => {
-        const hit = findCity(city);
-        if (!hit) return { error: `no city named ${city}` };
+        const hit = findCity(city ?? "");
+        if (!hit) return unknownPlace("city", city ?? "");
         const [code, c] = hit;
         const co = COUNTRIES[c.country];
-        return { city: c.name, country: co?.name ?? c.country, population: c.pop, wikipediaViewsPerYear: FAME[code]?.[0], places: PLACES[code], currency: co?.currency, eurRate: co?.rate, plugs: co?.plugs, voltage: co?.voltage, languages: co?.languages, visaForHomePassport: c.country !== ctx.home ? visaFor(VISA, ctx.home, c.country) : "home country", travelWarning: co?.advisory?.warning ? "full" : co?.advisory?.partial ? "partial" : "none", weekendHighC: weekendMax(code), hiddenGem: isGem(FAME, code, 0, PLACES[code]) };
+        // Undefined fields are dropped (JSON would drop them anyway, but the shape says what is unknown).
+        const facts = { city: c.name, country: co?.name ?? c.country, population: c.pop, wikipediaViewsPerYear: FAME[code]?.[0], places: PLACES[code], currency: co?.currency, eurRate: co?.rate, plugs: co?.plugs, voltage: co?.voltage, languages: co?.languages, visaForHomePassport: c.country !== ctx.home ? visaFor(VISA, ctx.home, c.country) : "home country", travelWarning: co?.advisory?.warning ? "full" : co?.advisory?.partial ? "partial" : "none", weekendHighC: weekendMax(code), hiddenGem: isGem(FAME, code, 0, PLACES[code]) };
+        const missing = Object.entries(facts).filter(([, v]) => v == null).map(([k]) => k);
+        return { searched: 0, source: "data" as Source, ...Object.fromEntries(Object.entries(facts).filter(([, v]) => v != null)), ...(missing.length ? { unknown: missing } : {}) };
       }),
     }),
 
@@ -1149,7 +1906,12 @@ export function atlasTools(ctx: AgentContext) {
           web_search: tool({
             description: "Search the live web for current recommendations and facts: best traditional food and where locals eat, what's on this month, how to do a loop or a cruise, entry rules, prices. Returns page snippets with their sources; cite the site.",
             inputSchema: jsonSchema<{ query: string }>({ type: "object", properties: { query: { type: "string" } }, required: ["query"] }),
-            execute: safe(async ({ query }) => (await webSearch(String(query).slice(0, 200), 5)).map((h) => ({ title: h.title, source: h.url, snippet: h.content.slice(0, 600) }))),
+            execute: safe(async ({ query }) => {
+              const q = String(query ?? "").trim().slice(0, 200);
+              if (!q) return { error: "a query is needed" };
+              const hits = (await webSearch(q, 5)).map((h) => ({ title: h.title, source: h.url, snippet: h.content.slice(0, 600) }));
+              return { searched: 0, source: "web" as Source, query: q, count: hits.length, ...(hits.length ? {} : { note: `the web search returned nothing for "${q}"; try other words` }), results: hits };
+            }),
           }),
         }
       : {}),

@@ -2,33 +2,38 @@ import { NextResponse } from "next/server";
 import { parseExclude } from "@/lib/been";
 import { readJson, writeJson } from "@/lib/boards-store";
 import { planDays, planPath, type Plan } from "@/lib/plan";
-import { customKey, wildPath, REGIONS, type Budget, type Style, type Tradeoff, type WildTrip } from "@/lib/wild";
+import { customKey, parseCities, parseCountries, parseNightsRange, wildPath, REGIONS, type Budget, type Style, type Tradeoff, type WildTrip } from "@/lib/wild";
 import { mainGateway } from "@/lib/board";
 import { InFlight } from "@/lib/memo";
 import { bad, iataList, intIn, isoDay, isoMonth, oneOf } from "@/lib/params";
 
-// GET /api/plan?g=OTP&region=sea&nights=14[&month=][&from=&to=][&style=][&budget=][&tradeoff=][&noHubs=1][&variants=3][&exclude=TH,VN][&fresh=<token>]
+// GET /api/plan?g=OTP&region=sea&nights=14[&month=][&from=&to=][&style=][&budget=][&tradeoff=][&noHubs=1][&variants=3][&exclude=TH,VN]
+//     [&countries=][&prefer=][&maxStops=][&nightsPerStop=3-5][&mustInclude=][&maxFlightHours=][&startFrom=][&wishes=][&fresh=<token>]
 // The day-by-day plan of a stored wild trip: experiences, food, costs, a month's rent. Built
 // once (one to two minutes of model and research calls), then stored next to the trip. Two
 // visitors asking for the same plan share one build. The trip is looked up under exactly the
 // key /api/wild stored it with, so every parameter that shapes that key (month or window,
-// style, budget, tradeoff, noHubs, variants, exclude) is accepted here with the same validation and
-// clamps (a window wider than ten days is clipped to from + 10 days, as /api/wild clips it,
-// so the key matches; the been list becomes the same token); a caller must send what it sent to /api/wild. No Kiwi searches. `fresh` rebuilds
-// only with the shared token (ATLAS_FRESH_TOKEN): a plan costs a minute of model calls and
-// about ten Tavily searches.
+// style, budget, tradeoff, noHubs, variants, exclude, countries, prefer, maxStops,
+// nightsPerStop, mustInclude, maxFlightHours, startFrom, wishes) is accepted here with the
+// same validation and clamps (a window wider than ten days is clipped to from + 10 days, as
+// /api/wild clips it, so the key matches; the been list becomes the same token; names become
+// the same codes); a caller must send what it sent to /api/wild. No Kiwi searches. `fresh`
+// rebuilds only with the shared token (ATLAS_FRESH_TOKEN): a plan costs a minute of model
+// calls and about ten Tavily searches.
 export const maxDuration = 300;
 const inflight = new InFlight<Plan | null>();
 const STYLES = ["experiences", "beaches", "food", "cities", "slow"] as const;
 const BUDGETS = ["backpacker", "mid", "comfort"] as const;
 const TRADEOFFS = ["price", "balanced", "comfort"] as const;
 /** Same bounds as /api/wild, so a plan key always matches a trip key. */
-const MIN_NIGHTS = 7;
+const MIN_NIGHTS = 5;
 const MAX_NIGHTS = 90;
 const MAX_WINDOW_DAYS = 10;
 const LONG_TRIP_NIGHTS = 28;
 const MAX_VARIANTS = 3;
 const MAX_VARIANTS_LONG = 2;
+const MAX_FLIGHT_HOURS = 40;
+const MAX_WISHES = 300;
 
 function freshAllowed(v: string | null): boolean {
   const token = process.env.ATLAS_FRESH_TOKEN?.trim();
@@ -40,9 +45,9 @@ export async function GET(request: Request) {
   const gateways = iataList(p.get("g"), 3);
   if (!gateways.length) return bad("g must be a comma list of three-letter airport codes");
   const g = mainGateway(gateways);
-  const region = (p.get("region") ?? "sea").toLowerCase();
+  const regionRaw = (p.get("region") ?? "sea").toLowerCase();
   // Own keys only: "constructor" passes an `in` check but is no region.
-  if (!Object.hasOwn(REGIONS, region)) return bad(`region must be one of ${Object.keys(REGIONS).join(", ")}`);
+  if (!Object.hasOwn(REGIONS, regionRaw)) return bad(`region must be one of ${Object.keys(REGIONS).join(", ")}`);
   const nightsRaw = p.get("nights");
   if (nightsRaw && !Number.isFinite(Number(nightsRaw))) return bad(`nights must be a number from ${MIN_NIGHTS} to ${MAX_NIGHTS}`);
   const nights = intIn(nightsRaw, MIN_NIGHTS, MAX_NIGHTS, 14);
@@ -65,7 +70,39 @@ export async function GET(request: Request) {
   const exclude = parseExclude(p.get("exclude"));
   // The same clamps as /api/wild: at most 3 versions, 2 past 28 nights (a dated window has them too).
   const variants = Math.min(intIn(p.get("variants"), 1, 4, 1), nights > LONG_TRIP_NIGHTS ? MAX_VARIANTS_LONG : MAX_VARIANTS);
-  const tripPath = wildPath(g, region, month, nights, style, budget, customKey(undefined, undefined, undefined, undefined, tradeoff, noHubs, from, to, exclude) + (variants > 1 ? `-v${variants}` : ""));
+  // The traveller's constraints, read exactly as /api/wild reads them (names become codes).
+  const countriesRaw = p.get("countries");
+  const countriesParsed = parseCountries(countriesRaw);
+  const countries = countriesParsed.codes.length ? countriesParsed.codes.slice(0, 8) : undefined;
+  // /api/wild stores a trip with a country list under the custom key whatever region was named; same here.
+  const region = countries ? "custom" : regionRaw;
+  if (countriesRaw && !countries) return bad(`none of those is a country we know: ${countriesParsed.unknown.join(", ")}`);
+  if (countriesParsed.unknown.length) return bad(`unknown country: ${countriesParsed.unknown.join(", ")}`);
+  const preferParsed = parseCountries(p.get("prefer"));
+  if (preferParsed.unknown.length) return bad(`unknown country in prefer: ${preferParsed.unknown.join(", ")}`);
+  const prefer = preferParsed.codes.length ? preferParsed.codes.slice(0, 8) : undefined;
+  const maxStopsRaw = p.get("maxStops");
+  const maxStops = maxStopsRaw ? intIn(maxStopsRaw, 1, 8, 0) || undefined : undefined;
+  const nightsRangeRaw = p.get("nightsPerStop");
+  const nightsRange = nightsRangeRaw ? parseNightsRange(nightsRangeRaw) : null;
+  if (nightsRangeRaw && !nightsRange) return bad("nightsPerStop must be a number or a range such as 3-5");
+  const nightsPerStop = nightsRange ? Math.min(30, nightsRange[0]) : undefined;
+  const nightsPerStopMax = nightsRange && nightsRange[1] > nightsRange[0] ? Math.min(30, nightsRange[1]) : undefined;
+  const mustRaw = p.get("mustInclude");
+  const mustParsed = parseCities(mustRaw);
+  const mustInclude = mustParsed.codes.length ? mustParsed.codes.slice(0, 8) : undefined;
+  if (mustRaw && !mustInclude) return bad(`unknown city to pass through: ${mustParsed.unknown.join(", ")}`);
+  if (mustParsed.unknown.length) return bad(`unknown city to pass through: ${mustParsed.unknown.join(", ")}`);
+  const hoursRaw = p.get("maxFlightHours");
+  const hoursNum = hoursRaw ? Number(hoursRaw) : NaN;
+  const maxFlightHours = hoursRaw && Number.isFinite(hoursNum) && hoursNum >= 1 && hoursNum <= MAX_FLIGHT_HOURS ? Math.round(hoursNum) : undefined;
+  if (hoursRaw && !maxFlightHours) return bad(`maxFlightHours must be a number from 1 to ${MAX_FLIGHT_HOURS}`);
+  const startFromRaw = p.get("startFrom");
+  const startFrom = startFromRaw ? iataList(startFromRaw, 3) : [];
+  if (startFromRaw && !startFrom.length) return bad("startFrom must be a comma list of three-letter airport codes");
+  const wishes = (p.get("wishes") ?? "").trim().slice(0, MAX_WISHES) || undefined;
+  const extras = { mustInclude, maxFlightHours, startFrom: startFrom.length ? startFrom : undefined, wishes, nightsPerStopMax };
+  const tripPath = wildPath(g, region, month, nights, style, budget, customKey(countries, prefer, maxStops, nightsPerStop, tradeoff, noHubs, from, to, exclude, extras) + (variants > 1 ? `-v${variants}` : ""));
   const path = planPath(tripPath);
   if (!freshAllowed(p.get("fresh"))) {
     const stored = await readJson<Plan>(path);

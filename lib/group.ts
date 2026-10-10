@@ -16,7 +16,11 @@ import { countryAllowed } from "./been";
 import { hubDegree, resolveGateway, targetsFor } from "./board";
 import { allowedTargets, findDeals, regionCountries } from "./finder";
 import { TtlLru } from "./memo";
-import type { City, Deal } from "./types";
+import { resolveCountries } from "./wild";
+import countriesJson from "@/public/data/countries.json";
+import type { City, CountryInfo, Deal } from "./types";
+
+const COUNTRIES = countriesJson as unknown as Record<string, CountryInfo>;
 
 const CITIES = citiesJson as unknown as Record<string, City>;
 const cityOf = new Map<string, string>();
@@ -42,6 +46,10 @@ export type GroupParams = {
   direct?: boolean;
   /** "Been" (ISO2): no option in these countries, and a member's home city there is no host option either. */
   exclude?: string[];
+  /** Euros: an option where anyone would pay more than this is dropped, and the answer says how many were. */
+  budgetPerPerson?: number;
+  /** A moment (epoch ms) past which no further window is priced: the options found so far are answered, with a note, and nothing is memoised. */
+  deadline?: number;
   onProgress?: (line: string) => void;
 };
 export type GroupResult = {
@@ -53,6 +61,11 @@ export type GroupResult = {
   /** True when a search failed, so a city may be missing that would otherwise be priced. */
   partial?: true;
   generatedAt: string;
+  /** Options dropped by the per-person budget, and a plain line saying so. */
+  dropped?: number;
+  note?: string;
+  /** The places searched, as the engine read `where` (names resolved, regions expanded). */
+  where?: string;
 };
 
 /** A request the engine cannot price as asked; the route answers 400 with the message. */
@@ -166,9 +179,13 @@ export async function groupTrip(p: GroupParams): Promise<GroupResult> {
   const minNights = Math.max(1, Math.round(p.minNights));
   const maxNights = Math.max(minNights, Math.round(p.maxNights));
   const exclude = p.exclude ?? [];
+  const cap = p.budgetPerPerson && Number.isFinite(p.budgetPerPerson) && p.budgetPerPerson > 0 ? Math.round(p.budgetPerPerson) : 0;
+  // The budget is a filter on the options, not a search parameter: it stays out of the key,
+  // the unfiltered result is what is kept, and the cap is applied on the way out, so nudging
+  // the budget box costs no searches.
   const key = JSON.stringify([members.map((m) => [m.name, m.origins, m.available]), minNights, maxNights, p.where?.toLowerCase() ?? "", !!p.direct, exclude]);
   const hit = memo.get(key);
-  if (hit) return hit;
+  if (hit) return applyCap(hit, cap);
   const generatedAt = new Date().toISOString();
   if (members.length < 2) return { windows: [], options: [], searched: 0, failed: 0, generatedAt };
 
@@ -214,12 +231,19 @@ export async function groupTrip(p: GroupParams): Promise<GroupResult> {
     const near = nearCountries.filter((t) => set.has(t));
     where = [...near, ...allowed.filter((t) => !near.includes(t))].slice(0, TARGETS_PER_REGION).join(",");
   } else {
-    where = where
+    // A list of places: a country given by any name ("portugal", "Türkiye", "ES") becomes the
+    // name Kiwi knows; a city or anything else is passed as typed. Visited countries leave the list.
+    const listed = where
       .split(",")
       .map((s) => s.trim())
       .filter(Boolean)
-      .slice(0, groups.size >= 3 ? 3 : MAX_TARGETS)
-      .join(",");
+      .map((s) => {
+        const cc = resolveCountries([s]).codes[0];
+        return cc ? (COUNTRIES[cc]?.name ?? s) : s;
+      });
+    const allowed = allowedTargets([...new Set(listed)], exclude);
+    if (listed.length && !allowed.length) throw new GroupInputError(`Every place in "${p.where?.trim()}" is on your been list (only new countries); pick another or allow revisits.`);
+    where = allowed.slice(0, groups.size >= 3 ? 3 : MAX_TARGETS).join(",");
   }
   // Fill-in and host searches scale down with the number of airport groups.
   const fillN = groups.size <= 2 ? 3 : groups.size === 3 ? 2 : 1;
@@ -243,7 +267,13 @@ export async function groupTrip(p: GroupParams): Promise<GroupResult> {
   };
   const byPrice = (a: Deal, b: Deal) => a.price - b.price;
 
+  let cut = 0;
   for (const w of toPrice) {
+    // Past the caller's deadline the windows left are not priced; what is found stands.
+    if (p.deadline && Date.now() > p.deadline && options.length) {
+      cut++;
+      continue;
+    }
     say(`Pricing ${w.from} to ${w.to}${w.compromises.length ? ` (${w.compromises.join(", ")})` : ""}…`);
     // One job per (airports, effective window): a late arriver's window starts a day later, an
     // early leaver's ends a day earlier, so nobody is handed a flight on a day they are away.
@@ -352,9 +382,18 @@ export async function groupTrip(p: GroupParams): Promise<GroupResult> {
     // Cheapest wins; at the same price the window where everyone is there is the honest label.
     if (!prev || o.total < prev.total || (o.total === prev.total && o.window.everyone && !prev.window.everyone)) unique.set(k, o);
   }
-  const ranked = [...unique.values()].sort((a, b) => a.total - b.total);
-  const result: GroupResult = { windows, options: ranked, searched, failed, partial: failed > 0 ? true : undefined, generatedAt };
-  // An empty answer caused by refused searches is not kept; a retry searches again.
-  if (!(failed > 0 && !ranked.length)) memo.set(key, result);
-  return result;
+  const all = [...unique.values()].sort((a, b) => a.total - b.total);
+  const result: GroupResult = { windows, options: all, searched, failed, partial: failed > 0 || cut > 0 ? true : undefined, generatedAt, where, ...(cut ? { note: `${cut} window${cut === 1 ? "" : "s"} not priced in time; ask again for the rest.` } : {}) };
+  // An empty answer caused by refused searches, or one cut short, is not kept; a retry searches again.
+  if (!(failed > 0 && !all.length) && !cut) memo.set(key, result);
+  return applyCap(result, cap);
+}
+
+/** The per-person cap: an option where anyone pays more is out, and the answer says how many were. */
+function applyCap(r: GroupResult, cap: number): GroupResult {
+  if (!cap) return r;
+  const ranked = r.options.filter((o) => o.perMember.every((m) => m.price <= cap));
+  const dropped = r.options.length - ranked.length;
+  const note = dropped ? `${dropped} option${dropped === 1 ? "" : "s"} dropped because someone would pay more than €${cap}${ranked.length ? "" : "; nothing fits that budget on these dates"}.` : undefined;
+  return { ...r, options: ranked, dropped, ...(note ? { note: r.note ? `${r.note} ${note}` : note } : {}) };
 }

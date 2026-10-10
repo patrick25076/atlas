@@ -13,7 +13,7 @@ import type { WildTrip } from "@/lib/wild";
 import { countryName, dateRange, monthLabel, monthOptions } from "@/lib/format";
 import { formatDuration } from "@/lib/geo";
 import { WILD_REGIONS } from "@/lib/ui-types";
-import { FOLLOWUPS, ISO_DAY_RE, LOCAL_DAY, NIGHT_OPTIONS, TOOL_LABEL, addDays, quickDateRanges, toolProgress, widgetAnswer, type PersonRow, type WidgetKind, type WidgetSpec } from "@/lib/chat-widgets";
+import { FOLLOWUPS, ISO_DAY_RE, LOCAL_DAY, LONG_TOOLS, NIGHT_OPTIONS, ROUTE_KIND_LABEL, TOOL_LABEL, addDays, quickDateRanges, toolProgress, widgetAnswer, type PersonRow, type WidgetKind, type WidgetSpec } from "@/lib/chat-widgets";
 import s from "./ChatPanel.module.css";
 
 export type ChatContext = { origin?: { lat: number; lon: number; label: string }; gateways: string[]; home: string; month?: string; today?: string; been?: { countries: string[]; newOnly: boolean } };
@@ -37,6 +37,9 @@ type GroupOut = { windows: { dates: string; nights: number; everyone: boolean; c
 type Itin = { price: number; out: string; back?: string; nights: number | null; stops: number; via?: string[]; carriers: string[]; hours: number; url: string };
 type InsightOut = { route: string; month: string; typical: number | null; samples: number; low: number | null; verdict: string; note?: string };
 type MonthsOut = { city: string; best: string[]; months: { month: string; highC: number; rainMm: number; score: number }[] };
+/** One option of cheapest_way as the tool compacts it (the legs are one line each). */
+type RouteOptOut = { kind: string; title: string; total: number; hours: number; stops: number; nonstop?: boolean; why: string; legs: string[]; back?: string[]; backTotal?: number; urls: string[]; cheapest?: boolean; fastest?: boolean };
+type RouteOut = { from: string; to: string; depart?: string; flex?: number; nights: number | null; searched: number; source?: string; considered?: string[]; note?: string; cheapest: RouteOptOut | null; fastest: RouteOptOut | null; options: RouteOptOut[] };
 
 // Threads live in localStorage as one small index plus one key per thread, so a turn writes
 // only the thread it changed; the older one-key stores (v2, and the single v1 conversation)
@@ -462,6 +465,89 @@ function Itineraries({ items }: { items: Itin[] }) {
   );
 }
 
+/** The ways from A to B as cards: a kind badge, the title, the total and the hours, the legs
+ * as small pills, cheapest and fastest marked, and one button that asks the globe to draw the
+ * route (the UI's A-to-B mode listens for atlas:route). */
+function RouteCards({ out }: { out: RouteOut }) {
+  const options = out.options ?? [];
+  // The globe redraws the same question the cards came from: a one-way answer (nights null)
+  // stays one way, and the departure is the day the engine priced (the tool always sends it).
+  const show = () => window.dispatchEvent(new CustomEvent("atlas:route", { detail: { from: out.from, to: out.to, depart: out.depart, flex: out.flex, nights: out.nights ?? undefined, oneWay: out.nights == null } }));
+  const pill: React.CSSProperties = { fontSize: 12, padding: "3px 9px", cursor: "default" };
+  return (
+    <div className={s.cards}>
+      {options.slice(0, 5).map((o, i) => (
+        <div key={i} className={s.base}>
+          <div className={s.row}>
+            <b>
+              <span className={s.verdict} style={{ marginTop: 0, marginRight: 6 }}>
+                {ROUTE_KIND_LABEL[o.kind] ?? o.kind}
+              </span>
+              {o.title}
+            </b>
+            <span className={s.price}>{euro(o.total)}</span>
+          </div>
+          <span className={s.sub}>
+            {/* nonstop is the engine's word for a flight with no stop; the kind "direct" only means the nearest airports */}
+            {o.hours} h door to door · {o.nonstop ? "nonstop" : o.stops ? `${o.stops} stop${o.stops > 1 ? "s" : ""}` : "direct"}
+            {o.backTotal != null ? ` · back ${euro(o.backTotal)}` : ""}
+            {o.cheapest && (
+              <>
+                {" "}
+                <span className={`${s.verdict} ${s.good}`} style={{ marginTop: 0 }}>
+                  cheapest
+                </span>
+              </>
+            )}
+            {o.fastest && (
+              <>
+                {" "}
+                <span className={`${s.verdict} ${s.good}`} style={{ marginTop: 0 }}>
+                  fastest
+                </span>
+              </>
+            )}
+          </span>
+          <div className={s.chips}>
+            {(o.legs ?? []).map((l, k) => (
+              <span key={k} className={s.chip} style={pill}>
+                {l}
+              </span>
+            ))}
+          </div>
+          {o.why && <span className={s.sub}>{o.why}</span>}
+          {o.urls?.length > 0 && (
+            <span className={s.sub}>
+              {o.urls.slice(0, 3).map((u, k) => (
+                <span key={k}>
+                  {k ? " · " : ""}
+                  <a href={u} target="_blank" rel="noreferrer">
+                    {o.urls.length > 1 ? `book leg ${k + 1}` : "book"}
+                  </a>
+                </span>
+              ))}
+            </span>
+          )}
+        </div>
+      ))}
+      {options.length > 0 && (
+        <div className={s.chips}>
+          <button className={s.go} onClick={show}>
+            Show the route
+          </button>
+        </div>
+      )}
+      {(out.considered?.length || out.note) && (
+        <p className={s.caption}>
+          {out.considered?.length ? `Considered: ${out.considered.slice(0, 8).join(", ")}. ` : ""}
+          {out.searched ? `${out.searched} live searches. ` : ""}
+          {out.note ?? ""}
+        </p>
+      )}
+    </div>
+  );
+}
+
 function MonthStrip({ out }: { out: MonthsOut }) {
   const max = Math.max(...out.months.map((m) => m.score), 1);
   return (
@@ -657,6 +743,16 @@ export default function ChatPanel(p: Props) {
   const stickToBottom = useRef(true);
   const busy = status === "submitted" || status === "streaming";
   const canSpeak = !!speechCtor();
+  // When each running tool call was first seen, so a long tool's chip can say "48 s"; a
+  // once-a-second tick redraws the chips only while a tool is running.
+  const startedAt = useRef(new Map<string, number>());
+  const [, setTick] = useState(0);
+  const anyRunning = busy && messages.some((m) => m.role === "assistant" && m.parts.some((part) => isToolPart(part) && (part.state === "input-streaming" || part.state === "input-available")));
+  useEffect(() => {
+    if (!anyRunning) return;
+    const id = setInterval(() => setTick((t) => t + 1), 1000);
+    return () => clearInterval(id);
+  }, [anyRunning]);
 
   // The active thread is written to the browser at most twice a second while an answer
   // streams, and at once when a turn ends; only that thread's key is rewritten.
@@ -712,6 +808,7 @@ export default function ChatPanel(p: Props) {
   useEffect(() => {
     for (const m of messages) {
       for (const part of m.parts) {
+        if (isToolPart(part) && part.toolCallId && (part.state === "input-streaming" || part.state === "input-available") && !startedAt.current.has(part.toolCallId)) startedAt.current.set(part.toolCallId, Date.now());
         if (!isToolPart(part) || part.state !== "output-available" || !part.toolCallId || applied.current.has(part.toolCallId)) continue;
         const name = part.type.slice(5);
         const out = part.output as { raw?: unknown } | undefined;
@@ -849,15 +946,25 @@ export default function ChatPanel(p: Props) {
     }
     const count = out && typeof out === "object" ? ((out.found as number | undefined) ?? (Array.isArray(out.bases) ? out.bases.length : undefined) ?? (Array.isArray(out.options) ? out.options.length : undefined) ?? (out.count as number | undefined)) : undefined;
     const searched = out && typeof out === "object" ? (out.searched as number | undefined) : undefined;
+    // Something to show under the chip: a count, any non-empty list (months, itineraries,
+    // deals, towns, a ranked list of trips), a verdict from the fare memory or a built trip.
+    const payload = !!out && typeof out === "object" && (count != null || Object.values(out).some((v) => Array.isArray(v) && v.length > 0) || (typeof out.verdict === "string" && out.verdict !== "unknown") || typeof out.title === "string" || typeof out.widget === "boolean");
+    // A note without data (live prices off, nothing stored, an unknown place, a build with
+    // nothing to show) is shown on the chip in amber, like a soft error, so the thread says
+    // plainly why there is no card; a tick is only for a result with something underneath.
+    const noted = tp.state === "output-available" && !soft && !!out && typeof out.note === "string" && (count === 0 || (count == null && !payload));
+    const secs = running && tp.toolCallId && startedAt.current.has(tp.toolCallId) ? Math.round((Date.now() - startedAt.current.get(tp.toolCallId)!) / 1000) : 0;
+    const progress = running ? `${toolProgress(name, tp.input).replace(/\.\.\.$/, "")}${LONG_TOOLS.has(name) && secs >= 3 ? `, ${secs} s` : "..."}` : "";
     return (
       <div key={tp.toolCallId ?? i} className={s.toolwrap}>
-        <div className={`${s.toolchip} ${failed ? s.fail : soft ? s.warn : running ? "" : s.done}`}>
-          {running ? <i className={s.spinner} /> : failed || soft ? "!" : "✓"}
+        <div className={`${s.toolchip} ${failed ? s.fail : soft || noted ? s.warn : running ? "" : s.done}`} title={!running && out && typeof out.note === "string" ? out.note : undefined}>
+          {running ? <i className={s.spinner} /> : failed || soft || noted ? "!" : "✓"}
           <span>
-            {running ? toolProgress(name, tp.input) : TOOL_LABEL[name] ?? name}
-            {!running && !failed && !soft && count != null ? `: ${count} found` : ""}
-            {!running && !failed && !soft && searched != null && count == null ? `: ${searched} searches` : ""}
-            {failed ? `: ${tp.errorText ?? "failed"}` : soft ? `: ${String(out!.error)}` : ""}
+            {running ? progress : TOOL_LABEL[name] ?? name}
+            {!running && !failed && !soft && !noted && count != null ? `: ${count} found` : ""}
+            {!running && !failed && !soft && !noted && searched != null && count == null ? `: ${searched} searches` : ""}
+            {!running && !failed && !soft && !noted && out && typeof out.source === "string" && out.source !== "live" && searched === 0 ? ` (${out.source})` : ""}
+            {failed ? `: ${tp.errorText === "stopped before it finished" ? "stopped" : tp.errorText ?? "failed"}` : soft ? `: ${String(out!.error)}` : noted ? `: ${String(out!.note).slice(0, 120)}` : ""}
           </span>
         </div>
         {tp.state === "output-available" && out && !soft && (
@@ -867,6 +974,7 @@ export default function ChatPanel(p: Props) {
             {name === "group_trip" && Array.isArray(out.options) && <GroupOptions out={out as unknown as GroupOut} />}
             {name === "reprice_route" && Array.isArray(out.itineraries) && <Itineraries items={out.itineraries as Itin[]} />}
             {name === "best_months" && Array.isArray(out.months) && <MonthStrip out={out as unknown as MonthsOut} />}
+            {name === "cheapest_way" && Array.isArray(out.options) && <RouteCards out={out as unknown as RouteOut} />}
             {name === "price_insight" && (
               <span className={`${s.verdict} ${s[(out as unknown as InsightOut).verdict] ?? ""}`}>
                 {(out as unknown as InsightOut).verdict === "unknown" ? "No fare history yet for this route" : `Fare memory: ${(out as unknown as InsightOut).verdict}${(out as unknown as InsightOut).typical != null ? `, usually ${euro((out as unknown as InsightOut).typical)}` : ""}${(out as unknown as InsightOut).low != null ? `, lowest seen ${euro((out as unknown as InsightOut).low)}` : ""}`}

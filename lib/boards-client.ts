@@ -86,3 +86,43 @@ export async function fetchBoard(
   }
   if (!finished && !signal?.aborted) on.error("the search stopped early");
 }
+
+/**
+ * Reads an NDJSON body line by line and hands every parsed object to `onLine`. Shared by the
+ * finder, the wild builder and the A to B route search, which all stream progress lines and
+ * results the same way. Resolves true when the stream ended on its own, false when it was
+ * aborted; a partial last line (the connection cut mid-object) is dropped, never thrown.
+ */
+export async function readNdjson<T>(res: Response, onLine: (msg: T) => void, signal?: AbortSignal): Promise<boolean> {
+  const reader = res.body?.getReader();
+  if (!reader) return false;
+  const decoder = new TextDecoder();
+  let buf = "";
+  try {
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      let nl = buf.indexOf("\n");
+      while (nl >= 0) {
+        const line = buf.slice(0, nl).trim();
+        buf = buf.slice(nl + 1);
+        nl = buf.indexOf("\n");
+        if (!line) continue;
+        // Only the parse is guarded: a partial or malformed line is skipped, the next one is
+        // whole. An error thrown by the handler itself is the caller's to see, never swallowed.
+        let msg: T;
+        try {
+          msg = JSON.parse(line) as T;
+        } catch {
+          continue;
+        }
+        onLine(msg);
+      }
+    }
+  } catch (err) {
+    if (isAbort(err) || signal?.aborted) return false;
+    throw err;
+  }
+  return !signal?.aborted;
+}

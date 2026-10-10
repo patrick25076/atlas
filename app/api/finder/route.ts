@@ -2,11 +2,14 @@ import { parseExclude } from "@/lib/been";
 import { logSearch } from "@/lib/db";
 import { findDeals, type FinderResult } from "@/lib/finder";
 import { keepAlive, TtlLru } from "@/lib/memo";
-import { bad, iataList, intIn, isoDay } from "@/lib/params";
+import { bad, iataList, intIn, isoDay, latLon } from "@/lib/params";
 
 // GET /api/finder?origins=OTP,SBZ,GHV&from=2026-10-20&to=2026-10-30&include=2026-10-26
 //     &minNights=2&maxNights=6[&direct=1][&maxHours=6][&where=anywhere|Italy|Europe][&returnTo=CLJ,TSR]
-//     [&exclude=RO,HU]
+//     [&exclude=RO,HU][&exhaustive=1&lat=45.65&lon=25.6]
+// exhaustive=1 widens the search: airports reachable by train or coach within three hours of
+// lat/lon join the origins, and every origin airport gets its own search of the same question
+// (a multi-origin search only returns the cheapest origin); about five extra searches.
 // maxHours=0 (or absent) means no limit on the flight length. exclude is the "Been" list
 // (ISO2): targets in those countries are not searched and deals landing there are dropped;
 // a connection through one is fine. When it leaves nothing to search the done line carries
@@ -39,6 +42,8 @@ export async function GET(request: Request) {
   const tricks = p.get("tricks") === "1";
   const returnTo = iataList(p.get("returnTo"), 5);
   const exclude = parseExclude(p.get("exclude"));
+  const exhaustive = p.get("exhaustive") === "1";
+  const origin = exhaustive ? (latLon(p.get("lat"), p.get("lon")) ?? undefined) : undefined;
   if (!origins.length) return bad("origins must be a comma list of three-letter airport codes");
   if (!from || !to) return bad("from and to must be real dates, YYYY-MM-DD");
   if (to < from) return bad("to must not be before from");
@@ -50,7 +55,7 @@ export async function GET(request: Request) {
   if (maxHoursRaw && !Number.isFinite(Number(maxHoursRaw))) return bad("maxHours must be a number of hours, 0 for no limit");
   if (!/^[\p{L}\p{N} ,'&().-]+$/u.test(where)) return bad("where must be 'anywhere', a region or a country name");
 
-  const key = JSON.stringify({ origins, from, to, include, minNights, maxNights, direct, maxHours, where, returnTo, tricks, exclude });
+  const key = JSON.stringify({ origins, from, to, include, minNights, maxNights, direct, maxHours, where, returnTo, tricks, exclude, exhaustive, origin });
   const hit = memo.get(key);
   if (hit) return Response.json(hit, { headers: { "Cache-Control": "private, max-age=300", "X-Finder": "memo" } });
 
@@ -74,13 +79,13 @@ export async function GET(request: Request) {
       say({ start: { origins, from, to, include, minNights, maxNights } });
       const t0 = Date.now();
       try {
-        const result = await findDeals({ origins, from, to, include, minNights, maxNights, direct, maxHours, where, returnTo, tricks, exclude, onDeals: (deals) => say({ deals }), onProgress: (line) => say({ progress: line }) });
+        const result = await findDeals({ origins, from, to, include, minNights, maxNights, direct, maxHours, where, returnTo, tricks, exclude, exhaustive, origin, onDeals: (deals) => say({ deals }), onProgress: (line) => say({ progress: line }) });
         // Memoise a real answer only: deals, or a clean run that found none. A run where every
         // search failed (Kiwi throttling) must not become "no deals" for the next 30 minutes.
         if (result.deals.length || result.failed === 0) memo.set(key, result);
         // The usage log, never awaited: a slow database must not hold the stream open.
         // The been list itself stays in the browser; the log only counts how many countries it held.
-        void logSearch("finder", { origins, from, to, include, minNights, maxNights, direct, maxHours, where, returnTo, tricks, excluded: exclude.length }, result.deals.length, Date.now() - t0).catch(() => null);
+        void logSearch("finder", { origins, from, to, include, minNights, maxNights, direct, maxHours, where, returnTo, tricks, exhaustive, excluded: exclude.length }, result.deals.length, Date.now() - t0).catch(() => null);
         const note = result.note ?? (!result.deals.length && result.failed > 0 ? `${result.failed} of ${result.searched + result.failed} searches failed; live prices may be rate-limited right now, try again in a few minutes` : undefined);
         say({ done: { searched: result.searched, failed: result.failed, openJaw: result.openJaw, count: result.deals.length, generatedAt: result.generatedAt, note } });
       } catch (err) {

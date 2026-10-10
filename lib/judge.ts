@@ -26,6 +26,10 @@ export async function judgeTrip(trip: WildTrip): Promise<Judge | null> {
     ),
     stops: trip.stops.map((s) => `${s.name}, ${s.country}: ${s.nights} nights, about €${s.perDay}/day for hotel, food, local transport and one activity${s.visa ? `, visa: ${s.visa}` : ""}${s.warning ? ", partial travel warning" : ""}`),
     totals: { ...trip.totals, hoursInTransitDoorToDoor: trip.totals.hoursInAir, hoursInAir: undefined },
+    // The traveller's own words and the cities they asked for: the verdict is judged against them.
+    travellerWishes: trip.wishes?.trim() ? trip.wishes.trim().slice(0, 300) : undefined,
+    askedToPassThrough: trip.mustInclude?.length ? trip.stops.filter((s) => trip.mustInclude!.includes(s.code)).map((s) => s.name) : undefined,
+    constraints: trip.constraints?.length ? trip.constraints.slice(0, 6) : undefined,
     note: "Flight hours are door to door including layovers. Living costs are per night, estimated from the country's price level, for hotel, food, local transport and one activity.",
   };
   for (let attempt = 0; attempt < 2; attempt++) {
@@ -55,18 +59,22 @@ async function judgeOnce(model: Parameters<typeof generateObject>[0]["model"], b
         additionalProperties: false,
       }),
       system:
-        "You judge multi-country budget trips built from real fares. Weigh: price per day against what is seen; hours in the air against nights on the ground; pace (fewer than two nights a stop is rushed; one-stop 20-hour flights are a cost); backtracking; variety (a megacity, a beach, a small town beat three similar cities); season in that month; visa friction and warnings; whether a stop is worth its nights. Be concrete and honest; a weak trip gets a low score and clear tweaks. Prices are euros and were found on Kiwi.com today.",
+        "You judge multi-country budget trips built from real fares. Weigh: price per day against what is seen; hours in the air against nights on the ground; pace (fewer than two nights a stop is rushed; one-stop 20-hour flights are a cost); backtracking; variety (a megacity, a beach, a small town beat three similar cities); season in that month; visa friction and warnings; whether a stop is worth its nights. When travellerWishes is given, judge the trip against those words first (a trip that ignores 'no beaches' or 'temples and street food' loses points, one that delivers them gains); when askedToPassThrough is given, those stops were the traveller's own choice: judge their nights and order, not whether to include them. Be concrete and honest; a weak trip gets a low score and clear tweaks. Prices are euros and were found on Kiwi.com today.",
       prompt: JSON.stringify(brief),
       maxOutputTokens: 600,
     });
-    // The model sometimes drops a field; a verdict without tweaks is still a verdict.
-    if (typeof object?.score !== "number" || !object.verdict) return null;
+    // The model sometimes drops a field or changes its type; a verdict without tweaks is
+    // still a verdict, and nothing it sends can crash the parse.
+    const score = typeof object?.score === "number" ? object.score : Number(object?.score);
+    const verdict = typeof object?.verdict === "string" ? object.verdict.trim() : "";
+    if (!Number.isFinite(score) || !verdict) return null;
+    const lines = (v: unknown, n: number) => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string" && x.trim().length > 0).map((x) => x.trim()).slice(0, n) : []);
     return {
-      score: Math.max(0, Math.min(100, Math.round(object.score))),
-      verdict: object.verdict,
-      reasons: (object.reasons ?? []).slice(0, 4),
-      tweaks: (object.tweaks ?? []).slice(0, 3),
-      bestFor: object.bestFor ?? "",
+      score: Math.max(0, Math.min(100, Math.round(score))),
+      verdict,
+      reasons: lines(object.reasons, 4),
+      tweaks: lines(object.tweaks, 3),
+      bestFor: typeof object.bestFor === "string" ? object.bestFor : "",
     };
   }
 }

@@ -495,7 +495,7 @@ export default function Panel(p: Props) {
       )}
 
       {tab === "deals" && !p.deal && (
-        <>
+        <div className="scroll cards">
           <FinderForm gateways={p.gateways} defaults={p.boards.map((b) => b.gateway)} state={p.finder} onSearch={p.onFinder} onClear={p.onFinderClear} />
           <div className="headline">
             <h3>
@@ -528,7 +528,8 @@ export default function Panel(p: Props) {
               Only new countries: {p.been.countries.length} excluded; layovers still allowed.
             </div>
           )}
-          <div className="chips nowrap">
+          <div className="stickyfilters">
+          <div className="chips">
             {(["any", "2-3", "4-5", "6-7"] as DealNights[]).map((n) => (
               <button key={n} className={`chip${p.dealNights === n ? " on" : ""}`} onClick={() => p.onDealNights(n)}>
                 {n === "any" ? "Any length" : `${n} nights`}
@@ -547,7 +548,7 @@ export default function Panel(p: Props) {
             </button>
           </div>
           {p.boards.length > 1 && (
-            <div className="chips nowrap">
+            <div className="chips">
               <button className={`chip ghost${p.dealGateway === "all" ? " on" : ""}`} onClick={() => p.onDealGateway("all")}>
                 Any airport
               </button>
@@ -558,8 +559,9 @@ export default function Panel(p: Props) {
               ))}
             </div>
           )}
+          </div>
 
-          <div className="scroll cards">
+          <div className="cardlist">
             {p.finder.status === "idle" && <HotelDeals exclude={p.been.newOnly ? p.been.countries : []} />}
             {p.deals.map((d) => (
               <DealCard
@@ -579,7 +581,7 @@ export default function Panel(p: Props) {
             {loading.length === 0 && p.finder.status !== "loading" && p.deals.length === 0 && p.boards.length > 0 && <div className="status">{emptyNote}</div>}
             {p.boards.length === 0 && <div className="status">Finding your airports…</div>}
           </div>
-        </>
+        </div>
       )}
 
       {tab === "explore" && (
@@ -597,7 +599,7 @@ export default function Panel(p: Props) {
       )}
 
       {p.view === "all" && (
-        <>
+        <div className="scroll" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
           {!place && p.origin && (
             <div className="row" onClick={p.onHere} title="What's on, what to do, where to eat, right here">
               <span className="code">HERE</span>
@@ -677,7 +679,7 @@ export default function Panel(p: Props) {
               </button>
             )}
           </Chips>
-          <div className="scroll">
+          <div className="cardlist">
             {(place || p.selectedPlace === "here") && p.intel && (
               <div style={{ paddingBottom: 12, display: "flex", flexDirection: "column", gap: 10 }}>
                 {p.selectedPlace === "here" && (
@@ -756,11 +758,11 @@ export default function Panel(p: Props) {
               </div>
             ))}
           </div>
-        </>
+        </div>
       )}
 
       {p.view === "ground" && (
-        <>
+        <div className="scroll" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
           <h2>Nearest stations</h2>
           <div>
             {!p.reach && <div className="status">Searching the rail, coach and ferry network…</div>}
@@ -779,7 +781,7 @@ export default function Panel(p: Props) {
           <h2>Places · {p.reachShown.length}</h2>
           <div className="status muted">{p.reach ? `${p.reach.reached.length} stations within 10 h. In-vehicle time plus an expected wait per leg, not a timetable.` : ""}</div>
           <Chips band={p.band} onBand={p.onBand} />
-          <div className="scroll">
+          <div className="cardlist">
             {p.reachShown.map((s) => (
               <div key={s.id} className={`row${s.id === p.selectedStation ? " active" : ""}`} onClick={() => p.onStation(s.id === p.selectedStation ? null : s.id)}>
                 <span className="code">{MODE_TAG[s.mode] ?? s.mode}</span>
@@ -796,11 +798,11 @@ export default function Panel(p: Props) {
               </div>
             ))}
           </div>
-        </>
+        </div>
       )}
 
       {p.view === "fly" && (
-        <>
+        <div className="scroll" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
           <h2>Your airports</h2>
           <div>
             {p.gateways.length === 0 && <div className="status">No airport with scheduled flights within reach.</div>}
@@ -874,7 +876,7 @@ export default function Panel(p: Props) {
               </button>
             )}
           </Chips>
-          <div className="scroll">
+          <div className="cardlist">
             {p.destinations.map((d) => (
               <div key={d.airport.iata} className={`row${d.airport.iata === p.selectedDest ? " active" : ""}`} onClick={() => p.onDest(d.airport.iata)}>
                 <span className="code">{d.airport.iata}</span>
@@ -898,7 +900,7 @@ export default function Panel(p: Props) {
               </div>
             ))}
           </div>
-        </>
+        </div>
       )}
     </aside>
   );

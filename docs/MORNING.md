@@ -1,3 +1,35 @@
+# Update, Saturday 10 October, later still: A to B, free-form trips, tools that fall back
+
+_Your four points after the first deploy: everything scrollable, Trips and Wild not
+constrained, chat tools that do not fail, and the cheapest way from A to B through the
+whole graph. Two more rounds of agents, each reviewed and fixed._
+
+1. **A to B.** A new Trips mode and a chat tool (`cheapest_way`). One question is worked
+   through the graph within a search budget: the fare memory first, then one Kiwi search
+   over every airport within reach of both ends (by road, or by train and coach within
+   three hours), two-ticket splits through the hubs on the way with the change of airport
+   priced, open-jaw landings, and the ground graph alone when the places are close. Every
+   way is priced door to door, estimated legs are marked, the cheapest and the fastest are
+   badged, and the answer says what was considered. The UI spends 12 searches by default
+   and 24 with "Search harder", which continues the answer rather than repeating it.
+   Brașov to Lisbon: train to Bucharest and fly, €175 return; via Frankfurt on two
+   tickets, €86 one way.
+2. **Nothing constrained.** Wild loops from 5 nights, any countries by name, must-include
+   cities, a longest flight, your own start airports, a "what matters to you" box the judge
+   and the planner read, nights per stop as a range. Short loops up to 21 nights with 2 to
+   4 cities. Long stays up to 6 months with "only these cities". Groups from 1 night with a
+   budget a person. Purpose events by any word.
+3. **Everything scrolls.** Every option row wraps (the regions row used to be 1,765 px wide
+   in a 439 px panel), every form reaches its button at 1280x720 and on a phone, the Deals
+   filters stay put while the cards scroll.
+4. **Tools fall back instead of failing.** `pnpm check:tools` calls every chat tool and must
+   pass (73 checks). When Kiwi throttles, the live tools answer from tonight's boards and
+   the fare memory and say so; long builds hand back what they priced at a deadline; dates
+   in words are only read when they name a month and a day; an unknown place answers with
+   close matches; every answer says where its prices came from.
+
+---
+
 # Update, Saturday 10 October, last: "Been", and famous namesakes
 
 _Two more things landed after the fixer round, then everything was committed and deployed._

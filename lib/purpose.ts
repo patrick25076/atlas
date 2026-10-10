@@ -24,10 +24,42 @@ export type PurposeTrip = { event: PurposeEvent & { start: string; end: string }
  */
 export type PurposeTrips = PurposeTrip[] & { searched: number; failed: number };
 
-export async function purposeTrips(gateways: string[], from: string, to: string, opts: { live?: number; kinds?: PurposeEvent["kind"][]; exclude?: string[] } = {}): Promise<PurposeTrips> {
+/** Lower case, no diacritics, hyphens and punctuation as spaces: "Tromsø", "tromso" and "tango-week" read as words. */
+const fold = (s: string) =>
+  String(s ?? "")
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+
+/**
+ * Whether an event answers a free-text filter: its kind (festival, sport, culture, season,
+ * music, food), a word of its name ("carnival", "marathon", "lantern"), its city, or its
+ * country or city code. Codes are exact: a two-letter token is a country and nothing else
+ * ("ro" never reads as a piece of "Roskilde"); a three-letter one is a city code or a word.
+ * Words match whole words of the name and city (a word of four letters or more also as a
+ * prefix, so "lantern" finds "lanterns"), never the note, which is description, not a tag.
+ */
+export function eventMatches(e: PurposeEvent, kinds: readonly string[] | undefined): boolean {
+  if (!kinds?.length) return true;
+  const words = `${fold(e.name)} ${fold(e.city)}`.split(" ").filter(Boolean);
+  const matchesWord = (k: string) => words.some((w) => w === k || (k.length >= 4 && w.startsWith(k)));
+  return kinds.some((raw) => {
+    const k = fold(raw);
+    if (!k) return false;
+    if (k === e.kind) return true;
+    if (k.length === 2) return k.toUpperCase() === e.country;
+    if (k.length === 3 && k.toUpperCase() === e.code) return true;
+    // A phrase ("tango week", once "tango-week") must have every one of its words in the event.
+    return k.split(" ").every(matchesWord);
+  });
+}
+
+export async function purposeTrips(gateways: string[], from: string, to: string, opts: { live?: number; kinds?: readonly string[]; exclude?: string[] } = {}): Promise<PurposeTrips> {
   // "Been": an event in a visited country is hidden before any board lookup or search.
   const exclude = opts.exclude ?? [];
-  const events = eventsInWindow(from, to).filter((e) => (!opts.kinds?.length || opts.kinds.includes(e.kind)) && countryAllowed(e.country, exclude));
+  const events = eventsInWindow(from, to).filter((e) => eventMatches(e, opts.kinds) && countryAllowed(e.country, exclude));
   const home = resolveGateway(gateways[0]);
   const boards = await dealsFor(gateways);
   const out: PurposeTrip[] = [];

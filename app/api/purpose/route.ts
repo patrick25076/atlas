@@ -5,6 +5,9 @@ import { InFlight, TtlLru } from "@/lib/memo";
 import { bad, iataList, intIn, isoDay } from "@/lib/params";
 
 // GET /api/purpose?g=OTP,SBZ&from=2026-10-15&to=2026-12-15[&kinds=festival,sport][&live=4][&exclude=RO,HU]
+// kinds is free text, comma separated: a kind (festival, sport, culture, season, music, food),
+// a word of an event's name ("carnival", "marathon", "lanterns"), a city ("Edinburgh") or a
+// country code; an event matches any one of them.
 // exclude is the "Been" list (ISO2): events in those countries are hidden, no search spent.
 // Events worth flying for in a window, each with the cheapest way there: the stored boards
 // first, then up to `live` Kiwi searches for the events the boards miss. Memoised an hour,
@@ -16,14 +19,15 @@ export const maxDuration = 90;
 const memo = new TtlLru<PurposeTrips>(500, 3_600_000);
 const inflight = new InFlight<PurposeTrips>();
 const CACHE = { "Cache-Control": "public, max-age=900, stale-while-revalidate=3600" };
-const KIND = /^[a-z-]{2,24}$/;
+/** A kind, a word of a name, a city: letters, digits, spaces, hyphens and apostrophes, 2 to 40 long. */
+const KIND = /^[\p{L}\p{N}' -]{2,40}$/u;
 
 export async function GET(request: Request) {
   const p = new URL(request.url).searchParams;
   const gateways = iataList(p.get("g"), 4);
   const from = isoDay(p.get("from"));
   const to = isoDay(p.get("to"));
-  const kinds = (p.get("kinds") ?? "").split(",").map((k) => k.trim().toLowerCase()).filter((k) => KIND.test(k)).slice(0, 8) as never;
+  const kinds = (p.get("kinds") ?? "").split(",").map((k) => k.trim().toLowerCase()).filter((k) => KIND.test(k)).slice(0, 8);
   const live = intIn(p.get("live"), 0, 8, 4);
   const exclude = parseExclude(p.get("exclude"));
   if (!gateways.length) return bad("g must be a comma list of three-letter airport codes");

@@ -7,6 +7,9 @@ import { flightMinutes, haversineKm } from "./geo";
 import { reachFrom, type ReachResult } from "./ground";
 import { allFares, hasToken } from "./travelpayouts";
 import { countryAllowed } from "./been";
+import { countryLabel } from "./board";
+import { TtlLru } from "./memo";
+import { findCityCode, resolveCountries } from "./wild";
 import type { City, Fare } from "./types";
 
 // Without a Travelpayouts token, the nightly Kiwi one-way file (scripts/ingest/oneway.ts) prices
@@ -60,10 +63,32 @@ export type TripParams = {
   days: number;
   /** Optional YYYY-MM-DD: leave within three days before it (a holiday, a long weekend). */
   around?: string;
+  /** Minutes a ground leg may take; up to twelve hours (an overnight train). */
   maxGroundMin: number;
   limit: number;
   /** ISO2 countries that never host a night (the Been list with "only new countries" on). A flight through one is fine. */
   exclude?: string[];
+  /** A city (code or name) every trip must pass through: as the entry, a via or the exit. */
+  mustInclude?: string;
+  /** Only these countries (ISO2 or names) host a night; the home country is still excluded. */
+  countries?: string[];
+  /** Exactly this many cities per trip, 2 to 4; without it two or three, as before. */
+  cities?: number;
+};
+
+/** What shaped the answer, so the panel and the chat can say which constraints applied. */
+export type TripsApplied = {
+  days: number;
+  /** "2 or 3" by default, else the exact count asked for. */
+  cities: string;
+  maxGroundMin: number;
+  /** The city code every trip passes through, when asked. */
+  mustInclude?: string;
+  /** The countries (ISO2) the trips keep to, when asked. */
+  countries?: string[];
+  exclude?: string[];
+  /** Plain lines, one per constraint, for the UI. */
+  lines: string[];
 };
 
 export type TripCity = { code: string; name: string; country: string; lat: number; lon: number };
@@ -104,39 +129,89 @@ export type Trip = {
   outDate: string;
   backDate: string;
 };
-export type TripsResult = { status: "ok" | "no-token" | "error"; note?: string; trips: Trip[]; generatedAt: string };
+export type TripsResult = { status: "ok" | "no-token" | "error"; note?: string; trips: Trip[]; generatedAt: string; applied?: TripsApplied };
+
+/** A request the engine cannot answer as asked (an unknown city or country); the route answers 400 with the message. */
+export class TripsInputError extends Error {}
 
 const AIRPORT_BUFFER_MIN = 120;
 const ENTRY_CANDIDATES = 50;
 const VIA_CANDIDATES = 12;
+/** Four-city chains fan out one level more, so each level is narrower to keep the work bounded. */
+const ENTRY_CANDIDATES_4 = 30;
+const VIA_CANDIDATES_4 = 6;
 const FARE_TRIES = 10;
+/** Fares out tried per chain when the search is constrained and the chains are few. */
+const FARE_TRIES_CONSTRAINED = 40;
+/** The most minutes a ground leg may take: twelve hours, an overnight train. */
+export const MAX_GROUND_MIN = 720;
 
 type GroundLink = { minutes: number; changes: number; mode: string; station: number };
-const reachMemo = new Map<string, { result: ReachResult; links: Map<string, GroundLink> }>();
+/** byId is built once, the first time a path through this reach is drawn, over its thousands of stations. */
+type Reach = { result: ReachResult; links: Map<string, GroundLink>; byId?: Map<number, { lat: number; lon: number; prev: number }> };
+/**
+ * Reach results across requests, bounded: a twelve-hour reach from a hub touches thousands
+ * of stations, and an unbounded map once grew the server by hundreds of megabytes in one
+ * request. The cities walked repeat (the cheapest ones from the gateways), so a small memo
+ * still answers most passes.
+ */
+const reachMemo = new TtlLru<Reach>(64, 30 * 60_000);
+/**
+ * Dijkstra passes one request may run over the 16,000-station graph: each is synchronous
+ * and costs in proportion to the ground limit (about 80 ms at twelve hours, a few at two),
+ * so a four-city chain at twelve hours could otherwise block the server for a quarter of a
+ * minute. The budget shrinks with the limit (150 passes up to four hours, 50 at twelve) so a
+ * request stays around four seconds of walking; past it a city is not walked further and the
+ * trips found so far stand. The chains are walked cheapest entry first, so the cut falls on
+ * the dearest ways out. Under the memo's size, so a repeat of the same request walks nothing.
+ */
+const MAX_REACH_PASSES = 150;
+const passBudgetFor = (maxGroundMin: number) => Math.max(40, Math.min(MAX_REACH_PASSES, Math.round((MAX_REACH_PASSES * 240) / maxGroundMin)));
+const yieldNow = () => new Promise<void>((r) => setImmediate(r));
 
-/** Cities reachable from a city by train/coach within the limit, with the station used. */
-function groundFrom(code: string, maxGroundMin: number) {
-  const key = `${code}:${maxGroundMin}`;
-  const hit = reachMemo.get(key);
-  if (hit) return hit;
-  const c = CITIES[code];
-  const result = reachFrom(c.lat, c.lon, maxGroundMin, 20);
-  const links = new Map<string, GroundLink>();
-  for (const s of result.reached) {
-    const city = nearestCity(s.lat, s.lon);
-    if (!city || city === code) continue;
-    const prev = links.get(city);
-    if (!prev || s.minutes < prev.minutes) links.set(city, { minutes: s.minutes, changes: s.changes, mode: s.mode, station: s.id });
-  }
-  const entry = { result, links };
-  reachMemo.set(key, entry);
-  return entry;
+/** One request's view of the reaches: its own map (never evicted mid-request) over the shared memo, and its pass budget. */
+function reachWalker(maxGroundMin: number) {
+  const local = new Map<string, Reach>();
+  const budget = passBudgetFor(maxGroundMin);
+  let passes = 0;
+  /** Cities reachable from a city by train/coach within the limit, with the station used; null once the pass budget is spent. */
+  return async function groundFrom(code: string): Promise<Reach | null> {
+    const key = `${code}:${maxGroundMin}`;
+    const mine = local.get(key);
+    if (mine) return mine;
+    const shared = reachMemo.get(key);
+    if (shared) {
+      local.set(key, shared);
+      return shared;
+    }
+    if (passes >= budget) return null;
+    passes++;
+    // Let other requests in before each pass: the walk itself cannot be interrupted.
+    await yieldNow();
+    const c = CITIES[code];
+    const result = reachFrom(c.lat, c.lon, maxGroundMin, 20);
+    const links = new Map<string, GroundLink>();
+    for (const s of result.reached) {
+      const city = nearestCity(s.lat, s.lon);
+      if (!city || city === code) continue;
+      const prev = links.get(city);
+      if (!prev || s.minutes < prev.minutes) links.set(city, { minutes: s.minutes, changes: s.changes, mode: s.mode, station: s.id });
+    }
+    const entry = { result, links };
+    local.set(key, entry);
+    reachMemo.set(key, entry);
+    return entry;
+  };
 }
 
-function pathTo(result: ReachResult, stationId: number, from: City): [number, number][] {
-  const byId = new Map<number, { lat: number; lon: number; prev: number }>();
-  for (const s of result.reached) byId.set(s.id, s);
-  for (const s of result.starts) byId.set(s.id, { lat: s.lat, lon: s.lon, prev: -1 });
+function pathTo(reach: Reach, stationId: number, from: City): [number, number][] {
+  if (!reach.byId) {
+    const byId = new Map<number, { lat: number; lon: number; prev: number }>();
+    for (const s of reach.result.reached) byId.set(s.id, s);
+    for (const s of reach.result.starts) byId.set(s.id, { lat: s.lat, lon: s.lon, prev: -1 });
+    reach.byId = byId;
+  }
+  const byId = reach.byId;
   const pts: [number, number][] = [];
   let cur = stationId;
   for (let guard = 0; cur >= 0 && guard < 500; guard++) {
@@ -164,9 +239,41 @@ export async function findTrips(params: TripParams): Promise<TripsResult> {
   if (!hasToken() && !oneway) {
     return { status: "no-token", note: "Trips need fares: run pnpm ingest:oneway (Kiwi) or set TRAVELPAYOUTS_TOKEN (SETUP.md §2).", trips: [], generatedAt };
   }
-  const { gateways, home, days, around, maxGroundMin, limit, exclude = [] } = params;
-  // Entry and exit cities must be abroad and, when the traveller wants only new countries, unvisited.
-  const usable = (city: string) => !!CITIES[city] && CITIES[city].country !== home && countryAllowed(CITIES[city].country, exclude);
+  const { gateways, home, around, limit, exclude = [] } = params;
+  // The bounds the engine holds whatever the caller sends: 2 to 21 nights, a ground leg of an hour to twelve.
+  const days = Math.min(21, Math.max(2, Math.round(params.days) || 5));
+  const maxGroundMin = Math.min(MAX_GROUND_MIN, Math.max(60, Math.round(params.maxGroundMin) || 300));
+  // The traveller's constraints, names resolved to codes; an unknown one is a plain refusal.
+  const must = params.mustInclude?.trim() ? findCityCode(params.mustInclude) : null;
+  if (params.mustInclude?.trim() && !must) throw new TripsInputError(`unknown city to pass through: ${params.mustInclude.trim().slice(0, 40)} (a city name such as Krakow or a code such as KRK)`);
+  const wanted = resolveCountries(params.countries);
+  if (params.countries?.length && !wanted.codes.length) throw new TripsInputError(`none of those is a country we know: ${wanted.unknown.join(", ")} (a name such as Poland or a code such as PL)`);
+  // A name we cannot read is refused, not dropped in silence, as /api/wild and /api/longstay do.
+  if (wanted.unknown.length) throw new TripsInputError(`unknown country: ${wanted.unknown.join(", ")} (a name such as Poland or a code such as PL)`);
+  const only = wanted.codes.length ? new Set(wanted.codes) : null;
+  if (must && only && !only.has(CITIES[must].country)) only.add(CITIES[must].country);
+  const exactCities = params.cities && Number.isFinite(params.cities) ? Math.min(4, Math.max(2, Math.round(params.cities))) : null;
+  const lengths = exactCities ? [exactCities] : [2, 3];
+  const maxLen = Math.max(...lengths);
+  const applied: TripsApplied = {
+    days,
+    cities: exactCities ? String(exactCities) : "2 or 3",
+    maxGroundMin,
+    mustInclude: must ?? undefined,
+    countries: only ? [...only] : undefined,
+    exclude: exclude.length ? exclude : undefined,
+    lines: [
+      `${days} nights, give or take a day`,
+      `${exactCities ? `${exactCities} cities` : "two or three cities"} a trip`,
+      `ground legs up to ${Math.round((maxGroundMin / 60) * 10) / 10} h`,
+      ...(must ? [`every trip passes through ${CITIES[must].name}`] : []),
+      ...(only ? [`only ${[...only].map((cc) => countryLabel(cc)).join(", ")}`] : []),
+      ...(exclude.length ? [`never a night in ${exclude.length} been countr${exclude.length === 1 ? "y" : "ies"}`] : []),
+    ],
+  };
+  // Entry and exit cities must be abroad, in the countries asked for, and, when the traveller wants only new countries, unvisited.
+  const usable = (city: string) => !!CITIES[city] && CITIES[city].country !== home && countryAllowed(CITIES[city].country, exclude) && (!only || only.has(CITIES[city].country));
+  if (must && !usable(must)) throw new TripsInputError(`${CITIES[must].name} cannot host a night on this trip (home country, been list or outside the countries asked for)`);
   const faresFor = async (q: { origin?: string; destination?: string }): Promise<Fare[]> => {
     if (!oneway) return allFares(q);
     return oneway.fares.filter((f) => (q.origin ? f.src === q.origin : f.dst === q.destination));
@@ -206,10 +313,24 @@ export async function findTrips(params: TripParams): Promise<TripsResult> {
   for (const list of outByCity.values()) list.sort((a, b) => a.price - b.price);
   for (const list of inByCity.values()) list.sort((a, b) => a.price - b.price);
 
-  const entries = [...outByCity.entries()].sort((a, b) => a[1][0].price - b[1][0].price).slice(0, ENTRY_CANDIDATES);
+  const fareTries = only || must || exactCities ? FARE_TRIES_CONSTRAINED : FARE_TRIES;
+  const entryCount = maxLen >= 4 ? ENTRY_CANDIDATES_4 : ENTRY_CANDIDATES;
+  const viaCount = maxLen >= 4 ? VIA_CANDIDATES_4 : VIA_CANDIDATES;
+  const entries = [...outByCity.entries()].sort((a, b) => a[1][0].price - b[1][0].price).slice(0, entryCount);
+  // A must city with a fare out of a gateway is always an entry candidate, cheap or not.
+  if (must && outByCity.has(must) && !entries.some(([a]) => a === must)) entries.push([must, outByCity.get(must)!]);
 
   const trips: Trip[] = [];
   const seen = new Set<string>();
+  const groundFrom = reachWalker(maxGroundMin);
+  /** The reach a ground leg was found in: walked in this request, so a hit; a straight line when it is somehow gone. */
+  const pathOf = async (g: { from: string; to: string; link: GroundLink }): Promise<[number, number][]> => {
+    const reach = await groundFrom(g.from);
+    return reach ? pathTo(reach, g.link.station, CITIES[g.from]) : [[CITIES[g.from].lon, CITIES[g.from].lat], [CITIES[g.to].lon, CITIES[g.to].lat]];
+  };
+  // The ground links of every trip, so the station paths are drawn only for the trips returned:
+  // drawing one for each of thousands of candidates was most of a request's time.
+  const groundOf = new Map<string, { from: string; to: string; link: GroundLink }[]>();
 
   function evaluate(codes: string[], ground: { from: string; to: string; link: GroundLink }[]) {
     const first = codes[0];
@@ -222,14 +343,18 @@ export async function findTrips(params: TripParams): Promise<TripsResult> {
     const key = codes.join(">");
     if (seen.has(key)) return;
 
-    // Cheapest aligned pair of dates: back = out + days, give or take a day.
+    // Cheapest aligned pair of dates: back = out + days, give or take a day. The fares are
+    // sorted by price, so the first aligned fare home is the cheapest for that fare out. A
+    // constrained search (countries, a must city, an exact count) has few chains, so it may
+    // try more fares out before giving up on a pair; an open one keeps the old cap.
     let best: { out: (typeof outs)[number]; back: (typeof ins)[number]; nights: number } | null = null;
-    const outCandidates = around ? outs.filter((o) => leavesAround(o.departureAt)).slice(0, FARE_TRIES) : outs.slice(0, FARE_TRIES);
+    const outCandidates = (around ? outs.filter((o) => leavesAround(o.departureAt)) : outs).slice(0, fareTries);
     for (const o of outCandidates) {
-      for (const i of ins.slice(0, FARE_TRIES)) {
+      for (const i of ins) {
         const nights = daysBetween(o.departureAt, i.departureAt);
         if (Math.abs(nights - days) > 1) continue;
         if (!best || o.price + i.price < best.out.price + best.back.price) best = { out: o, back: i, nights };
+        break;
       }
     }
     if (!best) return;
@@ -271,7 +396,7 @@ export async function findTrips(params: TripParams): Promise<TripsResult> {
           minutes: g.link.minutes,
           changes: g.link.changes,
           mode: g.link.mode,
-          path: pathTo(groundFrom(g.from, maxGroundMin).result, g.link.station, CITIES[g.from]),
+          path: [],
         }),
       ),
       {
@@ -288,6 +413,7 @@ export async function findTrips(params: TripParams): Promise<TripsResult> {
         transfers: best.back.transfers,
       },
     ];
+    groundOf.set(key, ground);
     trips.push({
       id: key,
       cities: codes.map(tripCity),
@@ -302,21 +428,49 @@ export async function findTrips(params: TripParams): Promise<TripsResult> {
     });
   }
 
-  for (const [a] of entries) {
-    const fromA = groundFrom(a, maxGroundMin);
-    const vias = [...fromA.links.entries()].sort((x, y) => x[1].minutes - y[1].minutes);
-    // Two cities: A → B, fly home from B.
-    for (const [b, link] of vias) if (inByCity.has(b)) evaluate([a, b], [{ from: a, to: b, link }]);
-    // Three cities: A → M → B.
-    for (const [m, linkAM] of vias.slice(0, VIA_CANDIDATES)) {
-      const fromM = groundFrom(m, maxGroundMin);
-      for (const [b, linkMB] of fromM.links) {
-        if (b === a || !inByCity.has(b)) continue;
-        evaluate([a, m, b], [{ from: a, to: m, link: linkAM }, { from: m, to: b, link: linkMB }]);
+  // Chains grow one ground hop at a time: A → B (fly home from B), A → M → B, A → M1 → M2 → B.
+  // Every city hosts a night, so each must be usable; the last needs a fare home. Only the
+  // nearest few vias by ground time are walked further (each walk is a Dijkstra pass), but
+  // every link closes a trip when the next city would complete a length asked for: a city
+  // that is the 13th nearest and has the cheapest fare home is still a two-city trip. A must
+  // city still to visit is always walked when it is reachable.
+  async function extend(chain: string[], ground: { from: string; to: string; link: GroundLink }[]) {
+    const cur = chain[chain.length - 1];
+    if (lengths.includes(chain.length) && inByCity.has(cur) && (!must || chain.includes(must))) evaluate(chain, ground);
+    if (chain.length >= maxLen) return;
+    const reach = await groundFrom(cur);
+    if (!reach) return;
+    const lastLevel = chain.length === maxLen - 1;
+    const links = [...reach.links.entries()].filter(([c]) => usable(c) && !chain.includes(c)).sort((x, y) => x[1].minutes - y[1].minutes);
+    const cands = lastLevel ? links : links.slice(0, viaCount);
+    if (must && !chain.includes(must) && !cands.some(([c]) => c === must)) {
+      const link = links.find(([c]) => c === must);
+      if (link) cands.push(link);
+    }
+    for (const [next, link] of cands) {
+      if (lastLevel && !inByCity.has(next)) continue;
+      await extend([...chain, next], [...ground, { from: cur, to: next, link }]);
+    }
+    // The links beyond the fan-out close a trip without being walked further (no pass needed).
+    if (!lastLevel && lengths.includes(chain.length + 1)) {
+      const walked = new Set(cands.map(([c]) => c));
+      for (const [next, link] of links) {
+        if (walked.has(next) || !inByCity.has(next)) continue;
+        const codes = [...chain, next];
+        if (must && !codes.includes(must)) continue;
+        evaluate(codes, [...ground, { from: cur, to: next, link }]);
       }
     }
   }
+  for (const [a] of entries) await extend([a], []);
 
   trips.sort((x, y) => y.value - x.value);
-  return { status: "ok", trips: trips.slice(0, limit), generatedAt };
+  // The station paths, for the trips returned only.
+  for (const t of trips.slice(0, limit)) {
+    const ground = groundOf.get(t.id) ?? [];
+    let gi = 0;
+    for (const leg of t.legs) if (leg.kind === "ground") leg.path = await pathOf(ground[gi++]);
+  }
+  const note = trips.length ? undefined : must ? `No trip found through ${CITIES[must].name} with these constraints; try more nights, a longer ground leg or fewer cities.` : only ? "No trip found in those countries with these constraints; try a longer ground leg or other countries." : undefined;
+  return { status: "ok", trips: trips.slice(0, limit), generatedAt, applied, ...(note ? { note } : {}) };
 }

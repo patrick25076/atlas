@@ -23,7 +23,7 @@ import { bestMonths, climateFor } from "./climate";
 import { neighboursOf } from "./combos";
 import { kiwiDate, searchFlight } from "./kiwi";
 import { TtlLru } from "./memo";
-import { BUDGET_SCALE, perDayFor, REGIONS, type Budget } from "./wild";
+import { BUDGET_SCALE, perDayFor, REGIONS, resolveCities, resolveCountries, wishTilt, type Budget } from "./wild";
 import { visaFor, type Airport, type City, type CountryInfo, type VisaFile } from "./types";
 
 const CITIES = citiesJson as unknown as Record<string, City>;
@@ -77,6 +77,12 @@ export type LongStayParams = {
   origin?: { lat: number; lon: number; label: string };
   /** "Been" (ISO2): these countries drop out of the candidate bases before any search. */
   exclude?: string[];
+  /** The traveller's own words ("warm, by the sea, good coffee"): a tilt on the ranking and a line in each base's why. */
+  wishes?: string;
+  /** Only these cities (codes or names) as bases, whatever their fame or the region; the countries come from them. */
+  mustInclude?: string[];
+  /** A moment (epoch ms) past which no further base is priced: the ones done so far are answered, with a note, and nothing is memoised. */
+  deadline?: number;
 };
 export type LongStayResult = {
   bases: LongStayBase[];
@@ -89,6 +95,8 @@ export type LongStayResult = {
   skipped: { country: string; reason: string }[];
   generatedAt: string;
   note: string;
+  /** Plain lines saying which of the traveller's constraints shaped the answer. */
+  constraints?: string[];
 };
 
 /** A request the engine cannot answer as asked (an unknown region); the route may answer 400 with the message. */
@@ -201,18 +209,33 @@ export async function longStay(p: LongStayParams): Promise<LongStayResult> {
   // Own keys only: "constructor" passes an `in` check and a truthy lookup but is no region.
   if (p.region && !Object.hasOwn(REGIONS, p.region)) throw new LongStayInputError(`unknown region ${p.region}; one of ${Object.keys(REGIONS).join(", ")}`);
   const region = p.region ? REGIONS[p.region as keyof typeof REGIONS] : undefined;
-  const only = new Set((p.countries ?? []).map((c) => c.toUpperCase()).filter((c) => /^[A-Z]{2}$/.test(c)));
+  // Countries by code or name; cities the traveller named as the only bases (their countries join the list).
+  const resolved = resolveCountries(p.countries);
+  if (p.countries?.length && !resolved.codes.length) throw new LongStayInputError(`none of those is a country we know: ${resolved.unknown.join(", ")} (a name such as Portugal or a code such as PT)`);
+  const must = resolveCities(p.mustInclude);
+  if (p.mustInclude?.length && !must.codes.length) throw new LongStayInputError(`unknown city: ${must.unknown.join(", ")} (a city name such as Lisbon or a code such as LIS)`);
+  const mustCodes = must.codes.slice(0, BASES);
+  const only = new Set([...resolved.codes, ...mustCodes.map((c) => CITIES[c].country)]);
   const explicit = only.size > 0;
+  if (p.region === "custom" && !explicit) throw new LongStayInputError("region custom needs a countries list (names or codes) or cities");
   const wanted: string[] = explicit ? [...only] : (region?.countries ?? []).map(([cc]) => cc);
   const exclude = p.exclude ?? [];
-  const key = JSON.stringify([gateways, p.home, [...wanted].sort(), months, startMonth, budget, style, exclude]);
+  const wishes = p.wishes?.trim().slice(0, 300) || "";
+  const tilt = wishTilt(wishes);
+  const key = JSON.stringify([gateways, p.home, [...wanted].sort(), months, startMonth, budget, style, exclude, mustCodes, wishes.toLowerCase()]);
   const hit = memo.get(key);
   if (hit) return hit;
   const note =
     "Rent and living are estimates from World Bank price levels (mid-range one-bedroom, 30 days at three quarters of a traveller's daily budget), counted for the days between the two flights; the day planner refines them." +
     (rolled ? ` ${MONTH_NAMES[Number(askedMonth.slice(5, 7)) - 1]} has no departure day left, so flights in were searched for ${MONTH_NAMES[Number(startMonth.slice(5, 7)) - 1]}.` : "");
+  const constraints: string[] = [
+    `${months} month${months === 1 ? "" : "s"} from ${MONTH_NAMES[Number(startMonth.slice(5, 7)) - 1]} ${startMonth.slice(0, 4)}`,
+    ...(mustCodes.length ? [`only ${mustCodes.map((c) => CITIES[c].name).join(", ")}`] : explicit ? [`countries: ${[...only].map((cc) => countryLabel(cc)).join(", ")}`] : []),
+    ...(wishes ? [`wishes: ${wishes.slice(0, 120)}`] : []),
+    ...(exclude.length ? [`no base in ${exclude.length} been countr${exclude.length === 1 ? "y" : "ies"}`] : []),
+  ];
   const generatedAt = new Date().toISOString();
-  if (!wanted.length || !gateways.length) return { bases: [], searched: 0, failed: 0, skipped: [], generatedAt, note };
+  if (!wanted.length || !gateways.length) return { bases: [], searched: 0, failed: 0, skipped: [], generatedAt, note, constraints };
 
   // 1. Candidates: known, safe, with a real airport, affordable unless the traveller named the
   // country; the eight best by worth for money. A country that loses every city is reported.
@@ -235,17 +258,30 @@ export async function longStay(p: LongStayParams): Promise<LongStayResult> {
     countries.add(cc);
   }
   const minViews = explicit ? MIN_VIEWS_EXPLICIT : MIN_VIEWS;
-  const candidates = Object.entries(CITIES)
-    .filter(([code, c]) => countries.has(c.country) && hasRealAirport(c) && (FAME[code]?.[0] ?? 0) >= minViews)
-    .map(([code, c]) => ({ code, c, s: score(code, c, style) }))
+  // The wishes tilt the ranking the way the style does, only for what they name.
+  const wishScore = (code: string): number => {
+    let v = 0;
+    const [, see, doo] = FAME[code] ?? [0, 0, 0];
+    const big = hubDegree(code) >= 60;
+    if (tilt.beaches) v += tilt.beaches * (COASTAL.has(code) ? 35 : -15);
+    if (tilt.cities) v += tilt.cities * (big ? 25 : -5);
+    if (tilt.experiences || tilt.slow) v += ((tilt.experiences ?? 0) + (tilt.slow ?? 0)) * (big ? -10 : 15);
+    if (tilt.food) v += tilt.food * (Math.max(0, see) + Math.max(0, doo) >= 10 ? 10 : 0);
+    return v;
+  };
+  // Cities the traveller named are the bases, whatever their fame; otherwise the well-known
+  // ones of the countries wanted, with a proper airport.
+  const candidates = (mustCodes.length ? mustCodes.filter((code) => countries.has(CITIES[code].country)).map((code) => [code, CITIES[code]] as [string, City]) : Object.entries(CITIES).filter(([code, c]) => countries.has(c.country) && hasRealAirport(c) && (FAME[code]?.[0] ?? 0) >= minViews))
+    .map(([code, c]) => ({ code, c, s: score(code, c, style) + wishScore(code) }))
     .sort((a, b) => b.s - a.s);
-  for (const cc of countries) if (!candidates.some((x) => x.c.country === cc)) skipped.push({ country: cc, reason: "no well-known city with a proper airport in the data" });
-  // Two bases per country at most, so a region does not come back as eight Thai cities.
+  for (const cc of countries) if (!candidates.some((x) => x.c.country === cc)) skipped.push({ country: cc, reason: mustCodes.length ? "none of the cities named is there" : "no well-known city with a proper airport in the data" });
+  // Two bases per country at most, so a region does not come back as eight Thai cities
+  // (cities the traveller named are all kept).
   const perCountry = new Map<string, number>();
   const picked: typeof candidates = [];
   for (const x of candidates) {
     const n = perCountry.get(x.c.country) ?? 0;
-    if (n >= 2 && countries.size > 1) continue;
+    if (n >= 2 && countries.size > 1 && !mustCodes.length) continue;
     perCountry.set(x.c.country, n + 1);
     picked.push(x);
     if (picked.length >= BASES) break;
@@ -261,8 +297,9 @@ export async function longStay(p: LongStayParams): Promise<LongStayResult> {
   let failed = 0;
   const bases: LongStayBase[] = [];
   const queue = [...picked];
+  const outOfTime = () => !!p.deadline && Date.now() > p.deadline;
   async function worker() {
-    for (let next = queue.shift(); next; next = queue.shift()) {
+    for (let next = queue.shift(); next && !outOfTime(); next = queue.shift()) {
       const { code, c } = next;
       const cc = c.country;
       const inFare = await oneWayIn(gateways.join(","), code, inFrom, monthLast);
@@ -292,6 +329,22 @@ export async function longStay(p: LongStayParams): Promise<LongStayResult> {
       why.push(`about €${perDayFor(cc, budget)} a day to live, rent around €${rent} a month (estimate)`);
       if (COASTAL.has(code)) why.push("on the coast");
       if (hubDegree(code) >= 60) why.push("a hub: cheap flights onward");
+      // What the traveller asked for, in their words, and whether this base answers it.
+      // Each line names what the base is, never what the data cannot tell: a city with no sea
+      // temperature in the data is not called inland, and thin guide listings are not a miss.
+      if (wishes) {
+        const fits: string[] = [];
+        const misses: string[] = [];
+        const big = hubDegree(code) >= 60;
+        if (tilt.beaches && COASTAL.has(code)) (tilt.beaches > 0 ? fits : misses).push("by the sea");
+        if (tilt.cities) (big === tilt.cities > 0 ? fits : misses).push(big ? "a big city" : "not a big city");
+        if (tilt.experiences) (!big === tilt.experiences > 0 ? fits : misses).push(big ? "a big city" : "out of the big city");
+        if (tilt.slow && !tilt.experiences) (!big === tilt.slow > 0 ? fits : misses).push(big ? "a big city" : "a quieter base");
+        if ((tilt.food ?? 0) > 0 && Math.max(0, see) + Math.max(0, doo) >= 10) fits.push("plenty to eat in the guide");
+        if (fits.length) why.push(`fits your wish (${wishes.slice(0, 60)}): ${[...new Set(fits)].join(", ")}`);
+        if (misses.length) why.push(`against your wish: ${[...new Set(misses)].join(", ")}`);
+      }
+      if (mustCodes.includes(code)) why.push("a base you named");
       // Say when the flights found do not match the request: a different month, or a stay a
       // week or more longer or shorter than asked.
       if (bestIn && bestOut) {
@@ -342,9 +395,12 @@ export async function longStay(p: LongStayParams): Promise<LongStayResult> {
 
   // Cheapest day first; a base with no flight found goes to the end, its total is incomplete.
   bases.sort((a, b) => Number(!a.flightIn || !a.flightOut) - Number(!b.flightIn || !b.flightOut) || a.perDay - b.perDay);
-  const result: LongStayResult = { bases, searched, failed, partial: failed > 0 ? true : undefined, skipped, generatedAt, note };
-  // An answer shaped by refused searches is not kept: a retry costs only the failed searches.
-  if (failed === 0) memo.set(key, result);
+  // Past the caller's deadline the bases still queued are left out and the answer says so.
+  const unpriced = picked.length - bases.length;
+  const cut = unpriced > 0 && outOfTime();
+  const result: LongStayResult = { bases, searched, failed, partial: failed > 0 || cut ? true : undefined, skipped, generatedAt, note: cut ? `${note} ${unpriced} base${unpriced === 1 ? "" : "s"} not priced in time; ask again for the full list.` : note, constraints };
+  // An answer shaped by refused searches or cut short is not kept: a retry prices only what is missing.
+  if (failed === 0 && !cut) memo.set(key, result);
   return result;
 }
 

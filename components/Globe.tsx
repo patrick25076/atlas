@@ -10,16 +10,40 @@ import { flightMinutes, formatDuration, haversineKm, nearestGateways } from "@/l
 import { combinePlaces, type Place } from "@/lib/places";
 import type { Trip, TripCity, TripLeg, TripsResult } from "@/lib/trips";
 import type { PlaceSummary } from "@/app/api/place/route";
-import { fetchBoard } from "@/lib/boards-client";
+import { fetchBoard, readNdjson } from "@/lib/boards-client";
 import { greatCircle, latitudeLines, routePath, type RouteLeg } from "@/lib/arc";
 import { isGem, type FameFile } from "@/lib/gems";
 import { addDays, countryName, dateRange, localIso, todayIso } from "@/lib/format";
 import { EMPTY_BEEN, countryAllowed, excludedCountries, excludeParam, filterByCountry, loadBeen, saveBeen, type BeenPrefs } from "@/lib/been";
-import { BANDS, dealKey, REGION_CENTROIDS, WILD_REGIONS, type AskState, type Band, type BoardState, type DealNights, type GroupForm, type GroupQuery, type GroupState, type LiveSearch, type LongStayForm, type LongStayResult, type LongStayState, type Origin, type Period, type PickMode, type PickedDetail, type Sheet, type TripMode, type View } from "@/lib/ui-types";
+import { BANDS, dealKey, REGION_CENTROIDS, WILD_REGIONS, type AskState, type Band, type BoardState, type DealNights, type GroupForm, type GroupState, type LiveSearch, type LongStayForm, type LongStayResult, type LongStayState, type Origin, type Period, type PickMode, type PickedDetail, type Sheet, type View } from "@/lib/ui-types";
 import type { Airport, City, CityPlaces, CountryInfo, Deal, Destination, FaresResponse, Gateway, HeritageRow, Holiday, Manifest, ReachResponse, ReachStation, Route, VisaFile, WeatherCompact, WeatherFile } from "@/lib/types";
 import { expandWeather, visaFor } from "@/lib/types";
 import Panel, { MODE_LABEL, type CombosState, type PlanState, type WildState } from "./Panel";
-import { EMPTY_LONGSTAY_FORM, emptyGroupForm, shortLoopRoute, WILD_WINDOW_DAYS, type LongStayQuery, type PurposeState, type WildQuery } from "./TripsPanel";
+import { EMPTY_LONGSTAY_FORM, EMPTY_TRIPS_EXTRA, emptyGroupForm, PANEL_MODES, SHORT_DAYS, shortLoopRoute, WILD_WINDOW_DAYS, type GroupSearch, type LongStayQuery, type PanelMode, type PurposeState, type TripsExtra, type WildQuery } from "./TripsPanel";
+import { emptyRouteForm, ROUTE_BUDGET, ROUTE_BUDGET_HARDER, type RouteForm, type RouteLeg as AbLeg, type RouteOption, type RouteResult, type RouteState } from "./RouteFinder";
+
+/**
+ * The two ends of an A to B answer as points to frame, only the ones the engine could place:
+ * a typo or an unknown name comes back with null coordinates, and framing those would put
+ * the camera and a tag on null island.
+ */
+/** The origin as a place /api/route resolves: its name, or "lat,lon" when the name is only "your location" or "shared location". */
+function originAsPlace(o: Origin): string {
+  return o.label === "your location" || o.label === "shared location" ? `${o.lat.toFixed(3)},${o.lon.toFixed(3)}` : o.label;
+}
+function routeEnds(r: RouteResult): [number, number][] {
+  const pts: [number, number][] = [];
+  for (const end of [r.from, r.to]) if (routeEndKnown(end)) pts.push([end.lon, end.lat]);
+  return pts;
+}
+/**
+ * An end the engine placed for real: `placed: false` means it borrowed the other end's
+ * coordinates (or 0,0) so a frame still lands somewhere; a tag there would sit on the wrong
+ * city or on null island.
+ */
+function routeEndKnown(end: RouteResult["from"]): boolean {
+  return end.placed !== false && Number.isFinite(end.lat) && Number.isFinite(end.lon);
+}
 import type { FinderQuery, FinderState } from "./FinderForm";
 import type { Plan } from "@/lib/plan";
 import type { PurposeTrip } from "@/lib/purpose";
@@ -31,7 +55,8 @@ import TopBar from "./TopBar";
 import PriceLabels, { type LabelItem } from "./PriceLabels";
 import type { Intel } from "./PlaceIntel";
 
-const TRIP_MODES: TripMode[] = ["short", "wild", "longstay", "group", "purpose"];
+// Every mode of the Trips tab, "ab" included (TripsPanel.PANEL_MODES is the list the panel draws).
+const PANEL_MODE_KEYS: PanelMode[] = PANEL_MODES.map((m) => m.key);
 const LAT_LINES = latitudeLines(15);
 const isPhone = () => typeof window !== "undefined" && window.innerWidth <= 720;
 
@@ -182,7 +207,17 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
   const [purpose, setPurpose] = useState<PurposeState>({ status: "idle", trips: [] });
   const [purposeKinds, setPurposeKinds] = useState<string[]>([]);
   const [plan, setPlan] = useState<PlanState>({ status: "idle" });
-  const [tripMode, setTripMode] = useState<TripMode>("short");
+  const [tripMode, setTripMode] = useState<PanelMode>("short");
+  // The free-form extras of every Trips mode (countries, must-include cities, wishes, ...): see TripsPanel.TripsExtra.
+  const [tripsExtra, setTripsExtra] = useState<TripsExtra>(EMPTY_TRIPS_EXTRA);
+  // A to B: the form, the streamed answer, the option drawn on the globe, and the request in flight.
+  const [abForm, setAbForm] = useState<RouteForm>(emptyRouteForm);
+  // The current form for the atlas:route listener, which is registered once and would otherwise see the first, empty one.
+  const abFormRef = useRef(abForm);
+  abFormRef.current = abForm;
+  const [ab, setAb] = useState<RouteState>({ status: "idle", lines: [], options: [] });
+  const [abSelected, setAbSelected] = useState<number | null>(null);
+  const abCtrl = useRef<AbortController | null>(null);
   const [longStay, setLongStay] = useState<LongStayState>({ status: "idle" });
   const [selectedBase, setSelectedBase] = useState<string | null>(null);
   const [group, setGroup] = useState<GroupState>({ status: "idle" });
@@ -405,12 +440,12 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
     const from = q.get("from")?.split(",");
     const v = q.get("view");
     if (v === "chat" || v === "deals" || v === "all" || v === "fly" || v === "ground" || v === "trips" || v === "wild") changeView(v);
-    const mode = q.get("mode") as TripMode | null;
-    if (mode && TRIP_MODES.includes(mode)) setTripMode(mode);
+    const mode = q.get("mode") as PanelMode | null;
+    if (mode && PANEL_MODE_KEYS.includes(mode)) setTripMode(mode);
     if (from && from.length >= 2 && Number.isFinite(Number(from[0])) && Number.isFinite(Number(from[1]))) {
       setOrigin({ lat: Number(from[0]), lon: Number(from[1]), label: from.slice(2).join(",") || "shared location", source: "search" });
       const d = Number(q.get("days"));
-      if ([3, 5, 7, 10].includes(d)) setDays(d);
+      if (SHORT_DAYS.includes(d)) setDays(d);
       const place = q.get("place");
       if (place) setSelectedPlace(place);
       const deal = q.get("deal");
@@ -617,6 +652,14 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
     if (q.maxHours) params.set("maxHours", String(q.maxHours));
     if (q.returnTo.length) params.set("returnTo", q.returnTo.join(","));
     if (q.tricks) params.set("tricks", "1");
+    if (q.exhaustive) {
+      params.set("exhaustive", "1");
+      // The finder grows the origins with airports a train or coach reaches from here.
+      if (origin) {
+        params.set("lat", String(origin.lat));
+        params.set("lon", String(origin.lon));
+      }
+    }
     if (excludeQ) params.set("exclude", excludeQ);
     try {
       const r = await fetch(`/api/finder?${params}`);
@@ -961,7 +1004,16 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
     setPlan({ status: "idle" });
     // The trip's identity (what /api/plan needs to find the same stored trip) and the extras
     // (where the visitor is) are kept apart: the plan is asked with the identity only.
-    const query: WildQuery = { g: boardGateways.map((g) => g.iata).join(","), home: gateways[0].airport.country, region: wildRegion, nights: String(wildNights), style: wildStyle, budget: wildBudget, tradeoff: wildTradeoff, variants: String(wildVariants) };
+    const wf = tripsExtra.wild;
+    // Chosen countries replace the region ("custom"); the rest of the free-form fields ride along under the names the engine reads.
+    const query: WildQuery = { g: boardGateways.map((g) => g.iata).join(","), home: gateways[0].airport.country, region: wf.countries.length ? "custom" : wildRegion, nights: String(wildNights), style: wildStyle, budget: wildBudget, tradeoff: wildTradeoff, variants: String(wildVariants) };
+    if (wf.countries.length) query.countries = wf.countries.join(",");
+    if (wf.mustInclude.length) query.mustInclude = wf.mustInclude.join(",");
+    if (wf.maxHours) query.maxFlightHours = String(wf.maxHours);
+    if (wf.startFrom.length) query.startFrom = wf.startFrom.slice(0, 3).join(",");
+    if (wf.wishes.trim()) query.wishes = wf.wishes.trim();
+    // The route reads one range, "3-5".
+    if (wf.stopNights) query.nightsPerStop = `${wf.stopNights[0]}-${wf.stopNights[1]}`;
     if (month) query.month = month;
     // The excluded countries are part of the trip's identity: the plan is looked up under the same key.
     if (excludeQ) query.exclude = excludeQ;
@@ -1061,7 +1113,11 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
     // Local days, so an evening visitor west of Greenwich is not asked for a window that starts tomorrow.
     const from = month ? `${month}-01` : localIso(new Date(Date.now() + 3 * 86_400_000));
     const to = month ? new Date(Date.UTC(Number(month.slice(0, 4)), Number(month.slice(5, 7)), 0)).toISOString().slice(0, 10) : localIso(new Date(Date.now() + 62 * 86_400_000));
-    const kinds = purposeKinds.length ? `&kinds=${purposeKinds.join(",")}` : "";
+    // The chips and the visitor's own words go together: kinds=festival,jazz,surfing.
+    // A kind is one token to the route (letters and hyphens): "tango week" travels as "tango-week".
+    const typed = tripsExtra.purpose.kindsText.split(/[,;]+/).map((k) => k.trim().toLowerCase().replace(/[^a-z-]+/g, "-").replace(/^-+|-+$/g, "")).filter((k) => k.length >= 2);
+    const allKinds = [...new Set([...purposeKinds, ...typed])];
+    const kinds = allKinds.length ? `&kinds=${encodeURIComponent(allKinds.join(","))}` : "";
     try {
       const r = await fetch(`/api/purpose?g=${boardGateways.map((g) => g.iata).join(",")}&from=${from}&to=${to}&live=4${kinds}${excludeQ ? `&exclude=${excludeQ}` : ""}`);
       const j = (await r.json()) as { trips?: PurposeTrip[]; note?: string; error?: string };
@@ -1083,6 +1139,9 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
     const params = new URLSearchParams({ g: boardGateways.map((g) => g.iata).join(","), home: gateways[0].airport.country, region: wildRegion, months: String(q.months), budget: q.budget });
     if (q.startMonth) params.set("startMonth", q.startMonth);
     if (q.countries?.length) params.set("countries", q.countries.join(","));
+    // The route reads the "only these cities" pick as mustInclude (those become the only bases).
+    if (q.cities?.length) params.set("mustInclude", q.cities.join(","));
+    if (q.wishes) params.set("wishes", q.wishes);
     if (excludeQ) params.set("exclude", excludeQ);
     try {
       const r = await fetch(`/api/longstay?${params}`);
@@ -1099,7 +1158,7 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
     }
   }
   // Where a group can meet: POST /api/group with everyone's airports and free windows.
-  async function findGroup(q: GroupQuery) {
+  async function findGroup(q: GroupSearch) {
     setGroup({ status: "loading" });
     setSelectedOption(null);
     try {
@@ -1197,6 +1256,135 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
     map.flyTo({ center: [lon, lat], zoom, duration: 1600, padding: panelPadding(), essential: true });
   }
 
+  // ---- A to B: GET /api/route streams {progress}, {option} lines and a final {done}.
+  const abOpen = view === "trips" && tripMode === "ab";
+  function cancelRoute() {
+    abCtrl.current?.abort();
+    abCtrl.current = null;
+    setAb((a) => (a.status === "loading" ? { ...a, status: a.options.length ? "ok" : "error", note: a.options.length ? undefined : "stopped" } : a));
+  }
+  async function runRoute(form: RouteForm) {
+    abCtrl.current?.abort();
+    const ctrl = new AbortController();
+    abCtrl.current = ctrl;
+    setAb({ status: "loading", lines: [], options: [], query: form });
+    setAbSelected(null);
+    const params = new URLSearchParams({ from: form.from.trim(), to: form.to.trim(), depart: form.depart, flex: String(form.flex) });
+    if (form.oneWay) params.set("oneWay", "1");
+    else params.set("nights", String(form.nights));
+    if (form.maxHours) params.set("maxHours", String(form.maxHours));
+    if (excludeQ) params.set("exclude", excludeQ);
+    // A gentle budget by default: two clicks stay under Kiwi's burst throttle, which would shut every live tool for five minutes.
+    params.set("budget", String(form.harder ? ROUTE_BUDGET_HARDER : ROUTE_BUDGET));
+    const finish = (r: RouteResult) => {
+      setAb((a) => ({ ...a, status: "ok", lines: [], options: r.options.length ? r.options : a.options, result: r }));
+      // The cheapest option is drawn at once; the visitor taps another to see it instead.
+      setAbSelected(r.options.length ? Math.max(0, r.options.findIndex((o) => o === r.cheapest || (r.cheapest && o.title === r.cheapest.title && o.total === r.cheapest.total))) : null);
+      // A side the engine could not place has null coordinates; frame only the known ends, never null island.
+      framePoints(routeEnds(r), 6);
+    };
+    try {
+      const r = await fetch(`/api/route?${params}`, { signal: ctrl.signal });
+      if (!r.ok) {
+        const j = await r.json().catch(() => ({}));
+        setAb({ status: "error", lines: [], options: [], note: j.error ?? `the route search failed (${r.status})`, query: form });
+        return;
+      }
+      if (!r.headers.get("content-type")?.includes("ndjson")) {
+        finish((await r.json()) as RouteResult);
+        return;
+      }
+      let finished = false;
+      const ended = await readNdjson<{ progress?: string; option?: RouteOption; done?: RouteResult; error?: string }>(
+        r,
+        (msg) => {
+          if (msg.progress) setAb((a) => ({ ...a, lines: [...a.lines, msg.progress!] }));
+          if (msg.option) setAb((a) => ({ ...a, options: [...a.options, msg.option!] }));
+          if (msg.done) {
+            finished = true;
+            finish(msg.done);
+          }
+          if (msg.error) {
+            finished = true;
+            setAb((a) => ({ ...a, status: a.options.length ? "ok" : "error", note: msg.error }));
+          }
+        },
+        ctrl.signal,
+      );
+      if (ended && !finished) setAb((a) => ({ ...a, status: a.options.length ? "ok" : "error", note: a.options.length ? undefined : "the search stopped early; try again" }));
+    } catch (err) {
+      if ((err as Error | undefined)?.name === "AbortError") return;
+      setAb({ status: "error", lines: [], options: [], note: "network", query: form });
+    } finally {
+      if (abCtrl.current === ctrl) abCtrl.current = null;
+    }
+  }
+  const runRouteRef = useRef(runRoute);
+  runRouteRef.current = runRoute;
+  // The traveller's place is the default "from", filled once the origin is known and the box is still empty.
+  useEffect(() => {
+    if (!origin || abForm.from) return;
+    setAbForm((f) => (f.from ? f : { ...f, from: originAsPlace(origin) }));
+  }, [origin, abForm.from]);
+  // The chat opens this mode with its own from, to and dates: window.dispatchEvent(new CustomEvent("atlas:route", { detail })).
+  useEffect(() => {
+    const onRoute = (e: Event) => {
+      const d = (e as CustomEvent<{ from?: string; to?: string; depart?: string; nights?: number; oneWay?: boolean }>).detail ?? {};
+      if (!d.to) return;
+      const base = emptyRouteForm();
+      // The form as it is now (the ref), then the origin as a place the engine can resolve: "your location" is not one, its coordinates are.
+      const o = originRef.current;
+      const current = abFormRef.current;
+      const form: RouteForm = { ...current, from: d.from || current.from || (o ? originAsPlace(o) : ""), to: d.to, depart: d.depart && /^\d{4}-\d{2}-\d{2}$/.test(d.depart) ? d.depart : base.depart, nights: d.nights && d.nights > 0 ? d.nights : base.nights, oneWay: d.oneWay === true || d.nights === 0 };
+      setView("trips");
+      setTripMode("ab");
+      setAbForm(form);
+      if (form.from) void runRouteRef.current(form);
+    };
+    window.addEventListener("atlas:route", onRoute);
+    return () => window.removeEventListener("atlas:route", onRoute);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  // The option on show, as legs with coordinates: an airport by code, a city by code, the two
+  // ends by the engine's own coordinates, a station by the coordinates the engine may attach;
+  // a leg whose end is unknown continues from the last known point so the line never breaks.
+  const abOption: RouteOption | null = abOpen && abSelected != null ? (ab.options[abSelected] ?? null) : null;
+  const abLegs = useMemo<RouteLeg[]>(() => {
+    if (!abOption) return [];
+    const r = ab.result;
+    const ends = new Map<string, [number, number]>();
+    if (r) {
+      ends.set(r.from.label, [r.from.lon, r.from.lat]);
+      ends.set(r.to.label, [r.to.lon, r.to.lat]);
+      for (const code of r.from.airports) if (!byIata.has(code)) ends.set(code, [r.from.lon, r.from.lat]);
+      for (const code of r.to.airports) if (!byIata.has(code)) ends.set(code, [r.to.lon, r.to.lat]);
+    }
+    const at = (code: string, name: string, lat?: number, lon?: number): [number, number] | null => {
+      if (lat != null && lon != null) return [lon, lat];
+      return wildCoord(code) ?? ends.get(code) ?? ends.get(name) ?? null;
+    };
+    const out: RouteLeg[] = [];
+    let last: [number, number] | null = null;
+    const legs: AbLeg[] = [...abOption.legs, ...(abOption.back ?? [])];
+    legs.forEach((l, i) => {
+      const from = at(l.from, l.fromName, l.fromLat, l.fromLon) ?? last ?? (i === 0 && r ? [r.from.lon, r.from.lat] : null);
+      const to = at(l.to, l.toName, l.toLat, l.toLon) ?? (i === abOption.legs.length - 1 && r ? [r.to.lon, r.to.lat] : null);
+      if (from && to) {
+        out.push({ from, to, kind: l.kind === "fly" ? "fly" : "ground" });
+        last = to;
+      }
+    });
+    return out;
+  }, [abOption, ab.result, byIata, wildCoord]);
+  const abPoints = useMemo<[number, number][]>(() => {
+    const pts: [number, number][] = [];
+    for (const l of abLegs) {
+      if (!pts.length) pts.push(l.from);
+      pts.push(l.to);
+    }
+    return pts;
+  }, [abLegs]);
+
   const homeHolidays = useMemo(() => {
     const home = gateways[0]?.airport.country;
     if (!home) return [];
@@ -1212,7 +1400,9 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
     const ctrl = new AbortController();
     setTrips(null);
     const g = gateways.map((x) => `${x.airport.iata}:${x.airport.lat}:${x.airport.lon}:${x.driveMin}`).join(",");
-    const extra = `${around ? `&around=${around}` : ""}${exclude.length ? `&exclude=${exclude.join(",")}` : ""}`;
+    const sf = tripsExtra.short;
+    // ground= is the engine's own (minutes); cities, mustInclude and countries are the free-form asks.
+    const extra = `${around ? `&around=${around}` : ""}${exclude.length ? `&exclude=${exclude.join(",")}` : ""}&ground=${sf.maxGroundHours * 60}&cities=${sf.cities}${sf.mustInclude.length ? `&mustInclude=${sf.mustInclude[0]}` : ""}${sf.countries.length ? `&countries=${sf.countries.join(",")}` : ""}`;
     fetch(`/api/trips?g=${g}&home=${gateways[0].airport.country}&days=${days}${extra}`, { signal: ctrl.signal })
       .then((r) => r.json())
       .then((j: TripsResult) => {
@@ -1221,7 +1411,7 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
       })
       .catch(() => {});
     return () => ctrl.abort();
-  }, [shortOpen, gateways, days, around, exclude]);
+  }, [shortOpen, gateways, days, around, exclude, tripsExtra.short]);
 
   // /api/trips already skips excluded countries; this client-side pass is belt and braces for a
   // cached answer from before the list changed, so nothing with such a night draws or lists.
@@ -1370,7 +1560,7 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
   }, [view, wildOpen, wild.status, shortOpen, selectedTrip]);
   useEffect(() => stopPlay, [view, tripMode, selectedTrip, wild.trip]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const busy = searching || asking || wild.status === "loading" || finder.status === "loading" || longStay.status === "loading" || group.status === "loading" || purpose.status === "loading" || plan.status === "loading" || liveSearch?.status === "loading" || combos.status === "loading" || (shortOpen && !trips);
+  const busy = searching || asking || wild.status === "loading" || ab.status === "loading" || finder.status === "loading" || longStay.status === "loading" || group.status === "loading" || purpose.status === "loading" || plan.status === "loading" || liveSearch?.status === "loading" || combos.status === "loading" || (shortOpen && !trips);
 
   const pathForSelected = useMemo<[number, number][]>(() => {
     if (!reach || selectedStation == null) return [];
@@ -1403,6 +1593,13 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
         regions.push({ key: `region:${r.key}`, lon: c[1], lat: c[0], text: r.label, kind: "region", hot: r.key === wildRegion && !showingResult });
       }
     }
+    if (abOpen && ab.result) {
+      // A side the engine could not place (placed: false, borrowed or null coordinates) gets no tag: it would sit on the other city or on null island.
+      const { from, to } = ab.result;
+      if (routeEndKnown(from)) out.push({ key: "ab:from", lon: from.lon, lat: from.lat, text: from.label, kind: "stop", hot: true });
+      if (routeEndKnown(to)) out.push({ key: "ab:to", lon: to.lon, lat: to.lat, text: `${to.label}${abOption ? ` · ${abOption.total ? `€${Math.round(abOption.total)}` : ""}` : ""}`, kind: "stop", hot: true });
+      return out;
+    }
     if (route) {
       // Numbered stops of the trip on the globe; the one the camera is on is lit.
       out.push(...route.stops.map((st, i) => ({ key: `stop:${i}`, lon: st.lon, lat: st.lat, text: `${i + 1} · ${st.name} · ${st.nights}n`, kind: "stop" as const, hot: playing === i })));
@@ -1433,8 +1630,9 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
     }
     out.sort((a, b) => (a.hot === b.hot ? 0 : a.hot ? -1 : 1));
     return out;
-  }, [view, tripMode, pick, wildRegion, route, playing, longStay, selectedBase, group, selectedOption, wildCoord, purposeOpen, dealsList, deal, selectedDeal, hoveredDeal, dealCoord]);
+  }, [view, tripMode, pick, wildRegion, route, playing, longStay, selectedBase, group, selectedOption, wildCoord, purposeOpen, dealsList, deal, selectedDeal, hoveredDeal, dealCoord, abOpen, ab.result, abOption]);
   function pickLabel(key: string) {
+    if (key.startsWith("ab:")) return;
     if (key.startsWith("region:")) return selectRegion(key.slice(7));
     if (key.startsWith("stop:")) return focusStop(Number(key.slice(5)));
     if (key.startsWith("base:")) {
@@ -1706,8 +1904,8 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
       trailRef.current = { path, timestamps: path.map((_, i) => i) };
       return;
     }
-    trailRef.current = routeLegs.length ? routePath(routeLegs) : null;
-  }, [deal, view, gwCoord, dealCoord, routeLegs]);
+    trailRef.current = routeLegs.length ? routePath(routeLegs) : abLegs.length ? routePath(abLegs) : null;
+  }, [deal, view, gwCoord, dealCoord, routeLegs, abLegs]);
 
   // deck.gl layers follow the state. Globe needs back-face culling off or arcs disappear.
   useEffect(() => {
@@ -1948,6 +2146,44 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
             getLineColor: [5, 7, 14, 230],
           })
         : null,
+      abLegs.length
+        ? new ArcLayer<RouteLeg>({
+            id: "ab-arcs",
+            data: abLegs.filter((l) => l.kind === "fly"),
+            getSourcePosition: (x) => x.from,
+            getTargetPosition: (x) => x.to,
+            getSourceColor: [111, 240, 196, 230],
+            getTargetColor: [124, 196, 255, 230],
+            getWidth: 3,
+            greatCircle: true,
+            parameters: { cullMode: "none" },
+          })
+        : null,
+      abLegs.length
+        ? new PathLayer<RouteLeg>({
+            id: "ab-ground",
+            data: abLegs.filter((l) => l.kind === "ground"),
+            getPath: (l) => [l.from, l.to],
+            getColor: [255, 180, 84, 240],
+            getWidth: 3.5,
+            widthUnits: "pixels",
+            parameters: { cullMode: "none" },
+          })
+        : null,
+      abPoints.length
+        ? new ScatterplotLayer<{ p: [number, number] }>({
+            id: "ab-points",
+            data: abPoints.map((p) => ({ p })),
+            getPosition: (x) => x.p,
+            radiusUnits: "pixels",
+            getRadius: 5.5,
+            getFillColor: [255, 255, 255, 240],
+            stroked: true,
+            lineWidthUnits: "pixels",
+            getLineWidth: 2,
+            getLineColor: [111, 240, 196, 255],
+          })
+        : null,
       tripView
         ? new ScatterplotLayer<TripCity>({
             id: "trip-all-cities",
@@ -2136,7 +2372,7 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
     render();
     // focus* helpers only read refs and state setters; listing them would re-run this on every render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [airports, shown, gateways, gatewayIata, origin, selectedDest, live, view, reachBand, selectedStation, pathForSelected, placesShown, selectedPlace, tripsShown, trip, warmOnly, weather, dealsList, selectedDeal, hoveredDeal, deal, render, selectedCombo, combos, sightsOnMap, sights, wild.trip, wildCoord, chatTrip, chatDeals, shortOpen, wildOpen, purposeOpen, tripMode, longStay, selectedBase, group, selectedOption, lowZoom]);
+  }, [airports, shown, gateways, gatewayIata, origin, selectedDest, live, view, reachBand, selectedStation, pathForSelected, placesShown, selectedPlace, tripsShown, trip, warmOnly, weather, dealsList, selectedDeal, hoveredDeal, deal, render, selectedCombo, combos, sightsOnMap, sights, wild.trip, wildCoord, chatTrip, chatDeals, shortOpen, wildOpen, purposeOpen, tripMode, longStay, selectedBase, group, selectedOption, lowZoom, abLegs, abPoints]);
 
   const groundFeeds = reach ? reach.feeds.map((f) => f.attribution.split(" via ")[0].split(" (")[0]).join(", ") : "";
 
@@ -2256,6 +2492,37 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
           airports,
           gateways,
           countries,
+          cities,
+          extra: tripsExtra,
+          onExtra: setTripsExtra,
+          ab: {
+            form: abForm,
+            onForm: setAbForm,
+            state: ab,
+            onSearch: runRoute,
+            onCancel: cancelRoute,
+            selected: abSelected,
+            onSelect: (i) => {
+              setAbSelected(i);
+              const o = i != null ? ab.options[i] : null;
+              if (o && ab.result) framePoints(routeEnds(ab.result), 6);
+            },
+            // "Tap the globe": the same place pick the chat uses; the tap answers through atlas:picked.
+            onTapGlobe: () => {
+              if (pick === "place") {
+                cancelPick();
+                return;
+              }
+              setPick("place");
+              if (isPhone()) setSheet("peek");
+            },
+            tapping: pick === "place" && abOpen,
+            airports,
+            cities,
+            gateways,
+            homeLabel,
+            excludedCount: exclude.length,
+          },
           homeLabel,
           airlines,
           playing,

@@ -4,11 +4,17 @@
 // search is one call per target (anywhere, then the nearest countries); the nights, the
 // must-include date and the flight length are filtered afterwards. Returning to a different
 // home airport is two one-way searches per shortlisted city.
+//
+// Searches: 1 ("anywhere") + up to 18 nearby countries (or a region's), or at most 4 listed
+// targets; plus 16 for open-jaw (8 cities x 2) and 4 for the hidden-city scan. The exhaustive
+// option adds one "anywhere" search per origin airport (at most 5, the multi-origin search
+// collapses to the cheapest origin otherwise), so a run is at most 19 + 5 + 16 + 4 = 44.
 import citiesJson from "@/public/data/cities.json";
 import countriesJson from "@/public/data/countries.json";
 import { countryAllowed } from "./been";
 import { countryLabel, hubDegree, targetsFor, resolveGateway, toDeal, trimDeals } from "./board";
 import { kiwiDate, nightsOf, searchFlight, type KiwiItinerary } from "./kiwi";
+import { airportsByGround } from "./route-finder";
 import type { City, CountryInfo, Deal } from "./types";
 
 const CITIES = citiesJson as unknown as Record<string, City>;
@@ -37,6 +43,15 @@ export type FinderParams = {
    * countries): never a destination, fine as a connection. Targets in them are not searched.
    */
   exclude?: string[];
+  /**
+   * Go through more of the graph: the origins grow with the airports a train or coach reaches
+   * within three hours of `origin` (when given), and after the targets each origin airport
+   * gets its own "anywhere" search, because a multi-origin search answers only from the
+   * cheapest origin. Default false. Bounded: at most 5 origins, so at most 5 extra searches.
+   */
+  exhaustive?: boolean;
+  /** Where the traveller is, for the exhaustive expansion of origins. */
+  origin?: { lat: number; lon: number };
   onDeals?: (deals: Deal[], target: string) => void;
   onProgress?: (line: string) => void;
 };
@@ -139,6 +154,10 @@ export async function findDeals(p: FinderParams): Promise<FinderResult> {
   const say = p.onProgress ?? (() => {});
   const exclude = p.exclude ?? [];
   const origins = p.origins.filter((o) => /^[A-Z]{3}$/.test(o)).slice(0, 5);
+  if (p.exhaustive && p.origin) {
+    // The airports a train or coach reaches from where the traveller is: often the cheap ones.
+    for (const code of airportsByGround(p.origin.lat, p.origin.lon)) if (origins.length < 5 && !origins.includes(code)) origins.push(code);
+  }
   const flyFrom = origins.join(",");
   const minN = Math.max(1, p.minNights);
   const maxN = Math.max(minN, p.maxNights);
@@ -187,6 +206,37 @@ export async function findDeals(p: FinderParams): Promise<FinderResult> {
   // A getaway leaves the country unless the search names it.
   const home = first?.country ?? "";
   const domesticOk = !!p.where && p.where !== "anywhere";
+  // Where a deal may land when the search named a place: the region's countries, or the
+  // listed targets' countries. A target our data cannot place (null) leaves the gate open,
+  // since Kiwi decides what it means; "anywhere" has no gate.
+  const landing = ((): Set<string> | null => {
+    const named = regionList ?? (domesticOk ? targets : null);
+    if (!named) return null;
+    const codes = named.map(targetCountry);
+    return codes.some((c) => !c) ? null : new Set(codes as string[]);
+  })();
+  /** The deals of one search that fit the dates, the length, the home rule, the been list and the landing gate. */
+  const collect = (r: { itineraries: KiwiItinerary[] }, label: string): void => {
+    const found: Deal[] = [];
+    for (const it of r.itineraries) {
+      const out = it.outbound.departureTime.slice(0, 10);
+      const back = it.inbound?.departureTime.slice(0, 10) ?? "";
+      if (!fits(out, back, nightsOf(it))) continue;
+      if (p.direct && (it.outbound.stops > 0 || (it.inbound?.stops ?? 0) > 0)) continue;
+      if (p.maxHours && hoursOf(it) > p.maxHours) continue;
+      const d = toDeal(it.outbound.from, it, nightsOf(it)!);
+      if (!domesticOk && d.country === home) continue;
+      // An "anywhere" search may land in a visited country: the deal is dropped, the
+      // search was still worth it for the other landings.
+      if (!countryAllowed(d.country, exclude)) continue;
+      if (landing && !landing.has(d.country)) continue;
+      found.push(d);
+    }
+    if (found.length) {
+      all.push(...found);
+      p.onDeals?.(trimDeals(found), label);
+    }
+  };
   say(`Searching ${origins.join(", ")} → ${p.where && p.where !== "anywhere" ? p.where : "anywhere"}, ${p.from} to ${p.to}, ${minN} to ${maxN} nights${p.include ? `, there on ${p.include}` : ""}…`);
   let searched = 0;
   let failed = 0;
@@ -197,30 +247,36 @@ export async function findDeals(p: FinderParams): Promise<FinderResult> {
       try {
         const r = await searchFlight({ flyFrom, flyTo: t, departureDate: kiwiDate(p.from), departureDateTo: kiwiDate(depTo), returnDate: kiwiDate(addDays(p.from, minN)), returnDateTo: kiwiDate(p.to) });
         searched++;
-        const found: Deal[] = [];
-        for (const it of r.itineraries) {
-          const out = it.outbound.departureTime.slice(0, 10);
-          const back = it.inbound?.departureTime.slice(0, 10) ?? "";
-          if (!fits(out, back, nightsOf(it))) continue;
-          if (p.direct && (it.outbound.stops > 0 || (it.inbound?.stops ?? 0) > 0)) continue;
-          if (p.maxHours && hoursOf(it) > p.maxHours) continue;
-          const d = toDeal(it.outbound.from, it, nightsOf(it)!);
-          if (!domesticOk && d.country === home) continue;
-          // An "anywhere" search may land in a visited country: the deal is dropped, the
-          // search was still worth it for the other landings.
-          if (!countryAllowed(d.country, exclude)) continue;
-          found.push(d);
-        }
-        if (found.length) {
-          all.push(...found);
-          p.onDeals?.(trimDeals(found), t);
-        }
+        collect(r, t);
       } catch {
         failed++;
       }
     }
   }
   await Promise.all(Array.from({ length: 5 }, worker));
+
+  // Exhaustive: the same question from each origin airport on its own. A multi-origin search
+  // answers with the 15 cheapest itineraries overall, which all leave from the cheapest
+  // airport; one search per airport shows what the others can do. The question stays the one
+  // asked: "anywhere", or the named targets as one comma list (a region's nearest four
+  // countries), so a search for Italy never answers with Spain. The lone origin with
+  // where=anywhere was already searched above.
+  if (p.exhaustive && origins.length) {
+    const soloTarget = regionList || domesticOk ? targets.filter((t) => t !== "anywhere").slice(0, MAX_LISTED_TARGETS).join(",") : "anywhere";
+    const solo = soloTarget && !(origins.length === 1 && soloTarget === "anywhere") ? origins : [];
+    if (solo.length) say(`Searching ${soloTarget === "anywhere" ? "anywhere" : p.where} from ${solo.join(", ")} one by one…`);
+    await Promise.all(
+      solo.map(async (o) => {
+        try {
+          const r = await searchFlight({ flyFrom: o, flyTo: soloTarget, departureDate: kiwiDate(p.from), departureDateTo: kiwiDate(depTo), returnDate: kiwiDate(addDays(p.from, minN)), returnDateTo: kiwiDate(p.to) });
+          searched++;
+          collect(r, `${soloTarget === "anywhere" ? "anywhere" : p.where} from ${o}`);
+        } catch {
+          failed++;
+        }
+      }),
+    );
+  }
 
   // Open-jaw: for the best cities, fly out from any origin and home to any allowed airport.
   let openJaw = 0;

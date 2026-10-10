@@ -241,6 +241,196 @@ affiliate programme as the way to a proper Kiwi Tequila API key. The engines tak
   run), with the GTFS ingest capped at 2 GB and two threads for DuckDB; the fame ingest
   refuses namesake articles (Glasgow, Montana) by distance.
 
+## The route finder: the cheapest way from A to B (`lib/route-finder.ts`, `/api/route`)
+
+One question, "how do I get from Brasov to Lisbon around the 14th for four nights", answered
+by going through every way the data knows, inside a search budget. `cheapestWay(q)` returns a
+`RouteResult`: the two places with their candidate airports, every `RouteOption` found (legs,
+total, door-to-door hours, stops, a plain title, a why line, the booking urls, a score), the
+`cheapest` and the `fastest`, what was `considered` in words, `searched`/`failed`, and
+`sources`, a compact list of what fed the options: `live` (a Kiwi itinerary, from the main
+search or a hub pair), `memory` (a remembered fare) and `ground` (the ground graph or the
+road estimate gave a whole way). The chat names the source from that list, not from the
+wording of the notes. A fly leg built from the fare memory carries `remembered: true` (dates
+known, times not, `estimated` set); the estimated legs to and from an airport are part of
+every option and are not a source of their own. The price on a card in the panel is
+`total`, the whole trip, there and back for a return.
+
+**The UI** (`components/RouteFinder.tsx`) sends a budget of 12 by default (`ROUTE_BUDGET`:
+the main search and two or three hubs, two such clicks staying under Kiwi's burst throttle)
+and 24 with "Search harder" (`ROUTE_BUDGET_HARDER`, the engine's own default). Since the memo
+is keyed without the budget (below), "Search harder" on a question just answered streams the
+stored options at once and spends only on the hubs the first click left out.
+
+**Places.** `from` and `to` take a city name, an airport code, a place name or `lat,lon`:
+`cities.json` first (accents folded, so "Brașov" and "brasov" are one), then the airports
+file (an airport's city or name), then the GeoNames towns; a name none of them knows goes to
+Kiwi as the `flyFrom`/`flyTo` of the main search and the landing airports place it. A
+three-letter word is a code only when typed in upper case ("BAR" is the airport in Qionghai);
+typed as a name ("Bar") the places are tried first and the code is the fallback, so "otp"
+still finds Bucharest. The two ends of a `RouteResult` always carry finite coordinates: a
+side that could not be placed has `placed: false`, no airports, and borrows the other end's
+point, so a globe that frames the two ends still lands somewhere sensible.
+
+**Candidate airports** per side (`gatewaysFor`, at most four): the nearest large and medium
+airports by drive time, ranked the way a home is ranked (`nearestGateways`, big airports
+discounted), plus any airport a train or coach reaches within three hours by the ground
+graph (`reachFrom`, the graph's minutes plus the hop from the station); the code the
+traveller typed always comes first. Brasov gives `GHV, BCM, OTP (train), BBU (train)`. A
+place with nothing medium or large in reach (Arctic Bay, Nain) gets its own small airport
+within 150 km, so the search is by code and the landings map back. An airport in reach of
+both ends (Valencia's VLC by train from Madrid) is kept on the side it is nearer to, or the
+main search would ask Kiwi for a flight from an airport to itself.
+
+**The window** is `depart` plus or minus `flex`, never starting in the past: a departure
+within `flex` days of today is trimmed to start today (Kiwi answers nothing for a day gone
+by, and that empty answer would have been kept for an hour); a progress line says so.
+
+**The searches, in order, all under `budget` (default 24, the route caps it at 40; 0 means
+the fare memory and the ground graph only) and a deadline (`deadlineMs`, default 90 s):**
+
+1. the fare memory (`rememberedFare` over every airport pair in the window), an option at
+   zero cost, marked "a fare seen this week";
+2. **one** Kiwi search with all origin airports as `flyFrom` and all destination airports as
+   `flyTo`, the window out and the window plus `nights` back. Its fifteen itineraries are
+   classified by the airport used on each side: `direct` (the nearest airport on both sides,
+   not a nonstop promise: `nonstop` is the flag for that and the title says "(1 stop)"),
+   `nearby-airports`, `ground-then-fly` (the origin airport is reached by train or coach),
+   `fly-then-ground`, `open-jaw` (the return uses another airport on either side). The ground
+   legs to and from the traveller's points are added as legs, priced at 0.10 euro per km and
+   marked `estimated`, their minutes from the graph or the drive estimate;
+3. `via-hub`: up to four hubs between the points (the origin board's cheapest big cities
+   within a 60 percent detour first, then the biggest hubs within a 35 percent detour of the
+   great circle, each at least 150 km from both ends), two one-way searches each (A airports
+   to the hub over the window, the hub to B airports the same day or the next), the cheapest
+   pairing with at least two hours to change. For a return the way back is searched **after**
+   the outbound pair is chosen, in a window `nights` plus or minus `flex` after the day it
+   leaves and never before it has arrived, and the pair must make between `nights - flex`
+   and `nights + flex` nights, the same rule the main search is filtered by (a 2-night
+   question cannot come back as a 9-night trip or a return that leaves before the arrival).
+   Door-to-door hours are the two flight durations plus the wait at the hub (one clock) plus
+   the ground legs, so a time-zone change never adds or removes hours. A hub in a "been"
+   country is a same-day connection only. No hub search is issued once Kiwi's breaker is
+   open or the deadline has passed. **A change of airport at the hub:** Kiwi answers a city
+   code with any of its airports, so the first ticket may land at Treviso and the second
+   leave from Marco Polo (OTP to TSF, VCE to LIS), or Beauvais then Charles de Gaulle. When
+   the two airports are both in the data and within 150 km of each other (`airportChange`),
+   the pair gets a ground leg between them: kind `road`, minutes from `driveMinutes` of the
+   straight line, price at the engine's 0.10 euro per km (floor 3), `estimated: true`, note
+   "change of airport, about N km by road". Its price is in `total` (and in `backTotal` for
+   the way back) and counts when the cheapest pairing is chosen, so a 95 euro ticket into
+   Beauvais loses to a 100 euro one into Charles de Gaulle once the road is added; the hub
+   wait must cover the road plus the two hours; the title says "(change of airport)" and the
+   second ticket's note gives the road minutes and the wait left. Hours stay flights plus the
+   wait at the hub, which already contains the road, so its minutes are not counted twice.
+   Two airports the data cannot join (unknown, or farther apart than one hub) are never
+   paired: the two tickets must then use one airport. The same rule applies to the back pair;
+4. `ground-only` when the points are within 1,500 km: Dijkstra over the graph to the
+   stations within 25 km of the destination, up to twelve hours, zero searches; the road
+   estimate stands in under 300 km when the graph has no path (a border the feeds do not
+   cross, Iasi to Chisinau).
+
+Two places within 150 km are a ground trip: no flight is searched (Brasov to Bucharest is
+the train, 0 searches). Past that the flight is always searched, even when the ends reach
+the same airport: Madrid to Valencia (302 km) is the 2.3 h train **and** the 43 euro nonstop.
+`score = total + hours x 6` (euros per hour, the balanced tradeoff) orders the options;
+`cheapest` is the lowest total and `fastest` the fewest door-to-door hours (check-in and
+landing time included). `total` is the whole trip there and back; `backTotal` is the way
+back's share of it (never to be added on top), left out when the return is on the same ticket
+as the outbound, since that ticket cannot be split.
+
+**Time.** Each live search is raced against a 35 s cap (Kiwi's own retry ladder can hold a
+request past two minutes); a search that runs over is counted as failed and not waited for,
+but it goes on inside the gate and lands in Kiwi's memo for the next caller. Past the 90 s
+deadline no new search is issued and what was found is returned with a note ("Kiwi was slow
+today ... ask again in a minute"), so the `{done}` line always arrives inside the route's
+`maxDuration` of 120 and the chat tool never reports an interrupted turn for this engine.
+The throttling line is said once per run, not once per refused search.
+
+**The memo.** The engine memoises a finished answer for an hour (`TtlLru`, 300) by the two
+places as the data resolves them (coordinates to three decimals plus the code the traveller
+typed, so "BAR" the airport and "Bar" the town, or "41.9,12.5" and "-41.9,12.5", never share
+an entry; a name no data knows is keyed by its text as typed), `depart` (the default of three
+weeks out filled in, so a question without a date is keyed by the day it means), `flex`,
+`nights` (0 for a one-way ask, whatever nights box came with it), `oneWay`, `maxHours` and
+`exclude`, never by the budget. The budget is a ceiling on what the whole answer may have
+spent: a stored answer that was run with at least the budget asked, or that is complete (no
+search failed or refused, no hub left out for the budget, the deadline or the breaker), is
+served as is, whatever budget comes with the new ask (a budget of 0 after a budget of 12
+gets the twelve-search answer). A stored answer that was cut short by a smaller budget is
+extended, not discarded: the run resumes from the stored stage (the placed ends, the window
+searched, the hubs picked and which were done, every option found, the sources, the
+searches spent), streams the stored options first and tries only the hubs not yet searched,
+with the earlier searches counting against the new ceiling (`searched` is cumulative; a
+considered line says "extended: 3 searches kept from the answer of 1 min ago, 4 made now").
+A run that stopped for time (the 90 s deadline left hubs unsearched) is stored with the
+searches it actually spent as its ceiling, not the budget it was allowed, so the same budget
+asked again a minute later resumes from the stage, as its note ("ask again in a minute for
+the rest") promises. A run that never reached the main search (budget 0, or a place Kiwi
+could not place) leaves no stage, so a bigger budget later runs it all. Identical runs in
+flight are shared (`InFlight`, keyed with the budget), the run logs to `searches` as `route`
+(codes and numbers only, `extended` flagged) and a run in which any live search failed
+(throttled or timed out) or was refused by the open breaker (a search the breaker held back
+counts as `refused`, not as skipped for the budget; the note then says Kiwi is throttling
+and to try again in a few minutes, not to change the dates) is never stored, nor does a
+failed extension replace the stored answer, so a partial answer never becomes the answer
+for an hour; Kiwi's memo makes the searches that did answer free the second time. The
+window trim ("The window starts today (...), not (...)") is a considered line as well as a
+progress line, so the chat can quote it. `GET /api/route` streams NDJSON:
+`{progress}` lines, an `{option}` per way as it is found, and `{done: RouteResult}` last,
+with `keepAlive` and `maxDuration` 120; bad input is a 400 in the shared `{error}` shape.
+Brasov to Lisbon with `budget=5` (the main search and one hub return) is about ten seconds.
+
+**The finder's exhaustive mode.** `findDeals` takes `exhaustive` (default false) and
+`origin: {lat, lon}`: the origins grow with the airports a train or coach reaches within
+three hours of the point (`airportsByGround`), and after the targets every origin airport
+gets its own search of **the same question**: "anywhere" when nothing was named, or the named
+targets as one comma list (a region's nearest four countries, a listed country), because a
+multi-origin search answers only from the cheapest airport. A named search also gates the
+landings: a deal from a search for Italy must land in Italy, whether it came from the main
+loop or a per-origin one. At most five origins, so at most five extra searches; the header of
+`lib/finder.ts` states the bound (44 worst case) and the response shape is unchanged. The
+`/api/finder` route does not read `exhaustive` yet (only the chat reaches it); see the
+handoff in the round-three report.
+
+## Engine rules settled in round three (the other engines)
+
+- **Deadlines.** `buildWild`, `longStay` and `groupTrip` take `deadline` (epoch ms,
+  `WildParams.deadline`, `LongStayParams.deadline`, `GroupParams.deadline`), so a caller with
+  a time cap (the chat's turn) gets an answer instead of nothing. Past it the wild chain
+  stops growing and the way home is searched from the stops found so far (the way in and the
+  way home are never skipped; the stopover refinement is), the long stay leaves the bases
+  still queued unpriced and the group the windows left, each with `partial: true` and a
+  plain note ("not priced in time; ask again"). An answer cut short is not memoised, so the
+  next ask prices what is missing. The route finder's own cap is `deadlineMs` (above).
+- **Wild with countries is custom.** A `countries` list replaces the region's list whatever
+  region was named (`effectiveRegion` is `custom`): the trip is labelled by its countries,
+  tagged on the globe by them and keyed as custom (`customKey`, whose tenth argument holds
+  the extra constraints). Region `custom` without a list is refused. `buildWildVariants`
+  keeps the variants' refusals (a must city on the been list, too few nights, every way in
+  over the hours cap) and, when no variant builds, rethrows the first one instead of the
+  generic "no way into that region".
+- **Long stay: cities as the bases.** `mustInclude` (city names or codes, up to eight;
+  `cities` is the alias the form sends to `/api/longstay`) makes the named cities the only
+  bases, whatever their fame or the region, and their countries join the country list; a
+  country with none of the named cities is reported as skipped.
+- **Trips: the bounded walk.** `lib/trips.ts` walks the ground graph with Dijkstra passes
+  that are synchronous and cost in proportion to the ground limit (about 80 ms at twelve
+  hours). One request may run at most 150 passes up to four hours, shrinking to 50 at twelve
+  (floor 40), about four seconds of walking; past that a city is not walked further and the
+  trips found stand. Chains are walked cheapest entry first, so the cut falls on the dearest
+  ways out. Reaches are memoised across requests (64, 30 minutes), so a repeat walks nothing.
+- **Purpose: how a filter matches an event.** `eventMatches` takes free words: an event's
+  kind (festival, sport, culture, season, music, food), a word of its name or city (whole
+  words; four letters or more also as a prefix, so "lantern" finds "lanterns"), a two-letter
+  token as a country code and nothing else ("ro" is never a piece of "Roskilde"), a
+  three-letter token as a city code or a word; a phrase must have every word in the event;
+  the note is never searched, it is description, not a tag.
+- **Group: the budget is applied after the memo.** `budgetPerPerson` is a filter on the
+  options, not a search parameter: it stays out of the memo key, the unfiltered result is
+  what is stored, and the cap is applied on the way out (`dropped` and a line saying so), so
+  nudging the budget box costs no searches.
+
 ## Rules that keep it honest
 
 No price is invented: every euro on the site is a Kiwi itinerary, a LiteAPI rate, a

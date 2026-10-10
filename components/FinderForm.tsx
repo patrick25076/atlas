@@ -5,7 +5,8 @@ import type { Deal, Gateway } from "@/lib/types";
 import { formatDuration } from "@/lib/geo";
 import { localIso, todayIso } from "@/lib/format";
 
-export type FinderQuery = { origins: string[]; from: string; to: string; include?: string; minNights: number; maxNights: number; direct: boolean; maxHours?: number; where: string; returnTo: string[]; tricks: boolean };
+/** exhaustive: search every airport pair and every date instead of the usual sample; sent as exhaustive=1. */
+export type FinderQuery = { origins: string[]; from: string; to: string; include?: string; minNights: number; maxNights: number; direct: boolean; maxHours?: number; where: string; returnTo: string[]; tricks: boolean; exhaustive?: boolean };
 export type FinderState = { status: "idle" | "loading" | "ok" | "error"; query?: FinderQuery; deals: Deal[]; lines: string[]; note?: string; searched?: number };
 
 const WHERE = ["anywhere", "Europe", "Asia", "Africa", "North America", "South America"];
@@ -27,6 +28,7 @@ export default function FinderForm({ gateways, defaults, state, onSearch, onClea
   const [where, setWhere] = useState("anywhere");
   const [tricks, setTricks] = useState(false);
   const [country, setCountry] = useState("");
+  const [exhaustive, setExhaustive] = useState(false);
   const chosen = origins.length ? origins : defaults;
   const toggle = (list: string[], set: (v: string[]) => void, code: string, fallback: string[]) => {
     const base = list.length ? list : fallback;
@@ -93,15 +95,15 @@ export default function FinderForm({ gateways, defaults, state, onSearch, onClea
       </div>
       <div className="status muted">{include ? `Away on ${include}, ` : ""}anywhere between the two dates, {minNights} to {maxNights} nights.</div>
       <h2>Where and how</h2>
-      <div className="chips nowrap">
+      <div className="chips">
         {WHERE.map((w) => (
           <button key={w} className={`chip ghost${where === w && !country ? " on" : ""}`} onClick={() => { setWhere(w); setCountry(""); }}>
             {w === "anywhere" ? "Anywhere" : w}
           </button>
         ))}
       </div>
-      <div className="form">
-        <input className="search" placeholder="or a country: Italy, Morocco, Japan…" value={country} onChange={(e) => setCountry(e.target.value)} />
+      <div className="form wrap">
+        <input className="search" style={{ flex: "1 1 160px" }} placeholder="or a country: Italy, Morocco, Japan…" value={country} onChange={(e) => setCountry(e.target.value)} />
         <button className={`chip${direct ? " on" : ""}`} onClick={() => setDirect(!direct)}>
           Direct
         </button>
@@ -126,14 +128,18 @@ export default function FinderForm({ gateways, defaults, state, onSearch, onClea
         <button className={`chip ghost${tricks ? " on" : ""}`} onClick={() => setTricks(!tricks)} title="One-way tickets that continue past the city you want, cheaper than flying there. Cabin bag only; airlines forbid it.">
           Hidden-city tricks
         </button>
+        <button className={`chip ghost${exhaustive ? " on" : ""}`} onClick={() => setExhaustive(!exhaustive)} title="Airports reachable by train or coach join your origins, and every origin airport is searched on its own">
+          Exhaustive
+        </button>
       </div>
+      {exhaustive && <div className="status muted">Exhaustive: airports within three hours by train or coach join your origins, and each origin airport gets its own search of the same question (a shared search only shows the cheapest origin); about five extra live searches.</div>}
       <div className="chips">
         <button
           className="chip on"
           disabled={state.status === "loading" || !from || !to || to < from}
           onClick={() => {
             setOpen(false);
-            onSearch({ origins: chosen, from, to, include: include || undefined, minNights, maxNights, direct, maxHours: maxHours || undefined, where: country.trim() || where, returnTo: returnTo.filter((x) => !chosen.includes(x)), tricks });
+            onSearch({ origins: chosen, from, to, include: include || undefined, minNights, maxNights, direct, maxHours: maxHours || undefined, where: country.trim() || where, returnTo: returnTo.filter((x) => !chosen.includes(x)), tricks, exhaustive: exhaustive || undefined });
           }}
         >
           {state.status === "loading" ? "Searching…" : "Search live"}
@@ -142,7 +148,7 @@ export default function FinderForm({ gateways, defaults, state, onSearch, onClea
           Close
         </button>
       </div>
-      <div className="status muted">About twenty live searches on Kiwi.com, half a minute; forty with another airport for the way home.</div>
+      <div className="status muted">{exhaustive ? "About twenty-five live searches on Kiwi.com, up to a minute; more with another airport for the way home." : "About twenty live searches on Kiwi.com, half a minute; forty with another airport for the way home."}</div>
     </div>
   );
 }
