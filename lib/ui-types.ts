@@ -12,9 +12,29 @@ export const WILD_REGIONS: { key: string; label: string }[] = [
   { key: "sea", label: "Southeast Asia" },
   { key: "east-asia", label: "East Asia" },
   { key: "south-asia", label: "South Asia" },
-  { key: "gulf-africa", label: "Gulf and East Africa" },
-  { key: "americas", label: "Americas" },
+  { key: "central-asia", label: "Central Asia" },
+  { key: "caucasus", label: "Caucasus and Turkey" },
+  { key: "balkans", label: "Balkans" },
+  { key: "north-africa", label: "North Africa and Levant" },
+  { key: "gulf", label: "Gulf" },
+  { key: "east-africa", label: "East Africa" },
+  { key: "southern-africa", label: "Southern Africa" },
+  { key: "americas", label: "North and Central America" },
+  { key: "caribbean", label: "Caribbean" },
   { key: "south-america", label: "South America" },
+  { key: "oceania", label: "Australia and Pacific" },
+];
+export const WILD_STYLES: { key: string; label: string; hint: string }[] = [
+  { key: "experiences", label: "True experiences", hint: "loops, boats, treks, homestays; out of the big city" },
+  { key: "beaches", label: "Beaches", hint: "water, islands, sunsets" },
+  { key: "food", label: "Food first", hint: "markets, the dish, where locals eat" },
+  { key: "cities", label: "Big cities", hint: "neighbourhoods, nightlife, museums" },
+  { key: "slow", label: "Slow travel", hint: "fewer, longer stops" },
+];
+export const WILD_BUDGETS: { key: string; label: string }[] = [
+  { key: "backpacker", label: "Backpacker" },
+  { key: "mid", label: "Mid-range" },
+  { key: "comfort", label: "Comfort" },
 ];
 export type Band = "all" | "short" | "medium" | "long";
 export type DealNights = "any" | "2-3" | "4-5" | "6-7";

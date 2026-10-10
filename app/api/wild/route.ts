@@ -1,6 +1,7 @@
-import { buildWild, REGIONS, wildPath, type Region, type WildTrip } from "@/lib/wild";
+import { buildWild, REGIONS, wildPath, type Budget, type Region, type Style, type WildTrip } from "@/lib/wild";
 import { judgeTrip } from "@/lib/judge";
 import { readJson, writeJson } from "@/lib/boards-store";
+import { mainGateway } from "@/lib/board";
 
 // GET /api/wild?g=OTP,SBZ&home=RO&region=sea&nights=14[&month=2026-11][&fresh=1]
 // A wild trip: the way in, a chain of cheap hops through the region, the way home, costs and
@@ -17,11 +18,13 @@ export async function GET(request: Request) {
   const region = (p.get("region") ?? "sea") as Region;
   const nights = Math.min(28, Math.max(7, Number(p.get("nights")) || 14));
   const month = p.get("month") ?? undefined;
+  const style = (["experiences", "beaches", "food", "cities", "slow"].includes(p.get("style") ?? "") ? p.get("style") : "experiences") as Style;
+  const budget = (["backpacker", "mid", "comfort"].includes(p.get("budget") ?? "") ? p.get("budget") : "mid") as Budget;
   if (!gateways.length || !/^[A-Z]{2}$/.test(home)) return Response.json({ error: "g (airport codes) and home (country) required" }, { status: 400 });
   if (!REGIONS[region]) return Response.json({ error: `region must be one of ${Object.keys(REGIONS).join(", ")}` }, { status: 400 });
   if (month && !/^\d{4}-\d{2}$/.test(month)) return Response.json({ error: "month must be YYYY-MM" }, { status: 400 });
 
-  const path = wildPath(gateways[0], region, month, nights);
+  const path = wildPath(mainGateway(gateways), region, month, nights, style, budget);
   if (!p.get("fresh")) {
     const stored = await readJson<WildTrip>(path);
     if (stored && stored.ageHours < FRESH_HOURS) return Response.json(stored.body, { headers: { "Cache-Control": "public, s-maxage=1800", "X-Wild": "stored" } });
@@ -44,7 +47,7 @@ export async function GET(request: Request) {
         const mine = !job;
         if (!job) {
           job = (async () => {
-            const trip = await buildWild({ gateways, home, region, month, nights, onProgress: (line) => send({ progress: line }) });
+            const trip = await buildWild({ gateways, home, region, month, nights, style, budget, onProgress: (line) => send({ progress: line }) });
             if (!trip) return null;
             send({ progress: "Asking for a second opinion…" });
             const judge = await judgeTrip(trip);

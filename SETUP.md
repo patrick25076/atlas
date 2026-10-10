@@ -124,3 +124,22 @@ on Vercel (`BLOB_READ_WRITE_TOKEN`, pulled into `.env.local` locally) and a GitH
 secret of the same name, which the nightly job uses. If you ever rotate it: Vercel → Storage
 → atlas-boards → tokens, then update the GitHub secret (`gh secret set BLOB_READ_WRITE_TOKEN`).
 Free tier is plenty: a board is 50 to 200 KB and the site reads it through its own cache.
+
+## 13. Foursquare Places API (live restaurant ratings, price tier, tips), free tier
+
+The one legal, keyed source of restaurant ratings and short reviews that may be shown on a
+non-Google map. Google Places forbids its content on other maps in the EEA, Yelp forbids
+AI use, Tripadvisor's content API is partner-only. Foursquare's Places API has a free
+monthly allowance (sign up at https://foursquare.com/developers/, create a project, copy the
+API key). Put it in `.env.local` and Vercel as `FOURSQUARE_API_KEY`. The planner then
+checks every "where to eat" it names (rating, price tier, the top tips) instead of relying on
+memory.
+
+## 14. A web search key for live review research (Brave Search or Tavily), free tier
+
+"What is the best traditional food here and where, without paying tourist prices" needs a
+live search over many reviews, not a fixed database. Brave Search API
+(https://brave.com/search/api/, free plan with a monthly quota) or Tavily
+(https://tavily.com/, free developer tier) give the planner a search tool. Name:
+`BRAVE_SEARCH_KEY` or `TAVILY_API_KEY`. Until one exists, the planner labels its restaurant
+picks "verify" and leans on the Wikivoyage Eat listings.

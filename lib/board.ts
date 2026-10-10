@@ -72,6 +72,11 @@ export function hubDegree(cityCode: string): number {
   return degree.get(cityCode) ?? 0;
 }
 
+/** Of a visitor's airports, the one with the most flights (Otopeni over Ghimbav): the key a trip is stored under. */
+export function mainGateway(codes: string[]): string {
+  return [...codes].sort((a, b) => hubDegree(cityOf.get(b) ?? b) - hubDegree(cityOf.get(a) ?? a))[0] ?? codes[0];
+}
+
 const regionNames = new Intl.DisplayNames(["en"], { type: "region" });
 const NAME_OVERRIDES: Record<string, string> = { HK: "Hong Kong", MO: "Macau", CD: "Democratic Republic of the Congo", CG: "Republic of the Congo", MM: "Myanmar", CI: "Ivory Coast", PS: "Palestine", VA: "Rome" };
 export function countryLabel(code: string): string {

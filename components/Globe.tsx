@@ -17,7 +17,8 @@ import { countryName, dateRange } from "@/lib/format";
 import { BANDS, dealKey, type AskState, type Band, type BoardState, type DealNights, type LiveSearch, type Origin, type Sheet, type View } from "@/lib/ui-types";
 import type { Airport, City, CityPlaces, CountryInfo, Deal, Destination, FaresResponse, Gateway, HeritageRow, Holiday, Manifest, ReachResponse, ReachStation, Route, VisaFile, WeatherCompact, WeatherFile } from "@/lib/types";
 import { expandWeather, visaFor } from "@/lib/types";
-import Panel, { MODE_LABEL, type CombosState, type WildState } from "./Panel";
+import Panel, { MODE_LABEL, type CombosState, type PlanState, type WildState } from "./Panel";
+import type { Plan } from "@/lib/plan";
 import type { WildLeg, WildTrip } from "@/lib/wild";
 import type { Sights, Sight } from "@/app/api/sights/route";
 import TopBar from "./TopBar";
@@ -142,6 +143,9 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
   const [wild, setWild] = useState<WildState>({ status: "idle", lines: [] });
   const [wildRegion, setWildRegion] = useState("sea");
   const [wildNights, setWildNights] = useState(14);
+  const [wildStyle, setWildStyle] = useState("experiences");
+  const [wildBudget, setWildBudget] = useState("mid");
+  const [plan, setPlan] = useState<PlanState>({ status: "idle" });
 
   const [boards, setBoards] = useState<Record<string, BoardState>>({});
   const [month, setMonth] = useState<string | null>(null);
@@ -746,7 +750,8 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
   async function buildWildTrip() {
     if (!boardGateways.length || !gateways[0]) return;
     setWild({ status: "loading", lines: [] });
-    const q = new URLSearchParams({ g: boardGateways.map((g) => g.iata).join(","), home: gateways[0].airport.country, region: wildRegion, nights: String(wildNights) });
+    setPlan({ status: "idle" });
+    const q = new URLSearchParams({ g: boardGateways.map((g) => g.iata).join(","), home: gateways[0].airport.country, region: wildRegion, nights: String(wildNights), style: wildStyle, budget: wildBudget });
     if (month) q.set("month", month);
     try {
       const r = await fetch(`/api/wild?${q}`);
@@ -795,6 +800,20 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
       if (!finished) setWild({ status: "error", lines: [], note: "the search stopped early; try again" });
     } catch {
       setWild({ status: "error", lines: [], note: "network" });
+    }
+  }
+  async function planWild() {
+    if (!boardGateways.length) return;
+    setPlan({ status: "loading" });
+    const q = new URLSearchParams({ g: boardGateways.map((g) => g.iata).join(","), region: wildRegion, nights: String(wildNights), style: wildStyle, budget: wildBudget });
+    if (month) q.set("month", month);
+    try {
+      const r = await fetch(`/api/plan?${q}`);
+      const j = (await r.json()) as Plan & { error?: string };
+      if (!r.ok || j.error) setPlan({ status: "error", note: j.error ?? `failed (${r.status})` });
+      else setPlan({ status: "ok", plan: j });
+    } catch {
+      setPlan({ status: "error", note: "network" });
     }
   }
   function frameWild(trip: WildTrip) {
@@ -1538,7 +1557,13 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
         onWildRegion={setWildRegion}
         wildNights={wildNights}
         onWildNights={setWildNights}
+        wildStyle={wildStyle}
+        onWildStyle={setWildStyle}
+        wildBudget={wildBudget}
+        onWildBudget={setWildBudget}
         onWild={buildWildTrip}
+        plan={plan}
+        onPlan={planWild}
         gateways={gateways}
         routeCounts={routeCounts}
         gatewayIata={gatewayIata}

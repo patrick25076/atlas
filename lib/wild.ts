@@ -46,15 +46,28 @@ const centroid = new Map<string, { lat: number; lon: number }>();
   for (const [cc, a] of acc) centroid.set(cc, { lat: a.lat / a.n, lon: a.lon / a.n });
 }
 
-export type Region = "sea" | "east-asia" | "south-asia" | "gulf-africa" | "americas" | "south-america";
-export const REGIONS: Record<Region, { label: string; countries: [string, string][] }> = {
-  sea: { label: "Southeast Asia", countries: [["TH", "Thailand"], ["VN", "Vietnam"], ["MY", "Malaysia"], ["SG", "Singapore"], ["ID", "Indonesia"], ["PH", "Philippines"], ["KH", "Cambodia"]] },
+export type Region = keyof typeof REGIONS;
+export const REGIONS = {
+  sea: { label: "Southeast Asia", countries: [["TH", "Thailand"], ["VN", "Vietnam"], ["MY", "Malaysia"], ["SG", "Singapore"], ["ID", "Indonesia"], ["PH", "Philippines"], ["KH", "Cambodia"], ["LA", "Laos"]] },
   "east-asia": { label: "East Asia", countries: [["CN", "China"], ["HK", "Hong Kong"], ["JP", "Japan"], ["KR", "South Korea"], ["TW", "Taiwan"]] },
   "south-asia": { label: "South Asia", countries: [["IN", "India"], ["LK", "Sri Lanka"], ["MV", "Maldives"], ["NP", "Nepal"]] },
-  "gulf-africa": { label: "Gulf and East Africa", countries: [["AE", "United Arab Emirates"], ["QA", "Qatar"], ["OM", "Oman"], ["JO", "Jordan"], ["EG", "Egypt"], ["KE", "Kenya"], ["TZ", "Tanzania"]] },
-  americas: { label: "North and Central America", countries: [["US", "United States"], ["MX", "Mexico"], ["CU", "Cuba"], ["CR", "Costa Rica"], ["CO", "Colombia"], ["CA", "Canada"]] },
-  "south-america": { label: "South America", countries: [["BR", "Brazil"], ["AR", "Argentina"], ["CL", "Chile"], ["PE", "Peru"], ["CO", "Colombia"]] },
-};
+  "central-asia": { label: "Central Asia", countries: [["UZ", "Uzbekistan"], ["KZ", "Kazakhstan"], ["KG", "Kyrgyzstan"], ["TJ", "Tajikistan"], ["AZ", "Azerbaijan"]] },
+  caucasus: { label: "Caucasus and Turkey", countries: [["GE", "Georgia"], ["AM", "Armenia"], ["AZ", "Azerbaijan"], ["TR", "Türkiye"]] },
+  balkans: { label: "Balkans", countries: [["AL", "Albania"], ["ME", "Montenegro"], ["BA", "Bosnia & Herzegovina"], ["RS", "Serbia"], ["MK", "North Macedonia"], ["GR", "Greece"], ["BG", "Bulgaria"], ["HR", "Croatia"]] },
+  "north-africa": { label: "North Africa and the Levant", countries: [["MA", "Morocco"], ["TN", "Tunisia"], ["EG", "Egypt"], ["JO", "Jordan"]] },
+  gulf: { label: "Gulf", countries: [["AE", "United Arab Emirates"], ["OM", "Oman"], ["QA", "Qatar"], ["BH", "Bahrain"], ["SA", "Saudi Arabia"]] },
+  "east-africa": { label: "East Africa", countries: [["KE", "Kenya"], ["TZ", "Tanzania"], ["UG", "Uganda"], ["RW", "Rwanda"], ["ET", "Ethiopia"]] },
+  "southern-africa": { label: "Southern Africa", countries: [["ZA", "South Africa"], ["NA", "Namibia"], ["BW", "Botswana"], ["ZW", "Zimbabwe"], ["MU", "Mauritius"]] },
+  americas: { label: "North and Central America", countries: [["US", "United States"], ["MX", "Mexico"], ["CU", "Cuba"], ["CR", "Costa Rica"], ["GT", "Guatemala"], ["CA", "Canada"]] },
+  caribbean: { label: "Caribbean", countries: [["CU", "Cuba"], ["DO", "Dominican Republic"], ["JM", "Jamaica"], ["PR", "Puerto Rico"], ["CW", "Curaçao"]] },
+  "south-america": { label: "South America", countries: [["BR", "Brazil"], ["AR", "Argentina"], ["CL", "Chile"], ["PE", "Peru"], ["CO", "Colombia"], ["BO", "Bolivia"], ["EC", "Ecuador"]] },
+  oceania: { label: "Australia and the Pacific", countries: [["AU", "Australia"], ["NZ", "New Zealand"], ["FJ", "Fiji"]] },
+} satisfies Record<string, { label: string; countries: [string, string][] }>;
+
+/** What the traveller is after; steers the chain, the costs and the planner. */
+export type Style = "experiences" | "beaches" | "food" | "cities" | "slow";
+export type Budget = "backpacker" | "mid" | "comfort";
+export const BUDGET_SCALE: Record<Budget, number> = { backpacker: 0.65, mid: 1, comfort: 1.7 };
 /** Nearby hubs that often sell the cheap long-hauls: positioning flights go here first. */
 const HUBS = ["BUD", "VIE", "WAW", "IST", "MIL", "LON", "PAR", "FRA", "AMS", "MAD", "ROM", "BER", "PRG", "ATH", "DUB", "CPH", "STO", "LIS", "BCN", "MUC", "ZRH", "BRU"];
 
@@ -69,6 +82,7 @@ export type WildTrip = {
   regionLabel: string;
   home: string;
   passport: string;
+  prefs: { style: Style; budget: Budget };
   title: string;
   legs: WildLeg[];
   stops: WildStop[];
@@ -85,10 +99,10 @@ const dayOf = (t: string) => t.slice(0, 10);
 const hoursOf = (it: KiwiItinerary) => Math.round(it.outbound.durationSeconds / 360) / 10;
 const unsafe = (cc: string) => COUNTRIES[cc]?.advisory?.warning === true;
 
-/** Daily budget for a mid-range careful traveller: hotel, food, local transport, one activity. */
-export function perDayFor(cc: string): number {
+/** Daily budget: hotel, food, local transport, one activity; mid-range by default. */
+export function perDayFor(cc: string, budget: Budget = "mid"): number {
   const ratio = COSTS[cc] ?? 0.7;
-  return Math.round(92 * Math.pow(Math.min(1.6, Math.max(0.25, ratio)), 0.8));
+  return Math.round(92 * BUDGET_SCALE[budget] * Math.pow(Math.min(1.6, Math.max(0.25, ratio)), 0.8));
 }
 
 function cityOfItinerary(it: KiwiItinerary): string {
@@ -130,12 +144,16 @@ export type WildParams = {
   region: Region;
   month?: string;
   nights: number;
+  style?: Style;
+  budget?: Budget;
   onProgress?: (line: string) => void;
 };
 
 export async function buildWild(p: WildParams): Promise<WildTrip | null> {
   const say = p.onProgress ?? (() => {});
   const region = REGIONS[p.region];
+  const style: Style = p.style ?? "experiences";
+  const budget: Budget = p.budget ?? "mid";
   const countries = region.countries.filter(([cc]) => !unsafe(cc));
   // The home airport is the biggest of the visitor's airports (Otopeni, not Ghimbav); the
   // nearest small one still gets a look as a second origin.
@@ -217,12 +235,14 @@ export async function buildWild(p: WildParams): Promise<WildTrip | null> {
   const legs: WildLeg[] = [];
   const stops: WildStop[] = [];
   const daysBetween = (a: string, b: string) => Math.round((Date.parse(b) - Date.parse(a)) / 86_400_000);
-  const maxStops = Math.min(countries.length, 5);
-  const nightsPerStop = Math.min(3, Math.max(2, Math.floor((p.nights - 1) / maxStops)));
+  // Slow travel means fewer, longer stops; experiences need three nights to get out of town.
+  const maxStops = style === "slow" ? Math.min(countries.length, 3) : Math.min(countries.length, 5);
+  const floorNights = style === "slow" ? 4 : style === "experiences" ? 3 : 2;
+  const nightsPerStop = Math.min(style === "slow" ? 7 : 3, Math.max(floorNights, Math.floor((p.nights - 1) / maxStops)));
   const addStop = (code: string, arrive: string, nights = nightsPerStop) => {
     const c = CITIES[code];
     const cc = c?.country ?? "";
-    stops.push({ code, name: c?.name ?? code, country: cc, lat: c?.lat ?? 0, lon: c?.lon ?? 0, arrive, depart: addDays(arrive, nights), nights, perDay: perDayFor(cc), visa: cc && cc !== p.home ? visaFor(VISA, p.home, cc) : null, warning: COUNTRIES[cc]?.advisory?.partial || undefined });
+    stops.push({ code, name: c?.name ?? code, country: cc, lat: c?.lat ?? 0, lon: c?.lon ?? 0, arrive, depart: addDays(arrive, nights), nights, perDay: perDayFor(cc, budget), visa: cc && cc !== p.home ? visaFor(VISA, p.home, cc) : null, warning: COUNTRIES[cc]?.advisory?.partial || undefined });
   };
   const leave = (on: string) => {
     const s = stops.at(-1)!;
@@ -265,10 +285,19 @@ export async function buildWild(p: WildParams): Promise<WildTrip | null> {
     const flights = await Promise.all(remaining.map(async ({ cc, name }) => ({ cc, its: count(await oneWay(current, name, earliest, addDays(earliest, 1))) })));
     type Cand = { code: string; score: number; it?: KiwiItinerary; ground?: (typeof ground)[number] };
     const cands: Cand[] = [];
-    // Variety: after two big cities a smaller place is welcome; a coast is welcome once.
+    // Variety: after two big cities a smaller place is welcome; a coast is welcome once. The
+    // style tilts it: beaches want the coast every time, cities want the hubs, experiences
+    // want smaller places sooner.
     const lastTwoBig = stops.length >= 2 && stops.slice(-2).every((s) => bigCity(s.code));
+    const lastBig = stops.length >= 1 && bigCity(stops.at(-1)!.code);
     const hadCoast = stops.some((s) => COASTAL.has(s.code));
-    const variety = (code: string) => (lastTwoBig && !bigCity(code) ? 45 : 0) + (!hadCoast && COASTAL.has(code) ? 30 : 0);
+    const variety = (code: string) => {
+      let v = (lastTwoBig && !bigCity(code) ? 45 : 0) + (!hadCoast && COASTAL.has(code) ? 30 : 0);
+      if (style === "beaches") v += COASTAL.has(code) ? 70 : -20;
+      if (style === "cities") v += bigCity(code) ? 40 : 0;
+      if (style === "experiences") v += lastBig && !bigCity(code) ? 35 : 0;
+      return v;
+    };
     for (const g of ground) cands.push({ code: g.code, score: 25 + g.minutes / 10 - worth(g.code) - variety(g.code), ground: g });
     for (const f of flights) {
       for (const it of f.its.slice(0, 6)) {
@@ -342,6 +371,7 @@ export async function buildWild(p: WildParams): Promise<WildTrip | null> {
     regionLabel: region.label,
     home: gw.code,
     passport: p.home,
+    prefs: { style, budget },
     title,
     legs,
     stops,
@@ -353,8 +383,8 @@ export async function buildWild(p: WildParams): Promise<WildTrip | null> {
   };
 }
 
-export function wildPath(gw: string, region: string, month: string | undefined, nights: number): string {
-  return `wild/${gw}-${region}-${month ?? "next"}-${nights}.json`;
+export function wildPath(gw: string, region: string, month: string | undefined, nights: number, style: Style = "experiences", budget: Budget = "mid"): string {
+  return `wild/${gw}-${region}-${month ?? "next"}-${nights}-${style}-${budget}.json`;
 }
 
 export { hubDegree };

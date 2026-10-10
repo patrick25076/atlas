@@ -12,7 +12,10 @@ import PlaceIntel, { type Intel } from "./PlaceIntel";
 import type { Sights } from "@/app/api/sights/route";
 import type { CombosResult } from "@/lib/combos";
 import type { WildTrip } from "@/lib/wild";
-import { WILD_REGIONS } from "@/lib/ui-types";
+import { WILD_BUDGETS, WILD_REGIONS, WILD_STYLES } from "@/lib/ui-types";
+import type { Plan } from "@/lib/plan";
+
+export type PlanState = { status: "idle" | "loading" | "ok" | "error"; plan?: Plan; note?: string };
 
 export type WildState = { status: "idle" | "loading" | "ok" | "error"; lines: string[]; trip?: WildTrip; note?: string; source?: "stored" | "live" };
 
@@ -73,7 +76,13 @@ type Props = {
   onWildRegion: (r: string) => void;
   wildNights: number;
   onWildNights: (n: number) => void;
+  wildStyle: string;
+  onWildStyle: (s: string) => void;
+  wildBudget: string;
+  onWildBudget: (b: string) => void;
   onWild: () => void;
+  plan: PlanState;
+  onPlan: () => void;
   // explore
   gateways: Gateway[];
   routeCounts: Record<string, number>;
@@ -226,7 +235,19 @@ export default function Panel(p: Props) {
             ))}
           </div>
           <div className="chips nowrap">
-            {[10, 14, 18, 21].map((n) => (
+            {WILD_STYLES.map((st) => (
+              <button key={st.key} className={`chip ghost${p.wildStyle === st.key ? " on" : ""}`} onClick={() => p.onWildStyle(st.key)} title={st.hint}>
+                {st.label}
+              </button>
+            ))}
+          </div>
+          <div className="chips nowrap">
+            {WILD_BUDGETS.map((b) => (
+              <button key={b.key} className={`chip ghost${p.wildBudget === b.key ? " on" : ""}`} onClick={() => p.onWildBudget(b.key)}>
+                {b.label}
+              </button>
+            ))}
+            {[10, 14, 21, 28].map((n) => (
               <button key={n} className={`chip ghost${p.wildNights === n ? " on" : ""}`} onClick={() => p.onWildNights(n)}>
                 {n} nights
               </button>
@@ -283,6 +304,78 @@ export default function Panel(p: Props) {
                   </div>
                 </div>
               )}
+              <div className="section">
+                <h2>The days</h2>
+                {p.plan.status === "idle" && (
+                  <>
+                    <button className="chip on" onClick={p.onPlan}>
+                      Plan the days: experiences, food, costs
+                    </button>
+                    <div className="status muted">What you actually do at each stop, what to eat and where, what each day costs, and what a month there would cost. From the Wikivoyage guides and the model; about a minute.</div>
+                  </>
+                )}
+                {p.plan.status === "loading" && <div className="status">Reading the guides for every stop and writing the days…</div>}
+                {p.plan.status === "error" && <div className="status">{p.plan.note}</div>}
+                {p.plan.status === "ok" && p.plan.plan && (
+                  <>
+                    <div className="answer">
+                      {p.plan.plan.highlights.map((h, i) => (
+                        <p key={i}>{h}</p>
+                      ))}
+                    </div>
+                    <div className="days">
+                      {p.plan.plan.days.map((d) => (
+                        <div key={d.date} className="day">
+                          <div className="dayhead">
+                            <span className="code">{shortDate(d.date)}</span>
+                            <b>{d.city}</b>
+                            <span className="sub">{d.title}</span>
+                          </div>
+                          {d.items.map((it, i) => (
+                            <div key={i} className={`item ${it.kind}`}>
+                              <span className="when">{it.when ?? ""}</span>
+                              <span className="what">
+                                {it.what}
+                                {it.note && <span className="note"> {it.note}</span>}
+                              </span>
+                              <span className="cost">{it.cost != null ? (it.cost ? `€${it.cost}` : "free") : ""}</span>
+                            </div>
+                          ))}
+                        </div>
+                      ))}
+                    </div>
+                    <h2>Eat like a local</h2>
+                    {p.plan.plan.food.map((f) => (
+                      <div key={f.city} className="foodcard">
+                        <b>
+                          {f.city}, {f.country}
+                        </b>
+                        <p>{f.dishes.join(" · ")}</p>
+                        <p className="muted">Where: {f.where.join(" · ")}</p>
+                        {f.dessert && <p className="muted">Sweet: {f.dessert}</p>}
+                        {f.priceNote && <p className="muted">{f.priceNote}</p>}
+                      </div>
+                    ))}
+                    <h2>If you stayed a month</h2>
+                    {p.plan.plan.monthly.map((m) => (
+                      <div key={m.city} className="row">
+                        <span className="code">€{m.total}</span>
+                        <span>
+                          <div className="name">
+                            {m.city}, {m.country}
+                          </div>
+                          <div className="sub">
+                            rent about €{m.rent} · food about €{m.food}
+                            {m.note ? ` · ${m.note}` : ""}
+                          </div>
+                        </span>
+                        <span className="meta">a month</span>
+                      </div>
+                    ))}
+                    <div className="status muted">Plan total about €{p.plan.plan.total} on the ground, flights aside. Sources: {p.plan.plan.sources.join("; ")}. Items marked verify are the model's memory, not the guide.</div>
+                  </>
+                )}
+              </div>
               <div className="section">
                 <h2>The route</h2>
                 {p.wild.trip.legs.map((l, i) =>
