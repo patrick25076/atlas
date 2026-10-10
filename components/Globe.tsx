@@ -152,6 +152,9 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
   const [wildBudget, setWildBudget] = useState("mid");
   const [plan, setPlan] = useState<PlanState>({ status: "idle" });
   const [finder, setFinder] = useState<FinderState>({ status: "idle", deals: [], lines: [] });
+  const [chatDeals, setChatDeals] = useState<Deal[]>([]);
+  const [chatTrip, setChatTrip] = useState<WildTrip | null>(null);
+  const [chatSeed, setChatSeed] = useState<string | null>(null);
 
   const [boards, setBoards] = useState<Record<string, BoardState>>({});
   const [month, setMonth] = useState<string | null>(null);
@@ -307,7 +310,7 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
     if (m && /^\d{4}-\d{2}$/.test(m)) setMonth(m);
     const from = q.get("from")?.split(",");
     const v = q.get("view");
-    if (v === "deals" || v === "all" || v === "fly" || v === "ground" || v === "trips" || v === "wild") setView(v);
+    if (v === "chat" || v === "deals" || v === "all" || v === "fly" || v === "ground" || v === "trips" || v === "wild") setView(v);
     if (from && from.length >= 2 && Number.isFinite(Number(from[0])) && Number.isFinite(Number(from[1]))) {
       setOrigin({ lat: Number(from[0]), lon: Number(from[1]), label: from.slice(2).join(",") || "shared location", source: "search" });
       const d = Number(q.get("days"));
@@ -499,7 +502,7 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
 
   // ---- deals ----
   // A custom search replaces tonight's boards until it is cleared.
-  const dealsAll = useMemo(() => (finder.status === "idle" ? boardList.flatMap((b) => b.deals) : finder.deals), [boardList, finder]);
+  const dealsAll = useMemo(() => (view === "chat" && chatDeals.length ? chatDeals : finder.status === "idle" ? boardList.flatMap((b) => b.deals) : finder.deals), [boardList, finder, view, chatDeals]);
   async function runFinder(q: FinderQuery) {
     setFinder({ status: "loading", query: q, deals: [], lines: [] });
     setSelectedDeal(null);
@@ -959,12 +962,12 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
 
   // Price tags on the globe: one per city shown, cheapest first; the open or hovered one wins.
   const labelItems = useMemo<LabelItem[]>(() => {
-    if (view === "wild") {
-      const t = wild.trip;
+    if (view === "wild" || (view === "chat" && chatTrip && !chatDeals.length)) {
+      const t = view === "wild" ? wild.trip : chatTrip;
       if (!t) return [];
       return t.stops.map((st, i) => ({ key: `${st.code}-${i}`, lon: st.lon, lat: st.lat, text: `${st.name} · ${st.nights}n`, hot: i === 0, cheap: false }));
     }
-    if (view !== "deals") return [];
+    if (view !== "deals" && view !== "chat") return [];
     const out: LabelItem[] = [];
     for (const d of dealsList.slice(0, 80)) {
       const c = dealCoord(d);
@@ -978,7 +981,7 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
     }
     out.sort((a, b) => (a.hot === b.hot ? 0 : a.hot ? -1 : 1));
     return out;
-  }, [view, dealsList, deal, selectedDeal, hoveredDeal, dealCoord, wild.trip]);
+  }, [view, dealsList, deal, selectedDeal, hoveredDeal, dealCoord, wild.trip, chatTrip, chatDeals.length]);
 
   // Animated layers (the trail of the selected deal, the pulse at home) are rebuilt every
   // frame from refs; everything else is rebuilt when state changes.
@@ -1143,6 +1146,7 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
   }
 
   function focusDeal(key: string | null) {
+    if (key && view === "chat") setView("deals");
     setSelectedDeal(key);
     setLiveSearch(null);
     if (key && sheetRef.current === "peek") setSheet("half");
@@ -1196,9 +1200,9 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
     const all = view === "all";
     const fly = view === "fly";
     const tripView = view === "trips";
-    const dealView = view === "deals";
-    const wildView = view === "wild";
-    const wildTrip = wildView ? wild.trip : undefined;
+    const dealView = view === "deals" || (view === "chat" && chatDeals.length > 0);
+    const wildView = view === "wild" || (view === "chat" && !!chatTrip && chatDeals.length === 0);
+    const wildTrip = view === "wild" ? wild.trip : chatTrip ?? undefined;
     const flownPlaces = placesShown.filter((p) => p.mode === "plane" && p.air && p.key === selectedPlace);
     const dealDots: DealDot[] = dealView ? dealsList.map((d) => ({ d, t: dealCoord(d) })).filter((x): x is DealDot => !!x.t) : [];
     if (dealView && deal && !dealDots.some((x) => dealKey(x.d) === selectedDeal)) {
@@ -1551,7 +1555,7 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
     render();
     // focus* helpers only read refs and state setters; listing them would re-run this on every render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [airports, shown, gateways, gatewayIata, origin, selectedDest, live, view, reachBand, selectedStation, pathForSelected, placesShown, selectedPlace, trips, trip, warmOnly, weather, dealsList, selectedDeal, hoveredDeal, deal, render, selectedCombo, combos, sightsOnMap, sights, wild.trip, wildCoord]);
+  }, [airports, shown, gateways, gatewayIata, origin, selectedDest, live, view, reachBand, selectedStation, pathForSelected, placesShown, selectedPlace, trips, trip, warmOnly, weather, dealsList, selectedDeal, hoveredDeal, deal, render, selectedCombo, combos, sightsOnMap, sights, wild.trip, wildCoord, chatTrip, chatDeals]);
 
   const groundFeeds = reach ? reach.feeds.map((f) => f.attribution.split(" via ")[0].split(" (")[0]).join(", ") : "";
 
@@ -1578,8 +1582,8 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
         searching={searching}
         asking={asking}
         onAsk={(q) => {
-          setView("deals");
-          askAgent(q);
+          setView("chat");
+          setChatSeed(q);
         }}
         onShare={share}
         copied={copied}
@@ -1637,6 +1641,26 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
         onCombos={findCombosFor}
         selectedCombo={selectedCombo}
         onCombo={focusCombo}
+        chatContext={{ origin: origin ? { lat: origin.lat, lon: origin.lon, label: origin.label } : undefined, gateways: boardGateways.map((g) => g.iata), home: gateways[0]?.airport.country ?? "RO", month: month ?? undefined }}
+        chatSeed={chatSeed}
+        onChatSeedConsumed={() => setChatSeed(null)}
+        onChatDeals={(ds) => {
+          setChatTrip(null);
+          setChatDeals(ds);
+          setSelectedDeal(null);
+          const map = mapRef.current;
+          const pts = ds.map(dealCoord).filter((c): c is [number, number] => !!c);
+          if (map && pts.length && origin) {
+            const b = new maplibregl.LngLatBounds([origin.lon, origin.lat], [origin.lon, origin.lat]);
+            for (const q of pts) b.extend(q);
+            map.fitBounds(b, { padding: panelPadding(), maxZoom: 5, duration: 1400 });
+          }
+        }}
+        onChatTrip={(t) => {
+          setChatDeals([]);
+          setChatTrip(t);
+          frameWild(t);
+        }}
         finder={finder}
         onFinder={runFinder}
         onFinderClear={() => {

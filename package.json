@@ -33,6 +33,7 @@
   },
   "dependencies": {
     "@ai-sdk/amazon-bedrock": "^5.0.113",
+    "@ai-sdk/react": "^4.0.139",
     "@deck.gl/core": "9.4.0",
     "@deck.gl/extensions": "9.4.0",
     "@deck.gl/geo-layers": "9.4.0",

@@ -2,6 +2,7 @@
 
 import { useRef, useState } from "react";
 import FinderForm, { type FinderQuery, type FinderState } from "./FinderForm";
+import ChatPanel, { type ChatContext } from "./ChatPanel";
 import { flightMinutes, formatDuration } from "@/lib/geo";
 import type { Place, PlaceMode } from "@/lib/places";
 import type { TripsResult } from "@/lib/trips";
@@ -75,6 +76,12 @@ type Props = {
   onCombos: () => void;
   selectedCombo: string | null;
   onCombo: (code: string | null) => void;
+  // chat
+  chatContext: ChatContext;
+  chatSeed: string | null;
+  onChatSeedConsumed: () => void;
+  onChatDeals: (deals: Deal[]) => void;
+  onChatTrip: (trip: WildTrip) => void;
   // finder
   finder: FinderState;
   onFinder: (q: FinderQuery) => void;
@@ -187,7 +194,7 @@ export default function Panel(p: Props) {
   const touchY = useRef<number | null>(null);
   const selected = p.selectedDest ? p.destinations.find((d) => d.airport.iata === p.selectedDest) : null;
   const place = p.selectedPlace ? p.places.find((x) => x.key === p.selectedPlace) : null;
-  const tab: "deals" | "explore" | "trips" | "wild" = p.view === "deals" ? "deals" : p.view === "trips" ? "trips" : p.view === "wild" ? "wild" : "explore";
+  const tab: "chat" | "deals" | "explore" | "trips" | "wild" = p.view === "chat" ? "chat" : p.view === "deals" ? "deals" : p.view === "trips" ? "trips" : p.view === "wild" ? "wild" : "explore";
   const loading = p.boards.filter((b) => b.status === "loading");
   const liveBoards = p.boards.filter((b) => b.source === "live");
   const okBoards = p.boards.filter((b) => b.status === "ok");
@@ -218,6 +225,9 @@ export default function Panel(p: Props) {
 
       {!(tab === "deals" && p.deal) && (
         <div className="tabs">
+          <button className={`tab${tab === "chat" ? " on" : ""}`} onClick={() => p.onView("chat")}>
+            Ask
+          </button>
           <button className={`tab${tab === "deals" ? " on" : ""}`} onClick={() => p.onView("deals")}>
             Deals
           </button>
@@ -232,6 +242,8 @@ export default function Panel(p: Props) {
           </button>
         </div>
       )}
+
+      {tab === "chat" && <ChatPanel context={p.chatContext} seed={p.chatSeed} onSeedConsumed={p.onChatSeedConsumed} onDeals={p.onChatDeals} onTrip={p.onChatTrip} onOpenDeal={(key) => p.onDeal(key)} />}
 
       {tab === "wild" && (
         <>
@@ -670,54 +682,6 @@ export default function Panel(p: Props) {
 
       {tab === "deals" && !p.deal && (
         <>
-          <form
-            className="form mobile-ask"
-            onSubmit={(e) => {
-              e.preventDefault();
-              if (question.trim()) {
-                p.onAsk(question.trim());
-                setQuestion("");
-              }
-            }}
-          >
-            <input className="search" placeholder="Ask anything: warm weekend under €60, direct?" value={question} onChange={(e) => setQuestion(e.target.value)} disabled={p.asking} />
-            <button className="chip on" type="submit" disabled={p.asking || !question.trim()}>
-              {p.asking ? "…" : "Ask"}
-            </button>
-          </form>
-          {!p.ask && !p.asking && (
-            <div className="chips nowrap ideas">
-              {ASK_IDEAS.map((q) => (
-                <button key={q} className="chip" onClick={() => p.onAsk(q)}>
-                  {q}
-                </button>
-              ))}
-            </div>
-          )}
-          {p.asking && <div className="status">Thinking about it…</div>}
-          {p.ask && (
-            <div className="answer">
-              <div className="q">You asked: {p.ask.question}</div>
-              {p.ask.status === "ok" ? (
-                <>
-                  <p>{p.ask.text}</p>
-                  {p.ask.used.length > 0 && (
-                    <div className="chips">
-                      <button className={`chip ghost${p.askOnly ? " on" : ""}`} onClick={() => p.onAskOnly(true)}>
-                        Its picks
-                      </button>
-                      <button className={`chip ghost${!p.askOnly ? " on" : ""}`} onClick={() => p.onAskOnly(false)}>
-                        All deals
-                      </button>
-                    </div>
-                  )}
-                </>
-              ) : (
-                <p className="muted">{p.ask.note ?? "No answer."}</p>
-              )}
-            </div>
-          )}
-
           <FinderForm gateways={p.gateways} defaults={p.boards.map((b) => b.gateway)} state={p.finder} onSearch={p.onFinder} onClear={p.onFinderClear} />
           <div className="headline">
             <h3>

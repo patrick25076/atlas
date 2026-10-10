@@ -1330,3 +1330,126 @@ button {
   opacity: 0.4;
   cursor: default;
 }
+
+/* the conversation */
+.chat {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  gap: 8px;
+}
+.msgs {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 2px 4px 8px;
+  scrollbar-width: auto;
+}
+.chatintro p {
+  margin: 0 0 10px;
+  font-size: 15px;
+  line-height: 1.5;
+  color: var(--ink-2);
+}
+.bubble {
+  max-width: 94%;
+  padding: 10px 14px;
+  border-radius: 16px;
+  font-size: 15px;
+  line-height: 1.5;
+}
+.bubble p {
+  margin: 0 0 8px;
+}
+.bubble p:last-child {
+  margin-bottom: 0;
+}
+.bubble.user {
+  align-self: flex-end;
+  background: var(--mint);
+  color: var(--mint-ink);
+  border-bottom-right-radius: 6px;
+}
+.bubble.ai {
+  align-self: flex-start;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--line);
+  border-bottom-left-radius: 6px;
+}
+.bubble.err {
+  border-color: rgba(255, 107, 138, 0.5);
+}
+.toolwrap {
+  margin: 6px 0;
+}
+.toolchip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: rgba(124, 196, 255, 0.12);
+  color: var(--sky);
+}
+.toolchip.done {
+  background: rgba(111, 240, 196, 0.12);
+  color: var(--mint);
+}
+.toolchip.err {
+  background: rgba(255, 107, 138, 0.14);
+  color: var(--rose);
+}
+.toolchip .dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--sky);
+}
+.chatcards {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+}
+.chatcard {
+  display: grid;
+  grid-template-columns: 64px 1fr;
+  gap: 10px;
+  align-items: center;
+  text-align: left;
+  padding: 8px 10px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--ink);
+  cursor: pointer;
+  font: inherit;
+}
+.chatcard:hover {
+  border-color: rgba(111, 240, 196, 0.5);
+}
+.chatcard .price {
+  font-size: 18px;
+}
+.chatcardbody {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.chatcardbody b {
+  font-size: 15px;
+}
+.chatinput {
+  display: flex;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+.chatinput .search {
+  flex: 1;
+  min-width: 0;
+}

@@ -5,7 +5,7 @@ import type { Deal } from "./types";
 
 export type Origin = { lat: number; lon: number; label: string; source: "gps" | "ip" | "default" | "search" };
 
-export type View = "deals" | "all" | "fly" | "ground" | "trips" | "wild";
+export type View = "chat" | "deals" | "all" | "fly" | "ground" | "trips" | "wild";
 
 /** Regions a wild trip can go to; labels for the chips (the engine has the countries). */
 export const WILD_REGIONS: { key: string; label: string }[] = [

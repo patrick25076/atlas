@@ -10,7 +10,7 @@ import visaJson from "@/public/data/visa.json";
 import fameJson from "@/public/data/fame.json";
 import weatherJson from "@/public/data/weather.json";
 import { haversineKm } from "./geo";
-import { hubDegree, resolveGateway } from "./board";
+import { countryLabel, hubDegree, resolveGateway } from "./board";
 import { neighboursOf } from "./combos";
 import { kiwiDate, searchFlight, type KiwiItinerary } from "./kiwi";
 import { visaFor, type City, type CountryInfo, type VisaFile } from "./types";
@@ -150,6 +150,12 @@ export type WildParams = {
   origin?: { lat: number; lon: number; label: string };
   /** A night or two in a hub on the way home when it costs about the same (default on). */
   stopover?: boolean;
+  /** Only these countries (ISO2), instead of the region's list. */
+  countries?: string[];
+  /** Countries (ISO2) to favour in the chain. */
+  prefer?: string[];
+  maxStops?: number;
+  nightsPerStop?: number;
   onProgress?: (line: string) => void;
 };
 
@@ -158,7 +164,10 @@ export async function buildWild(p: WildParams): Promise<WildTrip | null> {
   const region = REGIONS[p.region];
   const style: Style = p.style ?? "experiences";
   const budget: Budget = p.budget ?? "mid";
-  const countries = region.countries.filter(([cc]) => !unsafe(cc));
+  const only = new Set((p.countries ?? []).map((c) => c.toUpperCase()));
+  const base: [string, string][] = only.size ? [...only].map((cc) => [cc, countryLabel(cc)] as [string, string]) : region.countries;
+  const countries = base.filter(([cc]) => !unsafe(cc));
+  const prefer = new Set((p.prefer ?? []).map((c) => c.toUpperCase()));
   // The home airport is the biggest of the visitor's airports (Otopeni, not Ghimbav); the
   // nearest small one still gets a look as a second origin.
   const homeGateways = p.gateways.map((g) => resolveGateway(g)).filter((g): g is NonNullable<typeof g> => !!g);
@@ -240,9 +249,9 @@ export async function buildWild(p: WildParams): Promise<WildTrip | null> {
   const stops: WildStop[] = [];
   const daysBetween = (a: string, b: string) => Math.round((Date.parse(b) - Date.parse(a)) / 86_400_000);
   // Slow travel means fewer, longer stops; experiences need three nights to get out of town.
-  const maxStops = style === "slow" ? Math.min(countries.length, 3) : Math.min(countries.length, 5);
+  const maxStops = p.maxStops ? Math.min(countries.length, Math.max(1, p.maxStops)) : style === "slow" ? Math.min(countries.length, 3) : Math.min(countries.length, 5);
   const floorNights = style === "slow" ? 4 : style === "experiences" ? 3 : 2;
-  const nightsPerStop = Math.min(style === "slow" ? 7 : 3, Math.max(floorNights, Math.floor((p.nights - 1) / maxStops)));
+  const nightsPerStop = p.nightsPerStop ? Math.max(1, Math.min(10, p.nightsPerStop)) : Math.min(style === "slow" ? 7 : 3, Math.max(floorNights, Math.floor((p.nights - 1) / maxStops)));
   const addStop = (code: string, arrive: string, nights = nightsPerStop) => {
     const c = CITIES[code];
     const cc = c?.country ?? "";
@@ -300,6 +309,7 @@ export async function buildWild(p: WildParams): Promise<WildTrip | null> {
       if (style === "beaches") v += COASTAL.has(code) ? 70 : -20;
       if (style === "cities") v += bigCity(code) ? 40 : 0;
       if (style === "experiences") v += lastBig && !bigCity(code) ? 35 : 0;
+      if (prefer.has(CITIES[code]?.country ?? "")) v += 90;
       return v;
     };
     for (const g of ground) cands.push({ code: g.code, score: 25 + g.minutes / 10 - worth(g.code) - variety(g.code), ground: g });
@@ -437,8 +447,14 @@ export async function buildWild(p: WildParams): Promise<WildTrip | null> {
   };
 }
 
-export function wildPath(gw: string, region: string, month: string | undefined, nights: number, style: Style = "experiences", budget: Budget = "mid"): string {
-  return `wild/${gw}-${region}-${month ?? "next"}-${nights}-${style}-${budget}.json`;
+export function wildPath(gw: string, region: string, month: string | undefined, nights: number, style: Style = "experiences", budget: Budget = "mid", custom = ""): string {
+  return `wild/${gw}-${region}-${month ?? "next"}-${nights}-${style}-${budget}${custom ? `-${custom}` : ""}.json`;
+}
+
+/** A short stable suffix for custom country lists, so custom trips are stored apart. */
+export function customKey(countries?: string[], prefer?: string[], maxStops?: number, nightsPerStop?: number): string {
+  const parts = [...(countries ?? []).map((c) => c.toUpperCase()).sort(), ...(prefer ?? []).map((c) => `+${c.toUpperCase()}`).sort(), maxStops ? `s${maxStops}` : "", nightsPerStop ? `n${nightsPerStop}` : ""].filter(Boolean);
+  return parts.join("").toLowerCase().slice(0, 40);
 }
 
 export { hubDegree };

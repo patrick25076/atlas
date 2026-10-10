@@ -33,6 +33,16 @@ with photos and badges, price tags on the globe, two-city combos, sights from Wi
 pins, festivals, what's on from 20 city feeds, hidden gems, Ask agent, wild trips with
 preferences into 14 regions, the judge, the day-by-day planner with food and monthly costs.
 
+## Built today, evening
+
+- **The chat is now the agent.** "Ask" tab: a persistent conversation (kept in your browser)
+  that knows where you are, your airports, your passport and the selected month, streams its
+  answer, and calls every Atlas capability as a tool: tonight's boards, the period search,
+  live re-pricing, two-city combos, wild trips (with custom country lists), day plans, sights,
+  events, rated restaurants, hotels, one-way fares, trains, facts, web search. Results appear
+  as cards in the chat and as pins or a route on the globe; "make it direct", "from Cluj too",
+  "what do I eat there" continue the thread. The top-bar box sends into the same chat.
+
 ## Built today, afternoon
 
 - Bigger type and lists everywhere (panel 468px, 14 to 17px text, visible scrollbar).

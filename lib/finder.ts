@@ -45,12 +45,26 @@ export async function findDeals(p: FinderParams): Promise<FinderResult> {
   const fits = (out: string, back: string, nights: number | null) =>
     nights != null && nights >= minN && nights <= maxN && out >= p.from && back <= p.to && (!p.include || (out <= p.include && back >= p.include));
 
-  // Targets: the whole world first, then the nearest countries for breadth.
+  // Targets: the whole world first, then the nearest countries for breadth. A region word
+  // ("Europe", "Asia") means the nearest countries of that region, not one search.
   const first = resolveGateway(origins[0]);
   let targets: string[] = [];
-  if (p.where && p.where !== "anywhere") targets = p.where.split(",").map((s) => s.trim()).filter(Boolean);
-  else if (first) targets = targetsFor(first.lat, first.lon, first.country).filter((t) => /^[A-Za-z]/.test(t) && t.length > 3).slice(0, 18);
-  if (!targets.includes("anywhere") && (!p.where || p.where === "anywhere")) targets.unshift("anywhere");
+  const nearby = first ? targetsFor(first.lat, first.lon, first.country).filter((t) => /^[A-Za-z]/.test(t) && t.length > 3) : [];
+  const regionWord = (p.where ?? "anywhere").trim().toLowerCase();
+  const REGION_COUNTRIES: Record<string, string[]> = {
+    europe: ["Albania", "Austria", "Belgium", "Bosnia & Herzegovina", "Bulgaria", "Croatia", "Cyprus", "Czechia", "Denmark", "Estonia", "Finland", "France", "Germany", "Greece", "Hungary", "Ireland", "Italy", "Latvia", "Lithuania", "Luxembourg", "Malta", "Montenegro", "Netherlands", "North Macedonia", "Norway", "Poland", "Portugal", "Romania", "Serbia", "Slovakia", "Slovenia", "Spain", "Sweden", "Switzerland", "Türkiye", "United Kingdom", "Georgia", "Armenia", "Iceland", "Moldova", "Kosovo"],
+    asia: ["Thailand", "Vietnam", "Malaysia", "Singapore", "Indonesia", "Philippines", "Cambodia", "Japan", "South Korea", "Taiwan", "Hong Kong", "China", "India", "Sri Lanka", "Maldives", "Nepal", "Uzbekistan", "Kazakhstan", "Kyrgyzstan", "United Arab Emirates", "Oman", "Qatar", "Jordan", "Israel", "Georgia", "Armenia", "Azerbaijan", "Türkiye"],
+    africa: ["Morocco", "Tunisia", "Egypt", "Kenya", "Tanzania", "South Africa", "Namibia", "Ethiopia", "Senegal", "Cape Verde", "Mauritius", "Rwanda", "Uganda", "Ghana"],
+    "north america": ["United States", "Canada", "Mexico", "Cuba", "Costa Rica", "Dominican Republic", "Jamaica", "Guatemala", "Panama", "Puerto Rico"],
+    "south america": ["Brazil", "Argentina", "Chile", "Peru", "Colombia", "Ecuador", "Bolivia", "Uruguay"],
+    oceania: ["Australia", "New Zealand", "Fiji"],
+  };
+  if (regionWord !== "anywhere" && REGION_COUNTRIES[regionWord]) {
+    const set = new Set(REGION_COUNTRIES[regionWord]);
+    const near = nearby.filter((t) => set.has(t));
+    targets = [...near, ...REGION_COUNTRIES[regionWord].filter((t) => !near.includes(t))].slice(0, 18);
+  } else if (p.where && p.where !== "anywhere") targets = p.where.split(",").map((s) => s.trim()).filter(Boolean);
+  else targets = ["anywhere", ...nearby.slice(0, 18)];
 
   // A getaway leaves the country unless the search names it.
   const home = first?.country ?? "";
