@@ -44,6 +44,24 @@ Warsaw, train to Gdańsk, fly home; hidden gems; an impeccable globe. Here is wh
    Mekong Delta instead; the 24-hour return is a cost"). Results are kept a day, so the next
    person asking gets it at once.
 
+9. **Preferences, fourteen regions, and the days planned.** On the Wild tab you now say what
+   you are after (true experiences, beaches, food first, big cities, slow travel) and your
+   budget level; the chain and the costs follow. It works from any airport into fourteen
+   regions: Berlin → Tashkent → Almaty → Bishkek by road → Berlin came out at 11 nights,
+   €655 all in, judged 64 ("add Samarkand"). Then **Plan the days** writes the day-by-day
+   plan the way you write yours: grounded in the Wikivoyage guides (the country's Do and Eat
+   sections, each city's listings, events during the stay), it names the loop, the overnight
+   bus, the homestay, the market at dawn, the dish and where locals eat it, the sweet thing,
+   what each day costs, and what a month there would cost (rent, food, total). Things the
+   model adds from memory are marked "verify". The Southeast Asia plan proposed fireflies at
+   Kuala Selangor, a Minangkabau homestay near Padang, Pulau Ubin by bicycle, rendang and
+   soto Padang, and priced a month in Singapore at €3,750 against €650 in Padang.
+
+**Food with live reviews** is the one thing that needs a key: the only legal sources of
+restaurant ratings for a non-Google map are Foursquare Places (free tier, SETUP §13) or a
+search key for the planner to read reviews live (Brave or Tavily, free tiers, SETUP §14).
+Until then the planner leans on the guides and marks the rest "verify".
+
 **Numbers:** ~150 airport boards, each 50 to 100 deals to 30 to 50 cities; 2,549 cities with a
 fame score; 20 event feeds; combos in 10 seconds; the nightly boards job ran once (8 runners,
 15 minutes each) and runs every night at 04:00 your time.
