@@ -35,6 +35,12 @@ preferences into 14 regions, the judge, the day-by-day planner with food and mon
 
 ## Built today, afternoon
 
+- Bigger type and lists everywhere (panel 468px, 14 to 17px text, visible scrollbar).
+- Wild trips fly home into any of your airports and add the last leg to your door (Bucharest →
+  Brașov by train or car), try a stopover night in a hub on the way back when it costs about
+  the same, and Trips work from any airport (Travelpayouts cached fares).
+- Hidden-city ("skiplag") scan as an opt-in in the custom search, shown with the warning.
+  flightlist.io is a front end on the same Kiwi engine; nothing to integrate.
 - Custom search ("Finder") in the Deals tab: a period, a date you must be away on, nights from
   and to, which of your airports, anywhere or a region or a country, direct, max hours, and
   "flying home may land at" another of your airports (open-jaw, two tickets).
@@ -44,5 +50,4 @@ preferences into 14 regions, the judge, the day-by-day planner with food and mon
 
 - Hotel booking through LiteAPI once the production key exists (prices already wired).
 - Viator experiences in the plan once the key arrives.
-- Trips tab from any airport (one-way fares per airport).
 - Alternatives for a wild trip (two or three variants, not one).

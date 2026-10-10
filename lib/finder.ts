@@ -24,6 +24,8 @@ export type FinderParams = {
   where?: string;
   /** Home airports the flight home may land at; different from origins means open-jaw pairs. */
   returnTo?: string[];
+  /** Also scan for hidden-city one-ways. */
+  tricks?: boolean;
   onDeals?: (deals: Deal[], target: string) => void;
   onProgress?: (line: string) => void;
 };
@@ -132,6 +134,43 @@ export async function findDeals(p: FinderParams): Promise<FinderResult> {
         }
       }),
     );
+  }
+  // Hidden-city tricks ("skiplagging"): a one-way ticket that continues past the city you want,
+  // cheaper than the one-way to that city. Two searches, scanned by layover airport. Shown with
+  // the warning: one way, cabin bag only, the airline's rules forbid it.
+  if (p.tricks && all.length) {
+    say("Checking hidden-city one-ways…");
+    const wanted = new Map<string, number>();
+    for (const d of all) wanted.set(d.dst, Math.min(wanted.get(d.dst) ?? Infinity, d.price));
+    const scans = await Promise.all(["anywhere", ...targets.filter((t) => t !== "anywhere").slice(0, 3)].map((t) => searchFlight({ flyFrom, flyTo: t, departureDate: kiwiDate(p.from), departureDateTo: kiwiDate(depTo) }).catch(() => null)));
+    searched += scans.length;
+    const direct = new Map<string, number>();
+    for (const r of scans) for (const it of r?.itineraries ?? []) if (it.outbound.stops === 0) direct.set(it.outbound.to, Math.min(direct.get(it.outbound.to) ?? Infinity, it.price));
+    for (const r of scans) {
+      for (const it of r?.itineraries ?? []) {
+        if (it.outbound.stops === 0) continue;
+        for (const via of it.outbound.route.slice(1, -1)) {
+          if (!wanted.has(via)) continue;
+          const oneWayDirect = direct.get(via) ?? wanted.get(via)! / 2;
+          if (it.price >= oneWayDirect - 15) continue;
+          const seg = it.outbound.segments.find((s) => s.to === via);
+          if (!seg) continue;
+          const d = toDeal(it.outbound.from, it, 0);
+          d.dst = via;
+          d.dstCity = d.dstCity; // keeps the city of the final destination for the photo; the name below is the via city
+          d.city = seg.toCity || via;
+          d.country = seg.toCountry ? d.country : d.country;
+          d.price = Math.round(it.price);
+          d.back = "";
+          d.nights = 0;
+          d.outMin = Math.round((Date.parse(seg.arrivalTime) - Date.parse(it.outbound.departureTime)) / 60_000);
+          d.backMin = 0;
+          d.trick = `Hidden city: a one-way ticket to ${it.outbound.segments.at(-1)?.toCity ?? it.outbound.to} that stops in ${seg.toCity || via}; you get off there. Cabin bag only, no return on the same ticket, and airlines forbid it.`;
+          all.push(d);
+          p.onDeals?.([d], `trick ${via}`);
+        }
+      }
+    }
   }
   return { deals: trimDeals(all), searched, failed, openJaw, generatedAt: new Date().toISOString() };
 }

@@ -19,12 +19,13 @@ export async function GET(request: Request) {
   const direct = p.get("direct") === "1";
   const maxHours = Number(p.get("maxHours")) || undefined;
   const where = (p.get("where") ?? "anywhere").slice(0, 80);
+  const tricks = p.get("tricks") === "1";
   const returnTo = (p.get("returnTo") ?? "").split(",").map((s) => s.trim().toUpperCase()).filter((s) => /^[A-Z]{3}$/.test(s)).slice(0, 5);
   const day = /^\d{4}-\d{2}-\d{2}$/;
   if (!origins.length || !day.test(from) || !day.test(to) || to < from || (include && !day.test(include))) {
     return Response.json({ error: "origins (codes), from and to (YYYY-MM-DD) required; optional include, minNights, maxNights, direct, maxHours, where, returnTo" }, { status: 400 });
   }
-  const key = JSON.stringify({ origins, from, to, include, minNights, maxNights, direct, maxHours, where, returnTo });
+  const key = JSON.stringify({ origins, from, to, include, minNights, maxNights, direct, maxHours, where, returnTo, tricks });
   const hit = memo.get(key);
   if (hit && Date.now() - hit.at < TTL) return Response.json(hit.result, { headers: { "X-Finder": "memo" } });
 
@@ -42,7 +43,7 @@ export async function GET(request: Request) {
       };
       send({ start: { origins, from, to, include, minNights, maxNights } });
       try {
-        const result = await findDeals({ origins, from, to, include, minNights, maxNights, direct, maxHours, where, returnTo, onDeals: (deals) => send({ deals }), onProgress: (line) => send({ progress: line }) });
+        const result = await findDeals({ origins, from, to, include, minNights, maxNights, direct, maxHours, where, returnTo, tricks, onDeals: (deals) => send({ deals }), onProgress: (line) => send({ progress: line }) });
         memo.set(key, { at: Date.now(), result });
         send({ done: { searched: result.searched, failed: result.failed, openJaw: result.openJaw, count: result.deals.length, generatedAt: result.generatedAt } });
       } catch (err) {

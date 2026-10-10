@@ -57,6 +57,8 @@ export type Deal = {
   /** Open-jaw: the flight home lands at this airport, booked separately (url2). */
   backTo?: string;
   url2?: string;
+  /** A hidden-city one-way: the ticket continues past this city; one way, cabin bag only, against airline rules. */
+  trick?: string;
 };
 export type DealsFile = { updated: string; window: { from: string; to: string }; gateways: string[]; nights: [number, number]; deals: Deal[] };
 

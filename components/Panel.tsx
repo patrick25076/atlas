@@ -170,6 +170,7 @@ function DealCard({ d, active, photo, gem, warm, why, onClick, onHover }: { d: D
         <div className="badges">
           {d.stops === 0 && <span className="badge direct">direct</span>}
           {d.backTo && <span className="badge heritage">home via {d.backTo}</span>}
+          {d.trick && <span className="badge warm">hidden-city, one way</span>}
           {gem && <span className="badge gem">hidden gem</span>}
           {warm != null && warm >= 20 && <span className="badge warm">{warm}° this weekend</span>}
           {why && <span className="badge heritage">{why}</span>}
@@ -411,7 +412,7 @@ export default function Panel(p: Props) {
                           {l.fromName} → {l.toName}
                         </div>
                         <div className="sub">
-                          {shortDate(l.date)} · {l.mode === "road" ? "by road or ferry" : l.mode} · about {formatDuration(l.minutes)}{l.estimated ? ", estimated" : ""}
+                          {shortDate(l.date)} · {l.mode === "road" ? "by train, bus or car" : l.mode} · about {formatDuration(l.minutes)}{l.estimated ? ", estimated" : ""}
                         </div>
                       </span>
                       <span className="meta">HOP</span>
@@ -477,6 +478,7 @@ export default function Panel(p: Props) {
                 Book on Kiwi.com <small>€{p.deal.price} return ↗</small>
               </a>
             )}
+            {p.deal.trick && <div className="fact warn wide">{p.deal.trick}</div>}
             <div className="status">
               From {p.deal.gw}, {stops(p.deal.stops)} with {p.deal.carriers.join(" + ")}: {formatDuration(p.deal.outMin)} out, {formatDuration(p.deal.backMin)} back.
               {p.deal.bags ? ` ${p.deal.bags[0].toUpperCase()}${p.deal.bags.slice(1)} included.` : ""} Found on Kiwi.com {newest ? shortDate(newest) : "recently"}; the booking page shows the live price.
@@ -865,7 +867,7 @@ export default function Panel(p: Props) {
             {!p.trips
               ? "Searching flights out, trains between, flights home…"
               : p.trips.status === "no-token"
-                ? "Multi-city trips need one-way fares for your airports; they exist for Romania so far."
+                ? "Multi-city trips need cached one-way fares for these airports; none yet."
                 : p.trips.status === "error"
                   ? `Trip search failed: ${p.trips.note}`
                   : p.trips.trips.length === 0

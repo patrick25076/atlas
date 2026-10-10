@@ -18,7 +18,7 @@
   --font: var(--font-geist), ui-sans-serif, system-ui, -apple-system, "Segoe UI", Inter, Roboto, sans-serif;
   --mono: var(--font-geist-mono), ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   --topbar: 64px;
-  --panel-w: 424px;
+  --panel-w: 468px;
 }
 
 * {
@@ -123,7 +123,7 @@ button {
 }
 .brand h1 {
   margin: 0;
-  font-size: 20px;
+  font-size: 22px;
   font-weight: 700;
   letter-spacing: -0.02em;
 }
@@ -148,7 +148,7 @@ button {
   backdrop-filter: blur(18px) saturate(140%);
   -webkit-backdrop-filter: blur(18px) saturate(140%);
   color: var(--ink);
-  font-size: 13.5px;
+  font-size: 14.5px;
   font-weight: 500;
   cursor: pointer;
   white-space: nowrap;
@@ -222,7 +222,7 @@ button {
   outline: none;
   color: var(--ink);
   font: inherit;
-  font-size: 13.5px;
+  font-size: 14.5px;
 }
 .askbar input::placeholder {
   color: var(--ink-3);
@@ -326,8 +326,8 @@ button {
   overflow: hidden;
 }
 .panel h2 {
-  margin: 6px 0 0;
-  font-size: 11px;
+  margin: 8px 0 0;
+  font-size: 12px;
   letter-spacing: 0.14em;
   text-transform: uppercase;
   color: var(--ink-3);
@@ -335,7 +335,7 @@ button {
 }
 .panel h3 {
   margin: 0;
-  font-size: 17px;
+  font-size: 20px;
   font-weight: 650;
   letter-spacing: -0.01em;
 }
@@ -346,8 +346,21 @@ button {
   margin: 0 -8px;
   padding: 0 8px 8px;
   overscroll-behavior: contain;
-  scrollbar-width: thin;
-  scrollbar-color: rgba(255, 255, 255, 0.14) transparent;
+  scrollbar-width: auto;
+  scrollbar-color: rgba(255, 255, 255, 0.22) transparent;
+}
+.panel .scroll::-webkit-scrollbar {
+  width: 10px;
+}
+.panel .scroll::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.22);
+  border-radius: 10px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+.panel .scroll::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.35);
+  background-clip: padding-box;
 }
 .handle {
   display: none;
@@ -364,7 +377,7 @@ button {
   font-weight: 700;
 }
 .headline .sub {
-  font-size: 12px;
+  font-size: 13px;
   color: var(--ink-3);
   white-space: nowrap;
 }
@@ -385,7 +398,7 @@ button {
   background: transparent;
   color: var(--ink-2);
   font: inherit;
-  font-size: 13px;
+  font-size: 15px;
   font-weight: 600;
   cursor: pointer;
   transition: background 0.15s, color 0.15s;
@@ -412,9 +425,9 @@ button {
 }
 .chip {
   flex: 0 0 auto;
-  font-size: 12px;
+  font-size: 13.5px;
   font-weight: 500;
-  padding: 6px 11px;
+  padding: 7px 13px;
   border-radius: 999px;
   border: 1px solid var(--line);
   color: var(--ink-2);
@@ -441,13 +454,13 @@ button {
 
 .search {
   width: 100%;
-  padding: 10px 12px;
+  padding: 11px 13px;
   border-radius: 12px;
   border: 1px solid var(--line);
   background: rgba(255, 255, 255, 0.05);
   color: var(--ink);
   font: inherit;
-  font-size: 13.5px;
+  font-size: 15px;
   outline: none;
   color-scheme: dark;
 }
@@ -456,9 +469,9 @@ button {
 }
 
 .status {
-  font-size: 12.5px;
+  font-size: 14px;
   color: var(--ink-2);
-  line-height: 1.45;
+  line-height: 1.5;
 }
 .status b {
   color: var(--ink);
@@ -472,7 +485,7 @@ button {
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 12px;
+  font-size: 13px;
   color: var(--ink-3);
 }
 .progress .bar {
@@ -498,9 +511,9 @@ button {
 .card {
   position: relative;
   display: grid;
-  grid-template-columns: 104px 1fr;
-  gap: 12px;
-  padding: 8px;
+  grid-template-columns: 120px 1fr;
+  gap: 14px;
+  padding: 10px;
   border-radius: 16px;
   border: 1px solid transparent;
   background: rgba(255, 255, 255, 0.035);
@@ -521,8 +534,8 @@ button {
   background: rgba(111, 240, 196, 0.07);
 }
 .thumb {
-  width: 104px;
-  height: 84px;
+  width: 120px;
+  height: 98px;
   border-radius: 11px;
   background: linear-gradient(135deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.03)) center/cover no-repeat;
   position: relative;
@@ -548,7 +561,7 @@ button {
   gap: 8px;
 }
 .cardtitle {
-  font-size: 15px;
+  font-size: 17px;
   font-weight: 650;
   letter-spacing: -0.01em;
   white-space: nowrap;
@@ -559,10 +572,10 @@ button {
   font-weight: 400;
   margin-left: 6px;
   color: var(--ink-3);
-  font-size: 12px;
+  font-size: 13px;
 }
 .price {
-  font-size: 19px;
+  font-size: 22px;
   font-weight: 750;
   color: var(--mint);
   font-variant-numeric: tabular-nums;
@@ -570,14 +583,14 @@ button {
   white-space: nowrap;
 }
 .price .sub {
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 500;
   margin-left: 3px;
   color: var(--ink-3);
 }
 .card .sub,
 .sub {
-  font-size: 12px;
+  font-size: 13.5px;
   color: var(--ink-2);
   white-space: nowrap;
   overflow: hidden;
@@ -590,7 +603,7 @@ button {
   margin-top: 2px;
 }
 .badge {
-  font-size: 10.5px;
+  font-size: 11.5px;
   font-weight: 600;
   letter-spacing: 0.02em;
   padding: 2px 7px;
@@ -634,7 +647,7 @@ button {
 /* ---------- deal page ---------- */
 .heroimg {
   position: relative;
-  height: 190px;
+  height: 220px;
   margin: -14px -14px 0;
   border-radius: var(--radius) var(--radius) 0 0;
   overflow: hidden;
@@ -675,7 +688,7 @@ button {
   gap: 10px;
 }
 .heroimg .title h3 {
-  font-size: 26px;
+  font-size: 30px;
   font-weight: 750;
   letter-spacing: -0.03em;
   line-height: 1;
@@ -684,12 +697,12 @@ button {
 .heroimg .title small {
   display: block;
   margin-top: 5px;
-  font-size: 13px;
+  font-size: 14px;
   color: var(--ink-2);
   font-weight: 500;
 }
 .heroimg .title .price {
-  font-size: 30px;
+  font-size: 34px;
   text-shadow: 0 2px 14px rgba(0, 0, 0, 0.6);
 }
 
@@ -699,12 +712,12 @@ button {
   justify-content: center;
   gap: 8px;
   width: 100%;
-  height: 44px;
+  height: 48px;
   border-radius: 13px;
   background: var(--mint);
   color: var(--mint-ink);
   font-weight: 750;
-  font-size: 14px;
+  font-size: 15.5px;
   text-decoration: none !important;
   transition: filter 0.15s, transform 0.15s;
 }
@@ -729,10 +742,10 @@ button {
 
 .row {
   display: grid;
-  grid-template-columns: 48px 1fr auto;
-  gap: 10px;
+  grid-template-columns: 54px 1fr auto;
+  gap: 12px;
   align-items: center;
-  padding: 8px 8px;
+  padding: 10px 10px;
   border-radius: 12px;
   cursor: pointer;
   border: 1px solid transparent;
@@ -754,12 +767,12 @@ button {
 .row .code {
   font-family: var(--mono);
   font-weight: 700;
-  font-size: 13.5px;
+  font-size: 14.5px;
   color: var(--mint);
   letter-spacing: 0.02em;
 }
 .row .name {
-  font-size: 13.5px;
+  font-size: 15.5px;
   line-height: 1.25;
   white-space: nowrap;
   overflow: hidden;
@@ -767,12 +780,12 @@ button {
   font-weight: 500;
 }
 .row .sub {
-  font-size: 11.5px;
+  font-size: 13px;
   color: var(--ink-3);
 }
 .row .meta {
   text-align: right;
-  font-size: 11.5px;
+  font-size: 13px;
   color: var(--ink-3);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
@@ -780,7 +793,7 @@ button {
 .row .meta strong {
   display: block;
   color: var(--ink);
-  font-size: 13.5px;
+  font-size: 15px;
 }
 
 .form {
@@ -804,11 +817,11 @@ button {
 }
 .answer p {
   margin: 0;
-  font-size: 13.5px;
+  font-size: 15px;
   line-height: 1.5;
 }
 .answer .q {
-  font-size: 11.5px;
+  font-size: 13px;
   color: var(--ink-3);
 }
 .ideas .chip {
@@ -831,14 +844,14 @@ button {
   flex-direction: column;
   align-items: center;
   gap: 3px;
-  padding: 8px 0;
+  padding: 9px 0;
   border-radius: 10px;
   background: rgba(255, 255, 255, 0.045);
-  font-size: 11px;
+  font-size: 12.5px;
   color: var(--ink-3);
 }
 .wxg {
-  font-size: 16px;
+  font-size: 18px;
   line-height: 1;
 }
 .wxt {
@@ -852,10 +865,10 @@ button {
   gap: 6px;
 }
 .fact {
-  padding: 8px 10px;
+  padding: 9px 11px;
   border-radius: 10px;
   background: rgba(255, 255, 255, 0.045);
-  font-size: 12px;
+  font-size: 13.5px;
   color: var(--ink-2);
   line-height: 1.35;
   min-width: 0;
@@ -867,7 +880,7 @@ button {
   display: block;
   color: var(--ink);
   font-weight: 600;
-  font-size: 12.5px;
+  font-size: 14px;
 }
 .fact.warn {
   background: rgba(255, 107, 138, 0.12);
@@ -880,7 +893,7 @@ button {
   display: flex;
   flex-wrap: wrap;
   gap: 6px 12px;
-  font-size: 12px;
+  font-size: 13.5px;
   color: var(--ink-3);
 }
 .counts b {
@@ -888,8 +901,8 @@ button {
   font-weight: 650;
 }
 .para {
-  font-size: 13px;
-  line-height: 1.55;
+  font-size: 14.5px;
+  line-height: 1.6;
   color: var(--ink-2);
 }
 .para a {
@@ -1019,7 +1032,7 @@ button {
     bottom: 0;
     width: auto;
     max-width: none;
-    height: 56vh;
+    height: 60vh;
     border-radius: var(--radius) var(--radius) 0 0;
     padding: 6px 14px 14px;
     gap: 8px;
@@ -1087,13 +1100,13 @@ button {
   position: absolute;
   left: 0;
   top: 0;
-  height: 22px;
-  padding: 0 7px;
+  height: 24px;
+  padding: 0 8px;
   border-radius: 999px;
   border: 1px solid rgba(255, 255, 255, 0.14);
   background: rgba(9, 12, 22, 0.86);
   color: var(--ink);
-  font: 700 12px/20px var(--font);
+  font: 700 13px/22px var(--font);
   font-variant-numeric: tabular-nums;
   letter-spacing: -0.01em;
   white-space: nowrap;
@@ -1141,7 +1154,7 @@ button {
   backdrop-filter: blur(6px);
 }
 .sight b {
-  font-size: 12.5px;
+  font-size: 14px;
   font-weight: 650;
   white-space: nowrap;
   overflow: hidden;
@@ -1149,7 +1162,7 @@ button {
 }
 .sight p {
   margin: 0;
-  font-size: 11.5px;
+  font-size: 13px;
   line-height: 1.4;
   color: var(--ink-3);
   display: -webkit-box;
@@ -1191,13 +1204,13 @@ button {
 }
 .verdict p {
   margin: 0 0 6px;
-  font-size: 13.5px;
+  font-size: 15px;
   line-height: 1.45;
 }
 .verdict ul {
   margin: 0 0 6px;
   padding-left: 16px;
-  font-size: 12.5px;
+  font-size: 14px;
   line-height: 1.4;
   color: var(--ink-2);
 }
@@ -1236,24 +1249,24 @@ button {
   font-size: 12px;
 }
 .dayhead b {
-  font-size: 13.5px;
+  font-size: 15.5px;
 }
 .dayhead .sub {
   white-space: normal;
 }
 .item {
   display: grid;
-  grid-template-columns: 44px 1fr auto;
+  grid-template-columns: 54px 1fr auto;
   gap: 8px;
-  padding: 4px 0;
-  font-size: 12.5px;
+  padding: 5px 0;
+  font-size: 14px;
   line-height: 1.4;
   border-top: 1px solid rgba(255, 255, 255, 0.05);
 }
 .item .when {
   color: var(--ink-3);
   font-variant-numeric: tabular-nums;
-  font-size: 11.5px;
+  font-size: 12.5px;
 }
 .item .what {
   color: var(--ink);
@@ -1289,11 +1302,11 @@ button {
   margin-bottom: 8px;
 }
 .foodcard b {
-  font-size: 13.5px;
+  font-size: 15px;
 }
 .foodcard p {
   margin: 4px 0 0;
-  font-size: 12.5px;
+  font-size: 14px;
   line-height: 1.45;
 }
 

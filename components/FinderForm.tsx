@@ -4,7 +4,7 @@ import { useState } from "react";
 import type { Deal, Gateway } from "@/lib/types";
 import { formatDuration } from "@/lib/geo";
 
-export type FinderQuery = { origins: string[]; from: string; to: string; include?: string; minNights: number; maxNights: number; direct: boolean; maxHours?: number; where: string; returnTo: string[] };
+export type FinderQuery = { origins: string[]; from: string; to: string; include?: string; minNights: number; maxNights: number; direct: boolean; maxHours?: number; where: string; returnTo: string[]; tricks: boolean };
 export type FinderState = { status: "idle" | "loading" | "ok" | "error"; query?: FinderQuery; deals: Deal[]; lines: string[]; note?: string; searched?: number };
 
 const WHERE = ["anywhere", "Europe", "Asia", "Africa", "North America", "South America"];
@@ -23,6 +23,7 @@ export default function FinderForm({ gateways, defaults, state, onSearch, onClea
   const [direct, setDirect] = useState(false);
   const [maxHours, setMaxHours] = useState(0);
   const [where, setWhere] = useState("anywhere");
+  const [tricks, setTricks] = useState(false);
   const [country, setCountry] = useState("");
   const chosen = origins.length ? origins : defaults;
   const toggle = (list: string[], set: (v: string[]) => void, code: string, fallback: string[]) => {
@@ -120,12 +121,17 @@ export default function FinderForm({ gateways, defaults, state, onSearch, onClea
         ))}
       </div>
       <div className="chips">
+        <button className={`chip ghost${tricks ? " on" : ""}`} onClick={() => setTricks(!tricks)} title="One-way tickets that continue past the city you want, cheaper than flying there. Cabin bag only; airlines forbid it.">
+          Hidden-city tricks
+        </button>
+      </div>
+      <div className="chips">
         <button
           className="chip on"
           disabled={state.status === "loading" || !from || !to || to < from}
           onClick={() => {
             setOpen(false);
-            onSearch({ origins: chosen, from, to, include: include || undefined, minNights, maxNights, direct, maxHours: maxHours || undefined, where: country.trim() || where, returnTo: returnTo.filter((x) => !chosen.includes(x)) });
+            onSearch({ origins: chosen, from, to, include: include || undefined, minNights, maxNights, direct, maxHours: maxHours || undefined, where: country.trim() || where, returnTo: returnTo.filter((x) => !chosen.includes(x)), tricks });
           }}
         >
           {state.status === "loading" ? "Searching…" : "Search live"}

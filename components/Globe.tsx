@@ -195,7 +195,7 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
       const s = sheetRef.current;
       return { left: 16, right: 16, top: 70, bottom: (s === "peek" ? 150 : Math.round(window.innerHeight * 0.56)) + 24 };
     }
-    return { left: 460, top: 84, right: 60, bottom: 60 };
+    return { left: 504, top: 84, right: 60, bottom: 60 };
   }, []);
 
   // Re-price one route on Kiwi for the dates the visitor picks.
@@ -509,6 +509,7 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
     if (q.direct) params.set("direct", "1");
     if (q.maxHours) params.set("maxHours", String(q.maxHours));
     if (q.returnTo.length) params.set("returnTo", q.returnTo.join(","));
+    if (q.tricks) params.set("tricks", "1");
     try {
       const r = await fetch(`/api/finder?${params}`);
       if (!r.ok) {
@@ -830,6 +831,11 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
     setPlan({ status: "idle" });
     const q = new URLSearchParams({ g: boardGateways.map((g) => g.iata).join(","), home: gateways[0].airport.country, region: wildRegion, nights: String(wildNights), style: wildStyle, budget: wildBudget });
     if (month) q.set("month", month);
+    if (origin) {
+      q.set("lat", origin.lat.toFixed(4));
+      q.set("lon", origin.lon.toFixed(4));
+      q.set("label", origin.label);
+    }
     try {
       const r = await fetch(`/api/wild?${q}`);
       if (!r.ok) {

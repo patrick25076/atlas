@@ -146,6 +146,10 @@ export type WildParams = {
   nights: number;
   style?: Style;
   budget?: Budget;
+  /** Where the traveller actually lives: the last leg home from whichever airport is cheapest. */
+  origin?: { lat: number; lon: number; label: string };
+  /** A night or two in a hub on the way home when it costs about the same (default on). */
+  stopover?: boolean;
   onProgress?: (line: string) => void;
 };
 
@@ -327,9 +331,11 @@ export async function buildWild(p: WildParams): Promise<WildTrip | null> {
     say(`Next: ${CITIES[current].name} (${CITIES[current].country}).`);
   }
 
-  // 3. The way home, from the last stop or the one before.
-  const homeGws = p.gateways.map((g) => resolveGateway(g)).filter((g): g is NonNullable<typeof g> => !!g).slice(0, 2);
-  let backLeg: WildLeg | null = null;
+  // 3. The way home, from the last stop or the one before, into any of the traveller's airports.
+  const homeGws = homeGateways.slice(0, 3);
+  const homeCodes = homeGws.map((g) => g.code).join(",");
+  let backLeg: Extract<WildLeg, { kind: "fly" }> | null = null;
+  let lastStop: WildStop | null = null;
   for (const from of [stops.at(-1), stops.at(-2)].filter((s): s is WildStop => !!s)) {
     // Leave on the planned end date, give or take a day; never before two nights there.
     const earliest = addDays(from.arrive, Math.max(2, Math.min(nightsPerStop, daysBetween(from.arrive, endDate) - 1)));
@@ -337,7 +343,7 @@ export async function buildWild(p: WildParams): Promise<WildTrip | null> {
     if (daysBetween(earliest, latest) < 0) continue;
     // Hours weigh more on the way home: a 33-hour saving of €40 is no saving. Over 30 hours
     // only when nothing shorter exists.
-    const all = (await Promise.all(homeGws.map((g) => oneWay(from.code, g.code, earliest, latest)))).flat().map(count);
+    const all = count(await oneWay(from.code, homeCodes, earliest, latest));
     const sane = all.filter((it) => hoursOf(it) <= 30);
     const its = (sane.length ? sane : all).sort((a, b) => a.price + 10 * hoursOf(a) - (b.price + 10 * hoursOf(b)));
     if (its[0]) {
@@ -346,17 +352,65 @@ export async function buildWild(p: WildParams): Promise<WildTrip | null> {
         stops.pop();
         legs.pop();
       }
-      backLeg = flyLeg(from.code, its[0]);
+      backLeg = flyLeg(from.code, its[0]) as Extract<WildLeg, { kind: "fly" }>;
+      lastStop = from;
       from.depart = backLeg.date;
       from.nights = Math.max(1, daysBetween(from.arrive, from.depart));
       break;
     }
   }
-  if (!backLeg) return null;
+  if (!backLeg || !lastStop) return null;
+
+  // 3b. A stopover on the way home: a night or two in a hub when it costs about the same as
+  // flying straight through (Istanbul, Dubai, Doha, or the hubs used on the way in).
+  if (p.stopover !== false && style !== "slow") {
+    const hubCands = [...new Set([...hubs, "IST", "DXB", "DOH"])].filter((h) => h !== lastStop!.code && CITIES[h] && !homeGws.some((g) => (cityOf.get(g.code) ?? g.code) === h)).slice(0, 4);
+    const d0 = backLeg.date;
+    const options = await Promise.all(
+      hubCands.map(async (h) => {
+        const [a, b] = await Promise.all([oneWay(lastStop!.code, h, addDays(d0, -1), d0), oneWay(h, homeCodes, addDays(d0, 1), addDays(d0, 2))]);
+        count(a);
+        count(b);
+        let best: { a: KiwiItinerary; b: KiwiItinerary; total: number } | null = null;
+        for (const x of a.filter((it) => hoursOf(it) <= 16)) {
+          for (const y of b.filter((it) => hoursOf(it) <= 16)) {
+            if (dayOf(y.outbound.departureTime) <= dayOf(x.outbound.arrivalTime)) continue;
+            const total = x.price + y.price;
+            if (!best || total < best.total) best = { a: x, b: y, total };
+          }
+        }
+        return best ? { h, ...best } : null;
+      }),
+    );
+    const chosen = options.filter((o): o is NonNullable<typeof o> => !!o).sort((a, b) => a.total - b.total)[0];
+    if (chosen && chosen.total <= backLeg.price + 40) {
+      const legA = flyLeg(lastStop.code, chosen.a) as Extract<WildLeg, { kind: "fly" }>;
+      const legB = flyLeg(chosen.h, chosen.b) as Extract<WildLeg, { kind: "fly" }>;
+      lastStop.depart = legA.date;
+      lastStop.nights = Math.max(1, daysBetween(lastStop.arrive, lastStop.depart));
+      legs.push(legA);
+      addStop(chosen.h, dayOf(chosen.a.outbound.arrivalTime), Math.max(1, daysBetween(dayOf(chosen.a.outbound.arrivalTime), legB.date)));
+      backLeg = legB;
+      say(`Stopover: ${CITIES[chosen.h].name} for ${stops.at(-1)!.nights} night${stops.at(-1)!.nights === 1 ? "" : "s"} on the way home, €${chosen.total} for both flights.`);
+    }
+  }
   legs.push(backLeg);
   say(`Way home: ${backLeg.fromName} → ${backLeg.toName} €${backLeg.price}.`);
 
+  // 3c. From the landing airport to the front door, when it is not the home airport's city.
+  if (p.origin) {
+    const landed = CITIES[backLeg.to] ?? null;
+    if (landed) {
+      const km = haversineKm(landed.lat, landed.lon, p.origin.lat, p.origin.lon);
+      if (km > 35) {
+        const minutes = Math.round(30 + ((km * 1.3) / 80) * 60);
+        legs.push({ kind: "ground", from: backLeg.to, to: p.origin.label, fromName: landed.name, toName: p.origin.label, date: backLeg.date, minutes, mode: "road", estimated: true, price: Math.max(8, Math.round(km / 10)) });
+      }
+    }
+  }
+
   const flights = legs.filter((l) => l.kind === "fly").reduce((s, l) => s + l.price, 0);
+  const lastFly = [...legs].reverse().find((l): l is Extract<WildLeg, { kind: "fly" }> => l.kind === "fly")!;
   const groundCost = legs.filter((l) => l.kind === "ground").reduce((s, l) => s + l.price, 0);
   const living = stops.reduce((s, x) => s + x.nights * x.perDay, 0);
   const nights = stops.reduce((s, x) => s + x.nights, 0);
@@ -377,7 +431,7 @@ export async function buildWild(p: WildParams): Promise<WildTrip | null> {
     stops,
     totals: { flights, ground: groundCost, living, all, perDay: Math.round(all / Math.max(1, nights)), nights, hoursInAir, countries: countriesSeen },
     outDate,
-    backDate: backLeg.date,
+    backDate: lastFly.date,
     searched,
     generatedAt: new Date().toISOString(),
   };

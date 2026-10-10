@@ -20,6 +20,10 @@ export async function GET(request: Request) {
   const month = p.get("month") ?? undefined;
   const style = (["experiences", "beaches", "food", "cities", "slow"].includes(p.get("style") ?? "") ? p.get("style") : "experiences") as Style;
   const budget = (["backpacker", "mid", "comfort"].includes(p.get("budget") ?? "") ? p.get("budget") : "mid") as Budget;
+  const lat = Number(p.get("lat"));
+  const lon = Number(p.get("lon"));
+  const origin = Number.isFinite(lat) && Number.isFinite(lon) ? { lat, lon, label: (p.get("label") ?? "home").slice(0, 60) } : undefined;
+  const stopover = p.get("stopover") !== "0";
   if (!gateways.length || !/^[A-Z]{2}$/.test(home)) return Response.json({ error: "g (airport codes) and home (country) required" }, { status: 400 });
   if (!REGIONS[region]) return Response.json({ error: `region must be one of ${Object.keys(REGIONS).join(", ")}` }, { status: 400 });
   if (month && !/^\d{4}-\d{2}$/.test(month)) return Response.json({ error: "month must be YYYY-MM" }, { status: 400 });
@@ -47,7 +51,7 @@ export async function GET(request: Request) {
         const mine = !job;
         if (!job) {
           job = (async () => {
-            const trip = await buildWild({ gateways, home, region, month, nights, style, budget, onProgress: (line) => send({ progress: line }) });
+            const trip = await buildWild({ gateways, home, region, month, nights, style, budget, origin, stopover, onProgress: (line) => send({ progress: line }) });
             if (!trip) return null;
             send({ progress: "Asking for a second opinion…" });
             const judge = await judgeTrip(trip);
