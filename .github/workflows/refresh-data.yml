@@ -53,36 +53,34 @@ jobs:
             *) echo "set=${{ inputs.set || 'daily' }}" >> "$GITHUB_OUTPUT" ;;
           esac
 
+      # Every source runs on its own: one upstream blip (Travelpayouts answered 404 for its
+      # city list on the morning of 10 October 2026 and took weather and holidays down with
+      # it) must not stop the others. A source gets a second try after 30 seconds; when both
+      # fail its previous file stays, the rest are still committed, and the last step fails
+      # the run with the names so the failure is visible.
       - name: Daily sources
         if: steps.set.outputs.set == 'daily' || steps.set.outputs.set == 'all'
         run: |
-          pnpm ingest:airports
-          pnpm ingest:tp-airports
-          pnpm ingest:tp-airlines
-          pnpm ingest:countries
-          pnpm ingest:holidays
-          pnpm ingest:weather
+          source .github/run-source.sh
+          for s in ingest:airports ingest:tp-airports ingest:tp-airlines ingest:countries ingest:holidays ingest:weather; do run_source "$s"; done
 
       - name: Weekly sources
         if: steps.set.outputs.set == 'weekly' || steps.set.outputs.set == 'all'
         run: |
-          pnpm ingest:geonames
-          pnpm ingest:gtfs
-          DEALS_GATEWAYS=OTP,CLJ,IAS,TSR pnpm ingest:oneway
+          source .github/run-source.sh
+          run_source ingest:geonames
+          run_source ingest:gtfs
+          export DEALS_GATEWAYS=OTP,CLJ,IAS,TSR
+          run_source ingest:oneway
 
       - name: Monthly sources
         if: steps.set.outputs.set == 'monthly' || steps.set.outputs.set == 'all'
         run: |
-          pnpm ingest:heritage
-          pnpm ingest:visa
-          pnpm ingest:ferries
-          pnpm ingest:overture
-          pnpm ingest:gtfs
-          pnpm ingest:fame
-          pnpm ingest:costs
+          source .github/run-source.sh
+          for s in ingest:heritage ingest:visa ingest:ferries ingest:overture ingest:gtfs ingest:fame ingest:costs; do run_source "$s"; done
           # Climate normals per city (public/data/climate.json, NASA POWER); resumable, so a
           # month that runs out of time continues where it stopped the next month.
-          pnpm ingest:climate
+          run_source ingest:climate
 
       - name: Commit what changed
         run: |
@@ -97,6 +95,14 @@ jobs:
             git pull --rebase -X theirs origin main
             git push
           fi
+
+      - name: Report sources that failed twice
+        run: |
+          if [ -s "$RUNNER_TEMP/failed-sources.txt" ]; then
+            echo "::error::these sources kept their previous data: $(tr '\n' ' ' < "$RUNNER_TEMP/failed-sources.txt")"
+            exit 1
+          fi
+          echo "every source refreshed"
 
   # Each shard runs on its own runner (its own address): Kiwi throttles an address after a
   # couple of thousand searches, and 150 airports need about 6,000. Eight shards, fifteen
