@@ -52,15 +52,31 @@ function loadStored(): UIMessage[] {
   }
 }
 
-/** Light markdown: paragraphs and **bold** only. */
+/** Light markdown: paragraphs, **bold**, [links](url) and bare urls. */
 function Text({ text }: { text: string }) {
   const paras = text.split(/\n{2,}/);
+  const render = (s: string) =>
+    s.split(/(\*\*[^*]+\*\*|\[[^\]]+\]\(https?:\/\/[^\s)]+\)|https?:\/\/[^\s)]+)/).map((bit, k) => {
+      if (bit.startsWith("**") && bit.endsWith("**")) return <b key={k}>{bit.slice(2, -2)}</b>;
+      const link = bit.match(/^\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)$/);
+      if (link)
+        return (
+          <a key={k} href={link[2]} target="_blank" rel="noreferrer">
+            {link[1]}
+          </a>
+        );
+      if (/^https?:\/\//.test(bit))
+        return (
+          <a key={k} href={bit} target="_blank" rel="noreferrer">
+            {bit.replace(/^https?:\/\/(www\.)?/, "").slice(0, 40)}
+          </a>
+        );
+      return <span key={k}>{bit}</span>;
+    });
   return (
     <>
       {paras.map((para, i) => (
-        <p key={i}>
-          {para.split(/(\*\*[^*]+\*\*)/).map((bit, k) => (bit.startsWith("**") && bit.endsWith("**") ? <b key={k}>{bit.slice(2, -2)}</b> : <span key={k}>{bit}</span>))}
-        </p>
+        <p key={i}>{render(para.replace(/\n/g, " "))}</p>
       ))}
     </>
   );
