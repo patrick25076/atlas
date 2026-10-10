@@ -10,6 +10,8 @@ import costsJson from "@/public/data/costs.json";
 import { countryGuide, getSights } from "./sights";
 import { isNoise, sourcesNear } from "./events/sources";
 import { BUDGET_SCALE, type WildTrip } from "./wild";
+import { hasTavily, webSearch } from "./tavily";
+import { goodValueEats, hasFoursquare } from "./foursquare";
 import type { CountryInfo } from "./types";
 
 const COUNTRIES = countriesJson as unknown as Record<string, CountryInfo>;
@@ -57,9 +59,28 @@ export async function planDays(trip: WildTrip, key: string): Promise<Plan | null
         .map((e) => `${e.date} ${e.name}${e.venue ? ` at ${e.venue}` : ""}`);
     }),
   );
+  // Live research per stop when the keys exist: what people actually recommend this year,
+  // and rated places to eat that are not tourist traps.
+  const research = await Promise.all(
+    trip.stops.map(async (s) => {
+      const country = COUNTRIES[s.country]?.name ?? s.country;
+      const focus = trip.prefs.style === "food" ? "best local food and where locals eat" : "best experiences and things locals recommend, not the tourist traps";
+      const [exp, food, eats] = await Promise.all([
+        hasTavily() ? webSearch(`${s.name} ${country} ${focus} ${new Date().getFullYear()}`, 3) : [],
+        hasTavily() ? webSearch(`${s.name} traditional food where locals eat good value restaurants`, 3) : [],
+        hasFoursquare() ? goodValueEats(s.lat, s.lon) : null,
+      ]);
+      return {
+        web: [...exp, ...food].map((h) => ({ title: h.title, url: h.url, content: h.content.slice(0, 520) })),
+        ratedEats: eats?.status === "ok" ? eats.places.slice(0, 6).map((e) => `${e.name} (${e.rating}/10, ${"€".repeat(e.price ?? 1)}${e.category ? `, ${e.category}` : ""}${e.address ? `, ${e.address}` : ""})${e.tip ? ` tip: ${e.tip.slice(0, 90)}` : ""}`) : undefined,
+      };
+    }),
+  );
   const stops = trip.stops.map((s, i) => ({
     city: s.name,
     country: COUNTRIES[s.country]?.name ?? s.country,
+    webResearch: research[i].web.length ? research[i].web : undefined,
+    ratedEats: research[i].ratedEats,
     dates: `${s.arrive} to ${s.depart}`,
     nights: s.nights,
     budgetPerDay: s.perDay,
@@ -155,14 +176,28 @@ export async function planDays(trip: WildTrip, key: string): Promise<Plan | null
     const { object } = await generateObject({
       model,
       schema,
-      system: `You plan the days of a multi-country trip for a traveller with a ${trip.passport} passport. ${styleLine[trip.prefs.style]} Budget level: ${trip.prefs.budget}. Use the legs exactly as given for the travel days (times, cities); never change flights. Build each stop from the guide material first (guideDo, countryDo, guideSee, guideEat, countryEat, eventsDuringStay); add your own knowledge of the country's famous experiences and its best-value food when the guide is thin, and mark those items 'verify'. Prefer experiences over sightseeing lists; name real places, loops, markets, dishes. Keep days realistic: arrival days are half days, overnight buses are fine when the style allows, one big thing a day. Costs in euros per person; respect the price level given. Plain words, no hype, no bullet symbols inside strings.`,
+      system: `You plan the days of a multi-country trip for a traveller with a ${trip.passport} passport. ${styleLine[trip.prefs.style]} Budget level: ${trip.prefs.budget}. Use the legs exactly as given for the travel days (times, cities); never change flights. Build each stop from the material given, in this order of trust: ratedEats (Foursquare ratings, cite as "Foursquare 8.6/10"), webResearch (current pages; cite the site's domain in the note, e.g. "per oladaniela.com"), the guides (guideDo, countryDo, guideSee, guideEat, countryEat, eventsDuringStay; note "from the guide"), then your own knowledge, marked 'verify'. Prefer experiences over sightseeing lists; name real places, loops, markets, dishes; for food name the dish and the place and what it costs. Keep days realistic: arrival days are half days, overnight buses are fine when the style allows, one big thing a day. Costs in euros per person; respect the price level given. Plain words, no hype, no bullet symbols inside strings.`,
       prompt: JSON.stringify(brief),
       maxOutputTokens: 7000,
     });
+    // The model occasionally drops a field; fill the gaps rather than fail the plan.
+    const days = Array.isArray(object.days) ? object.days : [];
+    const living = trip.stops.reduce((s, x) => s + x.nights * x.perDay, 0);
+    const itemCosts = days.reduce((s, d) => s + (d.items ?? []).reduce((t, it) => t + (typeof it.cost === "number" ? it.cost : 0), 0), 0);
     return {
-      ...object,
+      highlights: Array.isArray(object.highlights) ? object.highlights : [],
+      days,
+      food: Array.isArray(object.food) ? object.food : [],
+      monthly: Array.isArray(object.monthly) ? object.monthly : [],
+      total: typeof object.total === "number" && object.total > 0 ? Math.round(object.total) : Math.round(itemCosts + living),
       key,
-      sources: ["Wikivoyage guides (CC BY-SA 4.0)", ...(events.some((e) => e.length) ? ["city open event feeds"] : []), "the model's own knowledge where marked 'verify'"],
+      sources: [
+        "Wikivoyage guides (CC BY-SA 4.0)",
+        ...(research.some((r) => r.ratedEats?.length) ? ["Foursquare ratings"] : []),
+        ...(research.some((r) => r.web.length) ? ["live web research (Tavily)"] : []),
+        ...(events.some((e) => e.length) ? ["city open event feeds"] : []),
+        "the model's own knowledge where marked 'verify'",
+      ],
       generatedAt: new Date().toISOString(),
     };
   } catch (err) {

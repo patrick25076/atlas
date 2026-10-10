@@ -19,6 +19,8 @@ import type { Airport, City, CityPlaces, CountryInfo, Deal, Destination, FaresRe
 import { expandWeather, visaFor } from "@/lib/types";
 import Panel, { MODE_LABEL, type CombosState, type PlanState, type WildState } from "./Panel";
 import type { Plan } from "@/lib/plan";
+import type { EatsResponse } from "@/app/api/eats/route";
+import type { HotelsResult } from "@/lib/liteapi";
 import type { WildLeg, WildTrip } from "@/lib/wild";
 import type { Sights, Sight } from "@/app/api/sights/route";
 import TopBar from "./TopBar";
@@ -137,6 +139,8 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
   const [manifest, setManifest] = useState<Manifest | null>(null);
   const [mapObj, setMapObj] = useState<maplibregl.Map | null>(null);
   const [sights, setSights] = useState<Sights | null>(null);
+  const [eats, setEats] = useState<EatsResponse | null>(null);
+  const [hotels, setHotels] = useState<HotelsResult | null>(null);
   const [sightsOnMap, setSightsOnMap] = useState(false);
   const [combos, setCombos] = useState<CombosState>({ status: "idle" });
   const [selectedCombo, setSelectedCombo] = useState<string | null>(null);
@@ -715,6 +719,25 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
       .catch(() => {});
     return () => ctrl.abort();
   }, [deal?.city]);
+  // Rated places to eat and live hotel prices for the deal's city and dates.
+  useEffect(() => {
+    setEats(null);
+    setHotels(null);
+    if (!deal) return;
+    const c = dealCoord(deal);
+    if (!c) return;
+    const ctrl = new AbortController();
+    fetch(`/api/eats?lat=${c[1].toFixed(4)}&lon=${c[0].toFixed(4)}`, { signal: ctrl.signal })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j: EatsResponse | null) => setEats(j))
+      .catch(() => {});
+    fetch(`/api/hotels?lat=${c[1].toFixed(4)}&lon=${c[0].toFixed(4)}&checkin=${deal.out}&checkout=${deal.back}&nat=${gateways[0]?.airport.country ?? "RO"}`, { signal: ctrl.signal })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j: HotelsResult | null) => setHotels(j))
+      .catch(() => {});
+    return () => ctrl.abort();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [deal?.dstCity, deal?.out, deal?.back]);
   async function findCombosFor() {
     if (!deal) return;
     setCombos({ status: "loading" });
@@ -1548,6 +1571,8 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
         summary={summary}
         sights={sights}
         onShowSights={showSights}
+        eats={eats}
+        hotels={hotels}
         combos={combos}
         onCombos={findCombosFor}
         selectedCombo={selectedCombo}

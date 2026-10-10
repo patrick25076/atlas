@@ -14,6 +14,8 @@ import type { CombosResult } from "@/lib/combos";
 import type { WildTrip } from "@/lib/wild";
 import { WILD_BUDGETS, WILD_REGIONS, WILD_STYLES } from "@/lib/ui-types";
 import type { Plan } from "@/lib/plan";
+import type { EatsResponse } from "@/app/api/eats/route";
+import type { HotelsResult } from "@/lib/liteapi";
 
 export type PlanState = { status: "idle" | "loading" | "ok" | "error"; plan?: Plan; note?: string };
 
@@ -66,6 +68,8 @@ type Props = {
   summary: PlaceSummary | null;
   sights: Sights | null;
   onShowSights: () => void;
+  eats: EatsResponse | null;
+  hotels: HotelsResult | null;
   combos: CombosState;
   onCombos: () => void;
   selectedCombo: string | null;
@@ -586,6 +590,48 @@ export default function Panel(p: Props) {
                   </a>{" "}
                   (CC BY-SA), written by travellers.
                 </div>
+              </div>
+            )}
+            {p.eats && p.eats.food.status === "ok" && p.eats.food.places.length > 0 && (
+              <div className="section">
+                <h2>Eat well, fairly priced</h2>
+                {p.eats.food.places.slice(0, 6).map((e) => (
+                  <a key={e.id} className="row" href={e.url ?? `https://foursquare.com/v/${e.id}`} target="_blank" rel="noreferrer" style={{ color: "inherit" }}>
+                    <span className="code">{e.rating?.toFixed(1)}</span>
+                    <span>
+                      <div className="name">
+                        {e.name} <span className="muted">{"€".repeat(e.price ?? 1)}</span>
+                      </div>
+                      <div className="sub">{[e.category, e.tip].filter(Boolean).join(" · ")}</div>
+                    </span>
+                    <span className="meta">{e.distance != null ? `${(e.distance / 1000).toFixed(1)} km` : ""}</span>
+                  </a>
+                ))}
+                {p.eats.sweet.status === "ok" && p.eats.sweet.places.length > 0 && (
+                  <div className="status">
+                    Sweet: {p.eats.sweet.places.map((e) => `${e.name} (${e.rating?.toFixed(1)})`).join(" · ")}
+                  </div>
+                )}
+                <div className="status muted">Rated 8 and up on Foursquare, price tier one or two, within 3.5 km of the centre.</div>
+              </div>
+            )}
+            {p.hotels && p.hotels.status === "ok" && p.hotels.hotels.length > 0 && (
+              <div className="section">
+                <h2>Stay from €{p.hotels.hotels[0].perNight} a night</h2>
+                {p.hotels.hotels.slice(0, 3).map((h) => (
+                  <div key={h.id} className="row">
+                    <span className="code">€{h.perNight}</span>
+                    <span>
+                      <div className="name">{h.name}</div>
+                      <div className="sub">
+                        {h.stars ? `${h.stars}★` : ""}
+                        {h.rating ? ` · guests ${h.rating}/10` : ""} · €{h.total} for the stay
+                      </div>
+                    </span>
+                    <span className="meta">a night</span>
+                  </div>
+                ))}
+                <div className="status muted">Live hotel prices for {dateRange(p.hotels.checkin, p.hotels.checkout)}, one guest, taxes included; booking comes next.</div>
               </div>
             )}
             {p.sights && p.sights.events.length > 0 && (

@@ -131,7 +131,10 @@ The one legal, keyed source of restaurant ratings and short reviews that may be 
 non-Google map. Google Places forbids its content on other maps in the EEA, Yelp forbids
 AI use, Tripadvisor's content API is partner-only. Foursquare's Places API has a free
 monthly allowance (sign up at https://foursquare.com/developers/, create a project, copy the
-API key). Put it in `.env.local` and Vercel as `FOURSQUARE_API_KEY`. The planner then
+API key). Put it in `.env.local` and Vercel as `FOURSQUARE_API_KEY`. **Then open
+https://foursquare.com/developers/orgs → your organisation → billing and enable automatic
+payments (or add credits): a new organisation answers every call with "no API credits" until
+then, even inside the free allowance.** The planner then
 checks every "where to eat" it names (rating, price tier, the top tips) instead of relying on
 memory.
 

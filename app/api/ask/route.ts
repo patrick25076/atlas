@@ -10,6 +10,8 @@ import visaJson from "@/public/data/visa.json";
 import airportsJson from "@/public/data/airports.json";
 import { nearestGateways } from "@/lib/geo";
 import { reachFrom } from "@/lib/ground";
+import { hasTavily, webSearch } from "@/lib/tavily";
+import { goodValueEats, hasFoursquare, sweetsNear } from "@/lib/foursquare";
 import { expandWeather, visaFor, type Airport, type City, type CityPlaces, type CountryInfo, type Deal, type VisaFile, type WeatherCompact } from "@/lib/types";
 
 // POST /api/ask { question, home?: "RO", gateways?: ["OTP"], month?, origin? } → a short answer
@@ -202,14 +204,46 @@ export async function POST(request: Request) {
     }),
   };
 
+  const findCity = (name: string) => {
+    const q = name.toLowerCase();
+    return Object.entries(CITIES).find(([, c]) => c.name.toLowerCase() === q) ?? Object.entries(CITIES).find(([, c]) => c.name.toLowerCase().includes(q));
+  };
+  const liveTools = {
+    ...(hasTavily()
+      ? {
+          web_search: tool({
+            description: "Search the live web for current recommendations: best traditional food and where locals eat, ice cream, events this month, how to do a loop or a cruise, prices. Returns page snippets with their sources.",
+            inputSchema: jsonSchema<{ query: string }>({ type: "object", properties: { query: { type: "string" } }, required: ["query"] }),
+            execute: async ({ query }) => (await webSearch(query, 4)).map((h) => ({ title: h.title, source: h.url, snippet: h.content.slice(0, 500) })),
+          }),
+        }
+      : {}),
+    ...(hasFoursquare()
+      ? {
+          eats_near: tool({
+            description: "Rated restaurants near a city centre that are good value (rating 8+/10, price tier 1 or 2), plus the best sweet places. Use for 'where should I eat in X' and 'best ice cream in X'.",
+            inputSchema: jsonSchema<{ city: string; sweet?: boolean }>({ type: "object", properties: { city: { type: "string" }, sweet: { type: "boolean" } }, required: ["city"] }),
+            execute: async ({ city, sweet }) => {
+              const entry = findCity(city);
+              if (!entry) return { error: `no city named ${city}` };
+              const [, c] = entry;
+              const r = sweet ? await sweetsNear(c.lat, c.lon) : await goodValueEats(c.lat, c.lon);
+              if (r.status !== "ok") return { error: r.note ?? r.status };
+              return r.places.map((p) => ({ name: p.name, rating: p.rating, price: "€".repeat(p.price ?? 1), category: p.category, address: p.address, tip: p.tip }));
+            },
+          }),
+        }
+      : {}),
+  };
+
   try {
     const result = await generateText({
       model,
-      system: `You are Atlas, a travel concierge for someone${origin ? ` in ${origin.label}` : ""} (passport ${home}). Their home airports with searched prices: ${DEALS.gateways.join(", ")}. Answer in at most four short sentences, plain words, no bullet lists. Only state prices, dates, times and facts that the tools returned; never invent a price. Deal prices are return fares found on Kiwi.com on ${DEALS.updated.slice(0, 10)} and can change; ground times are estimates, not timetables. When you recommend deals, name the city, the price and the dates. If nothing in the data fits, say so and suggest the closest thing.`,
+      system: `You are Atlas, a travel concierge for someone${origin ? ` in ${origin.label}` : ""} (passport ${home}). Their home airports with searched prices: ${DEALS.gateways.join(", ")}. Answer in at most five short sentences, plain words, no bullet lists. Only state prices, dates, times and facts that the tools returned; never invent a price. Deal prices are return fares found on Kiwi.com on ${DEALS.updated.slice(0, 10)} and can change; ground times are estimates, not timetables. When you recommend deals, name the city, the price and the dates.${hasFoursquare() ? " For restaurants use eats_near and quote the rating." : ""}${hasTavily() ? " For anything current (what to eat, what is on, how to do something) use web_search and name the source site." : ""} If nothing in the data fits, say so and suggest the closest thing.`,
       prompt: question,
-      tools,
-      stopWhen: stepCountIs(4),
-      maxOutputTokens: 400,
+      tools: { ...tools, ...liveTools },
+      stopWhen: stepCountIs(5),
+      maxOutputTokens: 500,
     });
     return NextResponse.json({ status: "ok", text: result.text, used: [...used.keys()] });
   } catch (err) {

@@ -57,10 +57,20 @@ Warsaw, train to Gdańsk, fly home; hidden gems; an impeccable globe. Here is wh
    Kuala Selangor, a Minangkabau homestay near Padang, Pulau Ubin by bicycle, rendang and
    soto Padang, and priced a month in Singapore at €3,750 against €650 in Padang.
 
-**Food with live reviews** is the one thing that needs a key: the only legal sources of
+**Food with live reviews** needed keys; see item 10 for what is wired now. Original note: the only legal sources of
 restaurant ratings for a non-Google map are Foursquare Places (free tier, SETUP §13) or a
 search key for the planner to read reviews live (Brave or Tavily, free tiers, SETUP §14).
 Until then the planner leans on the guides and marks the rest "verify".
+
+10. **Keys wired (10 October, afternoon).** Tavily: the planner now researches every stop live
+    (two searches each) and the Ask agent has a web_search tool, so "best ice cream in Lisbon,
+    traditional dish without tourist prices" comes back with named places, prices and the
+    source sites. Foursquare: "Eat well, fairly priced" on every deal page and rated places in
+    the plan, as soon as you enable billing on the Foursquare org page (the API says "no
+    credits" until then). LiteAPI: hotel prices on deal pages, hidden until the production key
+    (sandbox prices are test data). Travelpayouts Drive script is live and the marker is set;
+    the API token is still missing. The running list of what is done and what is still needed
+    is `docs/TODO.md`.
 
 **Numbers:** ~150 airport boards, each 50 to 100 deals to 30 to 50 cities; 2,549 cities with a
 fame score; 20 event feeds; combos in 10 seconds; the nightly boards job ran once (8 runners,
