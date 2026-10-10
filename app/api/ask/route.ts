@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { generateText, jsonSchema, stepCountIs, tool } from "ai";
 import { createAmazonBedrock } from "@ai-sdk/amazon-bedrock";
-import dealsJson from "@/public/data/deals.json";
+import { dealsFor } from "@/lib/deals-source";
 import citiesJson from "@/public/data/cities.json";
 import countriesJson from "@/public/data/countries.json";
 import cityPlacesJson from "@/public/data/city-places.json";
@@ -10,12 +10,12 @@ import visaJson from "@/public/data/visa.json";
 import airportsJson from "@/public/data/airports.json";
 import { nearestGateways } from "@/lib/geo";
 import { reachFrom } from "@/lib/ground";
-import { expandWeather, visaFor, type Airport, type City, type CityPlaces, type CountryInfo, type Deal, type DealsFile, type VisaFile, type WeatherCompact } from "@/lib/types";
+import { expandWeather, visaFor, type Airport, type City, type CityPlaces, type CountryInfo, type Deal, type VisaFile, type WeatherCompact } from "@/lib/types";
 
-// POST /api/ask { question, home?: "RO" } → a short answer grounded in the deals file and the
-// place facts, plus the deals it used so the UI can highlight them. Runs on Bedrock with the
-// bearer token from the environment (AWS_BEARER_TOKEN_BEDROCK); says so when there is none.
-const DEALS = dealsJson as unknown as DealsFile;
+// POST /api/ask { question, home?: "RO", gateways?: ["OTP"], month?, origin? } → a short answer
+// grounded in the visitor's boards and the place facts, plus the deals it used so the UI can
+// highlight them. Runs on Bedrock with the bearer token from the environment
+// (AWS_BEARER_TOKEN_BEDROCK); says so when there is none.
 const CITIES = citiesJson as unknown as Record<string, City>;
 const COUNTRIES = countriesJson as unknown as Record<string, CountryInfo>;
 const PLACES = cityPlacesJson as unknown as Record<string, CityPlaces>;
@@ -57,7 +57,7 @@ export async function POST(request: Request) {
   const ip = request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || "local";
   if (limited(ip)) return NextResponse.json({ status: "error", note: "Too many questions this hour.", text: "", used: [] }, { status: 429 });
 
-  let body: { question?: string; home?: string; origin?: { lat?: number; lon?: number; label?: string } };
+  let body: { question?: string; home?: string; gateways?: string[]; month?: string; origin?: { lat?: number; lon?: number; label?: string } };
   try {
     body = await request.json();
   } catch {
@@ -70,6 +70,8 @@ export async function POST(request: Request) {
     body.origin && Number.isFinite(body.origin.lat) && Number.isFinite(body.origin.lon)
       ? { lat: body.origin.lat!, lon: body.origin.lon!, label: body.origin.label?.slice(0, 60) || "their location" }
       : null;
+  const month = body.month && /^\d{4}-\d{2}$/.test(body.month) ? body.month : undefined;
+  const DEALS = await dealsFor(Array.isArray(body.gateways) ? body.gateways.map(String) : [], month);
 
   const used = new Map<string, Deal>();
   // Values pasted into env UIs often carry a newline; trim both.
@@ -93,7 +95,8 @@ export async function POST(request: Request) {
           size: g.airport.size,
           driveMinutes: g.driveMin,
           km: Math.round(g.km),
-          dealsFromHere: DEALS.deals.filter((d) => d.gw === g.airport.iata).length,
+          dealsFromHere: DEALS.deals.filter((d) => d.gw === g.airport.iata).length || undefined,
+          boardSearched: DEALS.gateways.includes(g.airport.iata),
         }));
       },
     }),
@@ -202,7 +205,7 @@ export async function POST(request: Request) {
   try {
     const result = await generateText({
       model,
-      system: `You are Atlas, a travel concierge for someone${origin ? ` in ${origin.label}` : " in Romania"} (passport ${home}). Answer in at most four short sentences, plain words, no bullet lists. Only state prices, dates, times and facts that the tools returned; never invent a price. Deal prices are return fares found on Kiwi.com on ${DEALS.updated.slice(0, 10)} and can change; ground times are estimates, not timetables. When you recommend deals, name the city, the price and the dates. If nothing in the data fits, say so and suggest the closest thing.`,
+      system: `You are Atlas, a travel concierge for someone${origin ? ` in ${origin.label}` : ""} (passport ${home}). Their home airports with searched prices: ${DEALS.gateways.join(", ")}. Answer in at most four short sentences, plain words, no bullet lists. Only state prices, dates, times and facts that the tools returned; never invent a price. Deal prices are return fares found on Kiwi.com on ${DEALS.updated.slice(0, 10)} and can change; ground times are estimates, not timetables. When you recommend deals, name the city, the price and the dates. If nothing in the data fits, say so and suggest the closest thing.`,
       prompt: question,
       tools,
       stopWhen: stepCountIs(4),

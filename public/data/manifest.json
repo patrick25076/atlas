@@ -223,5 +223,14 @@
     "fetchedAt": "2026-10-09T23:05:28.505Z",
     "rows": 4201,
     "file": "public/data/oneway.json"
+  },
+  "fame": {
+    "source": "Wikimedia pageviews (English Wikipedia, 12 months) + Wikivoyage listing counts",
+    "url": "https://wikimedia.org/api/rest_v1/",
+    "licence": "Wikimedia metrics CC0; Wikivoyage CC BY-SA 4.0 (counts only)",
+    "note": "202510 to 202609; -1 where a value is unknown.",
+    "fetchedAt": "2026-10-10T06:52:07.489Z",
+    "rows": 2549,
+    "file": "public/data/fame.json"
   }
 }
