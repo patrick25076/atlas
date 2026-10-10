@@ -8,10 +8,10 @@ _Written for: Patrick, five minutes, coffee in hand._
 ## What it does now
 
 1. **Deals** (the home tab). The cheapest return getaways for the next six weeks, 2 to 7
-   nights, from Bucharest, Cluj, Iași and Timișoara (Brașov, Sibiu and Craiova are in the
-   nightly search too; Kiwi blocked my IP for a while last night before they finished, so
-   they appear with the first scheduled run). Real prices and booking links from Kiwi.com,
-   searched every night. Tonight's board: Venice
+   nights, from Bucharest, Cluj, Iași, Timișoara, Brașov, Sibiu and Craiova: 2,201 of them,
+   real prices and booking links from Kiwi.com, searched every night from GitHub's runners
+   (the first automated run completed at 02:57 your time). From Brașov airport: Budapest
+   €44, Milan €45, Rome €49. From Craiova: Bari €27, Bologna €34. From Bucharest: Venice
    €32, Milan €37, Gdańsk €38, Tirana €38, Bologna €39, all direct. Cards show a photo, price,
    dates, airline, flight time and a reason to go. Filters: nights, direct only, warm this
    weekend, home airport (nearest to you first).
@@ -92,6 +92,7 @@ live site they also go into Vercel → Settings → Environment Variables → Pr
 
 ## Numbers, for the record
 
-22 data sources, 13 commits tonight, 1,287 return deals + 4,201 one-way fares searched,
-2,805 cities with weather, 2,707 with place counts, 12,959 stations, 3,507 ferries, 1,887
-World Heritage sites, 253 countries of facts, 199 passports of visa rules.
+22 data sources, 30 commits tonight, 2,201 return deals (7 airports × 117 cities) + 4,201
+one-way fares searched, 2,805 cities with weather, 2,707 with place counts, 12,959 stations,
+3,507 ferries, 1,887 World Heritage sites, 253 countries of facts, 199 passports of visa
+rules. The nightly refresh ran once on its own and committed; the next is at 06:15 your time.
