@@ -693,7 +693,7 @@
 	{"iata":"MCT","icao":"OOMS","name":"Muscat International Airport","city":"Muscat/Seeb","country":"OM","region":"OM-MA","size":"large","lat":23.6002,"lon":58.2853},
 	{"iata":"MWZ","icao":"HTMW","name":"Mwanza International Airport","city":"Mwanza","country":"TZ","region":"TZ-18","size":"large","lat":-2.4466,"lon":32.936},
 	{"iata":"MYR","icao":"KMYR","name":"Myrtle Beach International Airport","city":"Myrtle Beach","country":"US","region":"US-SC","size":"large","lat":33.6797,"lon":-78.9283},
-	{"iata":"AGP","icao":"LEMG","name":"Málaga-Costa del Sol Airport","city":"Málaga","country":"ES","region":"ES-AN","size":"large","lat":36.6749,"lon":-4.4991},
+	{"iata":"AGP","icao":"LEMG","name":"Málaga-Costa del Sol Airport","city":"Málaga","country":"ES","region":"ES-AN","size":"large","lat":36.6782,"lon":-4.5002},
 	{"iata":"FMO","icao":"EDDG","name":"Münster Osnabrück Airport","city":"Greven","country":"DE","region":"DE-NW","size":"large","lat":52.1338,"lon":7.6885},
 	{"iata":"NDJ","icao":"FTTJ","name":"N'Djamena International Airport","city":"N'Djamena","country":"TD","region":"TD-ND","size":"large","lat":12.1337,"lon":15.034},
 	{"iata":"NAN","icao":"NFFN","name":"Nadi International Airport","city":"Nadi","country":"FJ","region":"FJ-W","size":"large","lat":-17.7618,"lon":177.4378},
