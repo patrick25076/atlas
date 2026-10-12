@@ -526,7 +526,7 @@ export async function runSearch(q: SearchQuery, emit: (line: SearchLine) => void
   if (hit) {
     if (hit.graph) emit({ graph: true });
     const shown = rank(applyFilters(hit.pool, q.filters, been), plan.rate).slice(0, MAX_RESULTS);
-    step("memo", `Answered from the 30-minute memo: ${shown.length} trips, no engine ran`);
+    step("memo", `Answered from this server's memo (answers stand an hour): ${shown.length} trips, no engine ran`);
     if (shown.length) emit({ results: shown });
     return finishFrom(hit);
   }
