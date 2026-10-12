@@ -255,3 +255,15 @@ The daily caps (`lib/usage-caps.ts`) need nothing from you: with `DATABASE_URL` 
 counted in the `usage_daily` table. Raise one with `ATLAS_CAP_<KIND>` on Vercel if the real
 traffic outgrows it (defaults: chat turns 400, model calls 250, Tavily 250, Foursquare 250,
 LiteAPI 400 a day).
+
+## 17. Reconnect Vercel to GitHub (pushes stopped deploying on 12 October)
+
+Since commit 2eaec90 a push to `main` no longer starts a Vercel build (GitHub shows no deployment for the
+commits after it; one attempt failed with `git_info_fail`). Until this is fixed, each deploy is started by hand
+from the exact commit on GitHub (Claude does it with `vercel api /v13/deployments` and a `gitSource`).
+
+1. Vercel → project **atlas** → Settings → Git. If the repository shows as disconnected, connect
+   `patrick25076/atlas` again, production branch `main`.
+2. GitHub → Settings → Applications → Vercel → Configure: make sure the app still has access to the `atlas`
+   repository (it became public on 10 October; access set to "selected repositories" can drop it).
+3. Push any small commit and check that a deployment appears under the commit on GitHub within a minute.
