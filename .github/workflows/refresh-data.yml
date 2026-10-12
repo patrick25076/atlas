@@ -19,14 +19,14 @@ on:
         description: "Which set to refresh"
         type: choice
         default: daily
-        options: [daily, weekly, monthly, boards, hotels, all]
+        options: [daily, weekly, monthly, boards, hotels, flights, all]
 
 permissions:
   contents: write
 
 jobs:
   refresh:
-    if: github.event.schedule != '0 1 * * *' && inputs.set != 'boards' && inputs.set != 'hotels'
+    if: github.event.schedule != '0 1 * * *' && inputs.set != 'boards' && inputs.set != 'hotels' && inputs.set != 'flights'
     runs-on: ubuntu-latest
     timeout-minutes: 90
     concurrency:
@@ -130,6 +130,40 @@ jobs:
           BLOB_READ_WRITE_TOKEN: ${{ secrets.BLOB_READ_WRITE_TOKEN }}
           BOARDS_SHARD: ${{ matrix.shard }}/8
         run: pnpm ingest:boards
+
+  # The flight graph (docs/plans/flight-graph.md): 164 airports, one one-way "anywhere"
+  # search per 3-day bucket for six weeks, every itinerary an edge, written to Blob as
+  # graph/flights/<date>/shard-<i>.json with graph/flights/latest.json naming the shards. Eight
+  # shards on eight runners (eight addresses), about 290 searches each (2,296 a night), so no address comes near
+  # Kiwi's limit. Same nightly cron as the boards and needs nothing: each runner has its own
+  # address, so running beside the boards costs neither of them a search. DATABASE_URL lets every
+  # search also land in the fare memory, as every live search does.
+  flight-edges:
+    if: github.event.schedule == '0 1 * * *' || inputs.set == 'flights' || inputs.set == 'all'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5, 6, 7]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.9.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Search one-way edges and store the shard
+        env:
+          BLOB_READ_WRITE_TOKEN: ${{ secrets.BLOB_READ_WRITE_TOKEN }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          FLIGHT_SHARD: ${{ matrix.shard }}/8
+          # Only this job writes where the site reads; any other run is a test under graph/flights/test-<date>/.
+          FLIGHT_PRODUCTION: "1"
+        run: pnpm ingest:flight-edges
 
   # The hotel snapshot: 80 cities, two LiteAPI calls each, one standard weekend four weeks
   # out, into Blob (hotels/snapshot-<date>.json, hotels/latest.json) and into Postgres when
