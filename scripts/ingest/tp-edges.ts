@@ -11,10 +11,11 @@
 //        TP_ORIGINS=HAN,BUD TP_MONTHS=1 pnpm ingest:tp-edges   (a test: writes graph/tp/test-<date>.json only)
 // Knobs: TP_TOP (places kept a city and month, default 80), TP_PAUSE_MS (default 180), TP_CONCURRENCY (default 3).
 import citiesJson from "../../public/data/cities.json";
+import airportsJson from "../../public/data/airports.json";
 import { hubDegree, popularGateways } from "../../lib/board";
 import { hasStore, writeJson } from "../../lib/boards-store";
 import { encodeShard, type RawEdge } from "../../lib/flight-graph";
-import { bookingUrl } from "../../lib/travelpayouts";
+import { tpEdge } from "../../lib/tp-map";
 import { REGIONS } from "../../lib/wild";
 import type { City } from "../../lib/types";
 
@@ -62,7 +63,22 @@ else {
       regionHubs.push(...top);
     }
   }
-  origins = [...new Set([...HOME_AIRPORTS, ...popularGateways(150), ...regionHubs])];
+  // And the world: the biggest city of every country with a real airport, so no country is only ever a destination
+  // (Asuncion, Montevideo and Baku had flights in and none out on 12 October).
+  // Per country, its two biggest cities with a large airport (by flights, then by large airports): the route data
+  // under-rates some capitals (Bishkek had one place to fly on to), the airport list does not.
+  const large = new Map<string, number>();
+  for (const a of airportsJson as unknown as { iata: string; size?: string }[]) {
+    if (a.size !== "large") continue;
+    const c = CITY_OF.get(a.iata);
+    const k = c ? Object.keys(CITIES).find((x) => CITIES[x] === c) : undefined;
+    if (k) large.set(k, (large.get(k) ?? 0) + 1);
+  }
+  const byCountry = new Map<string, string[]>();
+  for (const k of large.keys()) byCountry.set(CITIES[k].country, [...(byCountry.get(CITIES[k].country) ?? []), k]);
+  const world: string[] = [];
+  for (const list of byCountry.values()) world.push(...list.sort((a, b) => hubDegree(b) - hubDegree(a) || (large.get(b) ?? 0) - (large.get(a) ?? 0)).slice(0, 2));
+  origins = [...new Set([...HOME_AIRPORTS, ...popularGateways(150), ...regionHubs, ...world])];
 }
 const months: string[] = [];
 {
@@ -101,27 +117,10 @@ async function ask(origin: string, month: string, grouped: boolean): Promise<Raw
   return [];
 }
 
-/** A Travelpayouts row as an edge of the map: the local departure day and time, the landing day, the seen time. */
-function edgeOf(r: Raw, origin: string): RawEdge | null {
-  const at = str(r.depart_date) || str(r.departure_at);
-  const to = str(r.destination_airport) || str(r.destination);
-  const from = str(r.origin_airport) || str(r.origin) || origin;
-  const price = num(r.value ?? r.price);
-  if (!/^\d{4}-\d{2}-\d{2}/.test(at) || !/^[A-Z]{3}$/.test(to) || !/^[A-Z]{3}$/.test(from) || from === to || !(price > 0)) return null;
-  const d = at.slice(0, 10);
-  if (d < today) return null;
-  const h = /T(\d{2}:\d{2})/.exec(at)?.[1] ?? "";
-  const minutes = Math.max(0, Math.round(num(r.duration ?? r.duration_to) || 0));
-  // The landing day: the local departure plus the flight, the clock shifted by the longitude between the two.
-  const a1 = CITIES[from] ?? CITY_OF.get(from);
-  const a2 = CITIES[to] ?? CITY_OF.get(to);
-  const shiftH = a1 && a2 ? (((a2.lon - a1.lon + 540) % 360) - 180) / 15 : 0;
-  const depH = h ? Number(h.slice(0, 2)) + Number(h.slice(3)) / 60 : 12;
-  const arrive = new Date(Date.parse(d + "T00:00:00Z") + Math.floor((depH + minutes / 60 + shiftH) / 24) * 86_400_000).toISOString().slice(0, 10);
-  return { f: from, t: to, d, h, a: arrive < d ? d : arrive, p: Math.round(price), m: minutes, s: Math.max(0, Math.round(num(r.number_of_changes ?? r.transfers) || 0)), c: str(r.airline), u: bookingUrl(str(r.link), from, to, at), w: str(r.found_at) || new Date().toISOString() };
-}
 
 const edges: RawEdge[] = [];
+/** Indexes of the edges that came from a month's cheapest-per-place answer (not a day's own cheapest). */
+const month: number[] = [];
 const seen = new Set<string>();
 const perOrigin = new Map<string, number>();
 const t0 = Date.now();
@@ -132,11 +131,13 @@ async function worker() {
     const t = tasks[next++];
     const rows = await ask(t.o, t.m, t.grouped);
     // Cheapest first; for the grouped answer the TOP cheapest places, for the daily one every day.
-    const kept = (t.grouped ? rows.slice(0, TOP) : rows).map((r) => edgeOf(r, t.o)).filter((e): e is RawEdge => !!e);
+    const kept = (t.grouped ? rows.slice(0, TOP) : rows).map((r) => tpEdge(r, t.o, today)).filter((e): e is RawEdge => !!e);
     for (const e of kept) {
       const k = `${e.f}|${e.t}|${e.d}`;
       if (seen.has(k)) continue;
       seen.add(k);
+      // The month's cheapest to a place (the grouped answer) is one day of the month: the map offers it a day either side.
+      if (t.grouped) month.push(edges.length);
       edges.push(e);
       perOrigin.set(t.o, (perOrigin.get(t.o) ?? 0) + 1);
     }
@@ -146,7 +147,7 @@ async function worker() {
 await Promise.all(Array.from({ length: CONCURRENCY }, worker));
 
 const generatedAt = new Date().toISOString();
-const body = encodeShard(edges, { generatedAt, date: today, shard: "tp", airports: origins, searched: calls, failed, window: { from: months[0], to: months.at(-1)! }, bucket: 0 });
+const body = { ...encodeShard(edges, { generatedAt, date: today, shard: "tp", airports: origins, searched: calls, failed, window: { from: months[0], to: months.at(-1)! }, bucket: 0 }), month };
 const path = TEST ? `${TP_ROOT}/test-${today}.json` : `${TP_ROOT}/latest.json`;
 await writeJson(path, body);
 if (!TEST) await writeJson(`${TP_ROOT}/${today}.json`, body);

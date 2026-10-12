@@ -61,7 +61,7 @@ export const REGIONS = {
   "southern-africa": { label: "Southern Africa", countries: [["ZA", "South Africa"], ["NA", "Namibia"], ["BW", "Botswana"], ["ZW", "Zimbabwe"], ["MU", "Mauritius"]] },
   americas: { label: "North and Central America", countries: [["US", "United States"], ["MX", "Mexico"], ["CU", "Cuba"], ["CR", "Costa Rica"], ["GT", "Guatemala"], ["CA", "Canada"]] },
   caribbean: { label: "Caribbean", countries: [["CU", "Cuba"], ["DO", "Dominican Republic"], ["JM", "Jamaica"], ["PR", "Puerto Rico"], ["CW", "Curaçao"]] },
-  "south-america": { label: "South America", countries: [["BR", "Brazil"], ["AR", "Argentina"], ["CL", "Chile"], ["PE", "Peru"], ["CO", "Colombia"], ["BO", "Bolivia"], ["EC", "Ecuador"]] },
+  "south-america": { label: "South America", countries: [["BR", "Brazil"], ["AR", "Argentina"], ["CL", "Chile"], ["PE", "Peru"], ["CO", "Colombia"], ["BO", "Bolivia"], ["EC", "Ecuador"], ["PY", "Paraguay"], ["UY", "Uruguay"]] },
   oceania: { label: "Australia and the Pacific", countries: [["AU", "Australia"], ["NZ", "New Zealand"], ["FJ", "Fiji"]] },
   /** Any set of countries anywhere, given with `countries`; the engine refuses it without one. */
   custom: { label: "Custom countries", countries: [] },

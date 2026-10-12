@@ -33,6 +33,8 @@ export type SearchQuery = {
   nights?: [number, number];
   oneWay?: boolean;
   shape?: "any" | "return" | "two" | "loop" | "long";
+  /** Places every trip must stay in, by name (Samarkand, Machu Picchu), three at the most. */
+  must?: string[];
   advanced?: {
     wild?: { region: string; nights: number };
     longStay?: { months: number };
@@ -740,8 +742,9 @@ export function parseSearchQuery(raw: unknown): Parsed {
     const code = typeof t.code === "string" && ISO2.test(t.code.trim().toUpperCase()) ? t.code.trim().toUpperCase() : undefined;
     to = { kind: "country", name, ...(code ? { code } : {}) };
   } else if (t.kind === "region") {
-    const key = typeof t.key === "string" && /^[a-z][a-z -]{1,30}$/.test(t.key.trim().toLowerCase()) ? t.key.trim().toLowerCase() : null;
-    if (!key) return { error: "to.key must be a region key, such as sea or balkans" };
+    // A region key (sea, balkans), or a few countries together: "countries:pe,bo" (Peru and Bolivia).
+    const key = typeof t.key === "string" && /^(?:[a-z][a-z -]{1,30}|countries:[a-z]{2}(?:,[a-z]{2}){1,11})$/.test(t.key.trim().toLowerCase()) ? t.key.trim().toLowerCase() : null;
+    if (!key) return { error: "to.key must be a region key, such as sea or balkans, or countries:pe,bo" };
     to = { kind: "region", key };
   } else return { error: "to.kind must be anywhere, place, country or region" };
 
@@ -780,6 +783,11 @@ export function parseSearchQuery(raw: unknown): Parsed {
   if (q.shape != null) {
     if (!(SHAPES as readonly unknown[]).includes(q.shape)) return { error: `shape must be one of ${SHAPES.join(", ")}` };
     query.shape = q.shape as SearchQuery["shape"];
+  }
+  if (q.must != null) {
+    const list = Array.isArray(q.must) ? q.must.map((x) => text(x)).filter((x): x is string => !!x && x.length <= 60) : [];
+    if (!list.length || list.length > 3) return { error: "must is one to three place names" };
+    query.must = [...new Set(list)];
   }
   const adv = obj(q.advanced);
   if (adv) {
@@ -864,6 +872,7 @@ export function searchQueryToParams(q: SearchQuery): string {
   if (q.nights) p.set("nights", `${q.nights[0]}-${q.nights[1]}`);
   if (q.oneWay) p.set("oneway", "1");
   if (q.shape && q.shape !== "any") p.set("shape", q.shape);
+  if (q.must?.length) p.set("must", q.must.join("|"));
   if (q.advanced && Object.keys(q.advanced).length) p.set("adv", JSON.stringify(q.advanced));
   if (q.filters && Object.keys(q.filters).length) p.set("f", JSON.stringify(q.filters));
   if (q.budget != null) p.set("b", String(q.budget));
@@ -902,6 +911,7 @@ export function searchQueryFromParams(s: string): SearchQuery | null {
     if (nights) raw.nights = [Number(nights[1]), Number(nights[2])];
     if (p.get("oneway") === "1") raw.oneWay = true;
     if (p.get("shape")) raw.shape = p.get("shape");
+    if (p.get("must")) raw.must = p.get("must")!.split("|");
     if (p.get("adv")) raw.advanced = JSON.parse(p.get("adv")!);
     if (p.get("f")) raw.filters = JSON.parse(p.get("f")!);
     if (p.get("b")) raw.budget = Number(p.get("b"));

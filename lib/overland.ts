@@ -5,6 +5,7 @@
 // both ways) at the middle of its fare range, marked as a typical fare, never a quote. A town with no airport
 // (Ninh Binh, Hoi An, Vang Vieng, Kotor) gets a code of its own ("~ninh-binh") so a trip can stop there.
 import data from "@/public/data/overland.json";
+import more from "@/public/data/overland-more.json";
 
 type End = { name: string; code: string | null; country: string; lat: number; lon: number };
 type Raw = { from: End; to: End; mode: "train" | "coach" | "ferry" | "van"; minutes: number; priceEur: [number, number]; both: boolean; operator: string; book: string; note: string; sources: string[]; confidence: "high" | "medium" | "low" };
@@ -12,7 +13,12 @@ type Raw = { from: End; to: End; mode: "train" | "coach" | "ferry" | "van"; minu
 export type OverlandLink = { from: string; to: string; mode: "train" | "coach" | "ferry"; minutes: number; price: number; low: number; high: number; operator: string; book: string; note: string; confidence: Raw["confidence"]; overnight: boolean };
 export type OverlandTown = { code: string; name: string; country: string; lat: number; lon: number };
 
-const raw = (data as unknown as { links: Raw[]; generated?: string }).links ?? [];
+// Two files: the first round (Southeast Asia, Balkans, Turkey, Caucasus, Central Asia, Morocco) and the second
+// (South and Central America, Mexico, the Caucasus and Central Asia filled in, South and East Asia, the Middle East and
+// East Africa). A pair in both keeps the first.
+const first = (data as unknown as { links: Raw[] }).links ?? [];
+const firstPairs = new Set(first.map((r) => `${r.from.code ?? r.from.name}>${r.to.code ?? r.to.name}`));
+const raw = [...first, ...((more as unknown as { links: Raw[] }).links ?? []).filter((r) => !firstPairs.has(`${r.from.code ?? r.from.name}>${r.to.code ?? r.to.name}`))];
 export const OVERLAND_GENERATED: string = (data as unknown as { generated?: string }).generated ?? "";
 /** A trip this long on board is taken overnight: it leaves in the evening and lands the next day. */
 const OVERNIGHT_MIN = 8 * 60;
@@ -20,7 +26,7 @@ const OVERNIGHT_MIN = 8 * 60;
 const slug = (s: string) =>
   s
     .normalize("NFKD")
-    .replace(/[̀-ͯ]/g, "")
+    .replace(/[\u0300-\u036f]/g, "")
     .toLowerCase()
     .replace(/\(.*?\)/g, "")
     .trim()
@@ -28,10 +34,16 @@ const slug = (s: string) =>
     .replace(/^-|-$/g, "");
 
 const towns = new Map<string, OverlandTown>();
+/** A town by its name and by the name in its brackets ("Aguas Calientes (Machu Picchu)" is both), slugged. */
+const townByName = new Map<string, OverlandTown>();
 const codeOf = (e: End): string => {
   if (e.code) return e.code;
   const code = `~${slug(e.name)}`;
-  if (!towns.has(code)) towns.set(code, { code, name: e.name.replace(/\s*\(.*?\)\s*/g, " ").trim(), country: e.country, lat: e.lat, lon: e.lon });
+  if (!towns.has(code)) {
+    const t: OverlandTown = { code, name: e.name.replace(/\s*\(.*?\)\s*/g, " ").trim(), country: e.country, lat: e.lat, lon: e.lon };
+    towns.set(code, t);
+    for (const n of [t.name, /\((.*?)\)/.exec(e.name)?.[1] ?? ""]) if (n && !townByName.has(slug(n))) townByName.set(slug(n), t);
+  }
   return code;
 };
 
@@ -50,6 +62,11 @@ for (const r of raw) {
 /** A town an overland link reaches, by its code ("~ninh-binh"); undefined for anything else. */
 export function overlandTown(code: string): OverlandTown | undefined {
   return towns.get(code);
+}
+
+/** A town an overland link reaches, by its name or the name in its brackets ("Ella", "Kazbegi", "Stepantsminda"). */
+export function overlandTownNamed(name: string): OverlandTown | undefined {
+  return townByName.get(slug(name));
 }
 
 /** The links leaving a place (a city code or a town code). */

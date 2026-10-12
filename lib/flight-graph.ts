@@ -19,6 +19,7 @@
 // caller confirms the winners live before anyone books.
 import citiesJson from "@/public/data/cities.json";
 import { OVERLAND, OVERLAND_GENERATED, overlandArrival, overlandTown } from "./overland";
+import { bookingUrl } from "./travelpayouts";
 import countriesJson from "@/public/data/countries.json";
 import { head } from "@vercel/blob";
 import postgres from "postgres";
@@ -134,8 +135,11 @@ const CACHE_MS = 10 * 60_000;
 /** The nightly Travelpayouts map (scripts/ingest/tp-edges.ts) and what a fare costs a day off the day it was seen. */
 const TP_LATEST = "graph/tp/latest.json";
 const TP_FLEX_EURO = 4;
-/** Days ahead the overland links are laid out for, every day. */
-const OVERLAND_DAYS = 100;
+/**
+ * Days ahead the overland links are laid out for, every day: the search's whole horizon (anytime is six months), or a
+ * March trip to Japan has no Tokyo to Kyoto train and no Kyoto (measured 2026-10-12 at 100 days).
+ */
+const OVERLAND_DAYS = 200;
 const THIN_CACHE_MS = 60_000;
 const graphCache = new TtlLru<FlightGraph>(2, CACHE_MS);
 const graphLoads = new InFlight<FlightGraph>();
@@ -296,7 +300,11 @@ async function buildGraph(root: string): Promise<FlightGraph> {
   if (tpShard) {
     const tp = decodeShard(tpShard.shard);
     for (const e of tp) if (!best.has(`${e.f}|${e.t}|${e.d}`)) add(e, "tp");
-    for (const e of tp) {
+    // Only a month's cheapest fare to a place is moved a day either side; a day's own cheapest is that day's (older
+    // files mark nothing, and then every fare is moved, as before).
+    const monthRows = (tpShard.shard as FlightShard & { month?: number[] }).month;
+    const moved = monthRows ? monthRows.map((i) => tp[i]).filter(Boolean) : tp;
+    for (const e of moved) {
       for (const off of [-1, 1]) {
         const d = dayIso(dayNum(e.d) + off);
         const key = `${e.f}|${e.t}|${d}`;
@@ -344,6 +352,59 @@ async function buildGraph(root: string): Promise<FlightGraph> {
   };
   console.log(`flight graph: ${edges.length} edges (${fromGraph} graph from ${shards.length} shards of ${date || "none"}, ${fromMemory} memory, ${fromTp} Travelpayouts, ${fromOverland} overland), ${(g.bytes / 1024).toFixed(0)} KB, ${g.loadMs} ms`);
   return g;
+}
+
+/** The keys (from airport, to airport, day) a graph holds, built once per graph. */
+const keySets = new WeakMap<FlightGraph, Set<string>>();
+const overlays = new Map<string, { at: number; g: FlightGraph }>();
+/**
+ * The graph with a search's own extra fares laid over it (lib/tp-map.ts homeFares: the ways out of and into the
+ * traveller's home cities; or, as src "memory", the live fares a thin search asked Kiwi for), never over a fare the
+ * graph already holds for that flight and day; a month's cheapest fare is offered a day either side, as the nightly
+ * ones are. The graph itself is not touched: the edges are appended and only the day lists that gain an edge are
+ * copied. Kept ten minutes per graph and set of extras.
+ */
+export function withExtraEdges(g: FlightGraph, extra: { edges: RawEdge[]; month: boolean[] }, tag: string, src: "tp" | "memory" = "tp"): FlightGraph {
+  if (!extra.edges.length) return g;
+  const key = `${g.loadedAt}|${g.edges.length}|${tag}`;
+  const hit = overlays.get(key);
+  if (hit && Date.now() - hit.at < CACHE_MS) return hit.g;
+  let have = keySets.get(g);
+  if (!have) {
+    have = new Set(g.edges.map((e) => `${e.f}|${e.t}|${e.d}`));
+    keySets.set(g, have);
+  }
+  const todayN = dayNum(new Date().toISOString());
+  const added: FlightEdge[] = [];
+  const mine = new Set<string>();
+  const put = (e: RawEdge, flex?: number) => {
+    const dn = dayNum(e.d);
+    const k = `${e.f}|${e.t}|${e.d}`;
+    if (dn < todayN || !(e.p > 0) || have!.has(k) || mine.has(k)) return;
+    mine.add(k);
+    added.push({ ...e, fc: airportCity(e.f), tc: airportCity(e.t), dn, an: Math.max(dn, dayNum(e.a || e.d)), src, ...(flex ? { flex } : {}) });
+  };
+  extra.edges.forEach((e) => put(e));
+  extra.edges.forEach((e, i) => {
+    if (!extra.month[i]) return;
+    for (const off of [-1, 1]) put({ ...e, d: dayIso(dayNum(e.d) + off), a: dayIso(dayNum(e.a || e.d) + off), p: e.p + TP_FLEX_EURO }, 1);
+  });
+  if (!added.length) return g;
+  const edges = g.edges.concat(added);
+  const byFromDay = new Map(g.byFromDay);
+  const touched = new Set<string>();
+  for (let i = g.edges.length; i < edges.length; i++) {
+    const k = `${edges[i].fc}|${edges[i].dn}`;
+    const list = touched.has(k) ? byFromDay.get(k)! : [...(byFromDay.get(k) ?? [])];
+    list.push(i);
+    byFromDay.set(k, list);
+    touched.add(k);
+  }
+  for (const k of touched) byFromDay.get(k)!.sort((a, b) => edges[a].p - edges[b].p);
+  const out: FlightGraph = { ...g, edges, byFromDay, ...(src === "tp" ? { fromTp: g.fromTp + added.length } : { fromMemory: g.fromMemory + added.length }), loadedAt: `${g.loadedAt}+${tag}` };
+  overlays.set(key, { at: Date.now(), g: out });
+  if (overlays.size > 30) overlays.delete(overlays.keys().next().value!);
+  return out;
 }
 
 /**
@@ -407,6 +468,10 @@ const groundPrice = (km: number) => Math.max(3, Math.round(km * EURO_PER_KM));
 type GroundLink = { code: string; minutes: number; mode: string; km: number };
 /** Ground reaches per city and limit, across requests: one is a Dijkstra over 16,000 stations (tens of ms). */
 const reachMemo = new TtlLru<GroundLink[]>(1024, 60 * 60_000);
+/** The ground reach if it is already known (memoised), without computing it. */
+function groundKnown(code: string, maxMinutes: number): GroundLink[] | undefined {
+  return reachMemo.get(`${code}|${maxMinutes}`);
+}
 function groundFrom(code: string, maxMinutes: number): GroundLink[] {
   const key = `${code}|${maxMinutes}`;
   const hit = reachMemo.get(key);
@@ -504,7 +569,7 @@ export type GraphLeg = {
 };
 export type GraphStop = { code: string; name: string; country: string; lat: number; lon: number; arrive: string; leave: string; nights: number };
 export type GraphTrip = { legs: GraphLeg[]; stops: GraphStop[]; total: number; flights: number; ground: number; hours: number; nights: number; start: string; end: string; why: string[] };
-export type TripsResult = { trips: GraphTrip[]; explored: number; /** Labels made, and the ms the A* bound took (traced runs read them). */ labels?: number; boundMs?: number; edges: number; graphDate: string; homeAirports: HomeAirport[]; ms: number; note?: string; truncated?: boolean };
+export type TripsResult = { trips: GraphTrip[]; explored: number; /** Labels made, and the ms the A* bound took (traced runs read them). */ labels?: number; boundMs?: number; /** Cities whose train and coach reach was not computed in time (GROUND_BUDGET_MS). */ groundSkipped?: number; edges: number; graphDate: string; homeAirports: HomeAirport[]; ms: number; note?: string; truncated?: boolean };
 
 export type TripsQuery = {
   origin: { lat: number; lon: number; label: string };
@@ -532,6 +597,14 @@ export type TripsQuery = {
   homeAirports?: string[];
   /** Explain the answer (the admin's engine room): every flight of a trip lists the other flights it was chosen over. */
   trace?: boolean;
+  /**
+   * Places every trip must stay in (at most MAX_MUST): a city by its code, or any stop within MUST_KM of the point
+   * (Machu Picchu is a stay in Aguas Calientes; Ollantaytambo, 30 km off, is not). The search itself is aimed at them, not filtered afterwards, so a
+   * dearer trip that reaches the place is found even when twenty cheaper ones do not.
+   */
+  must?: { code?: string; lat: number; lon: number; name?: string; /** Its own radius, km (a town the stops never reach: 60). */ km?: number }[];
+  /** Stops in the home country are fine (the traveller named a place there: Cusco from Lima); never the home cities. */
+  allowHome?: boolean;
 };
 
 const kindOfMode = (mode: string): GraphLeg["kind"] => (mode === "rail" ? "train" : mode === "ferry" ? "ferry" : "coach");
@@ -552,6 +625,8 @@ const MAX_EXPLORED = 120_000;
 const MAX_LABELS = 300_000;
 /** And a wall-clock budget: a full night's graph has more edges a node than any test, so pops alone do not bound the time. */
 const MAX_SEARCH_MS = 4_000;
+/** What one search may spend reaching new cities by train or coach (see groundOf in cheapestTripsIn). */
+const GROUND_BUDGET_MS = 1_200;
 
 /** The traveller's avoid list as country and city codes. Unknown words are named back. */
 function resolveAvoid(raw: string[] | undefined): { countries: Set<string>; cities: Set<string>; unknown: string[] } {
@@ -600,7 +675,15 @@ type Label = {
   nights?: number;
   /** Euros of taste on top of the fares (changes of plane, STOP_EURO): in the cost, never in a price. */
   pen?: number;
+  /** The must places stayed in so far, one bit each. */
+  mm?: number;
+  /** Passing back through a city already stayed in, the same day, by train, coach or ferry (Aguas Calientes to Cusco
+   * to the flight home): no stay, no new place, and never two passes in a row. */
+  tr?: boolean;
 };
+/** Musts at the most, and how near a stop must be to count as the place. */
+const MAX_MUST = 4;
+const MUST_KM = 20;
 
 /**
  * A lower bound on what getting home costs from every city (the A* heuristic of cheapestTripsIn): a Dijkstra run
@@ -749,7 +832,7 @@ const flightLeg = (e: FlightEdge): GraphLeg => ({
   minutes: e.m,
   price: e.p,
   carrier: e.c || undefined,
-  url: e.u || undefined,
+  url: e.u || (e.src === "tp" ? bookingUrl("", e.f, e.t, `${e.d}T12:00:00Z`) : undefined),
   stops: e.s,
   source: e.src,
   seen: e.w,
@@ -847,6 +930,24 @@ export function cheapestTripsIn(g: FlightGraph, q: TripsQuery): TripsResult {
   const tA = Date.now();
   const toHome = relaxedHome(g, [...new Set([...homeCities, ...(doorCity ? [doorCity] : [])])], rate, STOP_EURO[q.tradeoff ?? "price"], groundMax > 0);
   const boundMs = Date.now() - tA;
+  // The search's own clock starts after the bound. Reaching a city by train or coach for the first time is a Dijkstra
+  // over the ground graph (tens of ms where the timetables are dense, the US with Amtrak and FlixBus): each search may
+  // spend GROUND_BUDGET_MS on new ones, then uses only the reaches already known (kept an hour, so they warm up).
+  const tSearch = Date.now();
+  let groundSpent = 0;
+  let groundSkipped = 0;
+  const groundOf = (code: string): GroundLink[] => {
+    const known = groundKnown(code, groundMax);
+    if (known) return known;
+    if (groundSpent >= GROUND_BUDGET_MS) {
+      groundSkipped++;
+      return [];
+    }
+    const t = Date.now();
+    const out = groundFrom(code, groundMax);
+    groundSpent += Date.now() - t;
+    return out;
+  };
   /** The A* bound of a city; Infinity where nothing known gets home (a label there can never close). */
   const hOf = (city: string) => (city === "HOME" ? 0 : (toHome.get(city) ?? Infinity));
   const homeCityDoor = new Map<string, HomeAirport>();
@@ -857,9 +958,35 @@ export function cheapestTripsIn(g: FlightGraph, q: TripsQuery): TripsResult {
 
   const landable = (code: string, visited: string[]): boolean => {
     const p = placeOf(code);
-    if (!p || p.country === home || visited.includes(code)) return false;
+    if (!p || visited.includes(code)) return false;
+    if (p.country === home && (!q.allowHome || homeCitySet.has(code) || code === doorCity)) return false;
     return countryAllowed(p.country, exclude) && !avoid.countries.has(p.country) && !avoid.cities.has(code) && !unsafe(p.country);
   };
+
+  // The must places: a bit each; a city counts when it is the place or lies within MUST_KM of it.
+  const musts = (q.must ?? []).slice(0, MAX_MUST);
+  const fullMask = (1 << musts.length) - 1;
+  const mustMemo = new Map<string, number>();
+  const mustBits = (city: string): number => {
+    if (!musts.length) return 0;
+    let b = mustMemo.get(city);
+    if (b == null) {
+      b = 0;
+      const p = placeOf(city);
+      musts.forEach((m, i) => {
+        if ((m.code && (m.code === city || airportCity(m.code) === city)) || (p && haversineKm(p.lat, p.lon, m.lat, m.lon) <= (m.km ?? MUST_KM))) b! |= 1 << i;
+      });
+      mustMemo.set(city, b);
+    }
+    return b;
+  };
+  const missing = (mm: number) => {
+    let n = 0;
+    for (let x = fullMask & ~mm; x; x &= x - 1) n++;
+    return n;
+  };
+  /** Room left for the musts not met yet: a label with fewer places to go than musts missing can never finish. */
+  const roomFor = (places: number, mm: number) => maxPlaces - places >= missing(mm);
 
   const labels: Label[] = [];
   const heap = new Heap();
@@ -874,7 +1001,7 @@ export function cheapestTripsIn(g: FlightGraph, q: TripsQuery): TripsResult {
     }
     // A city with no way home known can never close a trip: no label is made for it.
     if (hOf(l.city) === Infinity) return;
-    const key = `${l.kind}|${l.city}|${l.day}|${l.places}|${l.start}`;
+    const key = `${l.kind}|${l.city}|${l.day}|${l.places}|${l.start}|${l.mm ?? 0}`;
     const seq = l.visited.join(">");
     const slots = kept.get(key) ?? [];
     // The same cities in the same order: the futures are the same, so only the cheaper label matters.
@@ -915,7 +1042,9 @@ export function cheapestTripsIn(g: FlightGraph, q: TripsQuery): TripsResult {
         if (!h || !landable(e.tc, []) || e.an + lo > toN) continue;
         const euros = h.price + e.p;
         const minutes = h.minutes + e.m;
-        push({ kind: 0, city: e.tc, day: e.an, places: 1, start: d, cost: costOf(euros, minutes) + stopPen(e.s), euros, minutes, visited: [e.tc], parent: doorLabel(h, d), fe: i, pen: stopPen(e.s) });
+        const mm = mustBits(e.tc);
+        if (!roomFor(1, mm)) continue;
+        push({ kind: 0, city: e.tc, day: e.an, places: 1, start: d, cost: costOf(euros, minutes) + stopPen(e.s), euros, minutes, visited: [e.tc], parent: doorLabel(h, d), fe: i, pen: stopPen(e.s), mm });
       }
     }
   }
@@ -926,7 +1055,7 @@ export function cheapestTripsIn(g: FlightGraph, q: TripsQuery): TripsResult {
   let worstTop = Infinity;
   const finish = (li: number, close: GraphLeg[], endDay: number) => {
     const l = labels[li];
-    if (l.places < minPlaces) return;
+    if (l.places < minPlaces || (l.mm ?? 0) !== fullMask) return;
     const euros = l.euros + close.reduce((a, x) => a + x.price, 0);
     const minutes = l.minutes + close.reduce((a, x) => a + x.minutes, 0);
     const cost = costOf(euros, minutes) + (l.pen ?? 0) + close.reduce((a, x) => a + (x.kind === "fly" ? stopPen(x.stops) : 0), 0);
@@ -949,7 +1078,7 @@ export function cheapestTripsIn(g: FlightGraph, q: TripsQuery): TripsResult {
     const l = labels[li];
     // Every completion from here costs at least this label plus its cheapest way home: past the top-th best, nothing better is left.
     if (l.cost + hOf(l.city) > worstTop) break;
-    if (explored >= MAX_EXPLORED || ((explored & 1023) === 0 && Date.now() - t0 > MAX_SEARCH_MS)) {
+    if (explored >= MAX_EXPLORED || ((explored & 1023) === 0 && Date.now() - tSearch > MAX_SEARCH_MS)) {
       truncated = true;
       break;
     }
@@ -979,16 +1108,25 @@ export function cheapestTripsIn(g: FlightGraph, q: TripsQuery): TripsResult {
       }
       // An overland link is a train, coach or ferry: off with them when the traveller wants flights only.
       if (e.mode && groundMax <= 0) continue;
+      // Back through a city already stayed in, to go on from there (the way out of a dead end such as Aguas Calientes).
+      if (e.mode && !l.tr && e.tc !== l.city && l.visited.includes(e.tc) && e.an <= toN && e.an - l.start <= maxNights) {
+        const euros = l.euros + e.p;
+        const minutes = l.minutes + e.m;
+        push({ kind: 1, city: e.tc, day: e.an, places: l.places, start: l.start, cost: costOf(euros, minutes) + (l.pen ?? 0), euros, minutes, visited: l.visited, parent: li, fe: i, pen: l.pen, mm: l.mm, tr: true });
+        continue;
+      }
       if (l.places >= maxPlaces || !landable(e.tc, l.visited)) continue;
       if (e.an + lo > toN || e.an + lo - l.start > maxNights) continue;
+      const mm = (l.mm ?? 0) | mustBits(e.tc);
+      if (!roomFor(l.places + 1, mm)) continue;
       const euros = l.euros + e.p;
       const minutes = l.minutes + e.m;
       const pen = (l.pen ?? 0) + stopPen(e.s);
-      push({ kind: 0, city: e.tc, day: e.an, places: l.places + 1, start: l.start, cost: costOf(euros, minutes) + pen, euros, minutes, visited: [...l.visited, e.tc], parent: li, fe: i, pen });
+      push({ kind: 0, city: e.tc, day: e.an, places: l.places + 1, start: l.start, cost: costOf(euros, minutes) + pen, euros, minutes, visited: [...l.visited, e.tc], parent: li, fe: i, pen, mm });
     }
     if (groundMax <= 0) continue;
     // Trains and coaches the same day: home to the door (or to a home airport and on), or on to a new place.
-    for (const link of groundFrom(l.city, groundMax)) {
+    for (const link of groundOf(l.city)) {
       if (link.code === doorCity || homeCityDoor.has(link.code)) {
         if (!canClose) continue;
         const leg = groundLeg(l.city, link.code, l.day, link);
@@ -996,11 +1134,19 @@ export function cheapestTripsIn(g: FlightGraph, q: TripsQuery): TripsResult {
         finish(li, via ? [leg, doorLeg(via, q.origin.label, false, l.day)] : [{ ...leg, to: "HOME", toName: q.origin.label }], l.day);
         continue;
       }
+      if (!l.tr && link.code !== l.city && l.visited.includes(link.code)) {
+        const euros = l.euros + groundPrice(link.km);
+        const minutes = l.minutes + link.minutes;
+        push({ kind: 1, city: link.code, day: l.day, places: l.places, start: l.start, cost: costOf(euros, minutes) + (l.pen ?? 0), euros, minutes, visited: l.visited, parent: li, gl: link, pen: l.pen, mm: l.mm, tr: true });
+        continue;
+      }
       if (l.places >= maxPlaces || !landable(link.code, l.visited)) continue;
       if (l.day + lo > toN || l.day + lo - l.start > maxNights) continue;
+      const mm = (l.mm ?? 0) | mustBits(link.code);
+      if (!roomFor(l.places + 1, mm)) continue;
       const euros = l.euros + groundPrice(link.km);
       const minutes = l.minutes + link.minutes;
-      push({ kind: 0, city: link.code, day: l.day, places: l.places + 1, start: l.start, cost: costOf(euros, minutes) + (l.pen ?? 0), euros, minutes, visited: [...l.visited, link.code], parent: li, gl: link, pen: l.pen });
+      push({ kind: 0, city: link.code, day: l.day, places: l.places + 1, start: l.start, cost: costOf(euros, minutes) + (l.pen ?? 0), euros, minutes, visited: [...l.visited, link.code], parent: li, gl: link, pen: l.pen, mm });
     }
   }
 
@@ -1060,6 +1206,7 @@ export function cheapestTripsIn(g: FlightGraph, q: TripsQuery): TripsResult {
     explored,
     boundMs,
     labels: labels.length,
+    ...(groundSkipped ? { groundSkipped } : {}),
     edges: g.edges.length,
     graphDate: g.graphDate,
     homeAirports: homes,

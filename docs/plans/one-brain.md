@@ -101,3 +101,50 @@ engine and spends no live search, and the Live tab says so. Before, the memo liv
 repeat that landed on another instance ran again (today's log: repeats from 0 ms to 33 s). Live prices already
 flow back into the graph: every live search writes the fare memory, and the graph reloads it (the last three days)
 every ten minutes.
+
+## Far from Bucharest (12 October, evening)
+
+Patrick: "what about to and from San Francisco, did we overfit on Hanoi now, what about South America, Paraguay,
+Chile, Bolivia, also other parts of Asia, Central Asia, Georgia, Azerbaijan ... make sure the tool calls in chat do
+not fail and that we have most data."
+
+What was wrong: San Francisco to Mexico, South America or Peru found **0 trips**. The nightly map keeps a city's 80
+cheapest places a month, so far homes had no way back (Mexico City to San Francisco was in none of it), and Machu
+Picchu, the Uyuni salt flats or "Peru and Bolivia" were not things the search could be asked.
+
+| Built | What it does |
+| --- | --- |
+| World origins (scripts/ingest/tp-edges.ts) | the nightly Travelpayouts import asks from 416 cities (every country's two biggest cities with a large airport, Bishkek among them): 67,459 fares, 2,128 places |
+| Home fares (lib/tp-map.ts) | each search adds the cached fares out of and into the traveller's own cities for the months of the window (kept 12 h, shared) |
+| Densify (lib/search.ts) | fewer than 6 trips on the map: up to 8 live questions (half the budget), the way a person asks: home to the target's cities and back, all at once, then one city at a time for the ones the first answer missed and for every must city, then the hops between them; all inside the window the map searches. Kiwi answers 15 flights a question, so asking eleven hubs at once is mostly the cheapest pair on fifteen days |
+| Overland, round 2 (public/data/overland-more.json) | 186 more sourced links: Peru, Bolivia and the Atacama, the Southern Cone, Colombia and Ecuador, Mexico and Central America, South Asia, East Asia, the Middle East and East Africa (546 one-way links in all) |
+| Several countries | to: "Peru and Bolivia" is the region countries:pe,bo (URL and chat) |
+| Must places | SearchQuery.must (chat: mustInclude): the price map's search is aimed at them (a bit per must on every label), not filtered afterwards; a named place is a must too |
+| Pass back through | a train or coach back through a city already stayed in, the same day (Aguas Calientes, Cusco, the flight home) |
+| Home country | a place named in the traveller's own country (Cusco from Lima) may be a stop |
+| Landmarks (lib/landmarks.ts) | Machu Picchu is Aguas Calientes, Lake Titicaca Puno, the salt flats Uyuni, Angkor Wat Siem Reap, Bali Denpasar (it was a town in India), and about 30 more |
+| A to B | cheapest_way offers a sourced overland link (Lima to Cusco by coach, 22 h) |
+| Chat | a turn stops at 270 s and its run is saved with the reason; a run is saved once |
+
+| Search (live budget 16 to 22) | Before | After |
+| --- | --- | --- |
+| San Francisco to Mexico, a week in November | 0 trips | 6; Guadalajara 276 euro, Guadalajara, Queretaro, Mexico City 337 euro, checked live |
+| San Francisco to South America, a loop in January | 0 | 14; Lima, Puno, Copacabana, La Paz by coach, 1,032 euro |
+| San Francisco to Peru | 0 | 23; Lima, Arequipa, Cusco by coach, 672 euro |
+| San Francisco to Peru with Machu Picchu and Lake Titicaca | 0 | 20; Cusco, Aguas Calientes by train, back through Cusco, Puno by coach, Lima: 848 euro, checked live |
+| Lima to Machu Picchu | 0 | 224 euro: coach to Cusco, the train there and back, the flight home |
+| Brasov to Georgia and Armenia, a loop | (no such query) | 19; Kutaisi, Tbilisi by train, Yerevan by coach: 179 euro |
+| Brasov to Tashkent, Samarkand and Bukhara | (no such query) | 15; with Khiva, all by train: 475 euro |
+| Brasov to Central Asia, a loop | 4 | 10; Almaty, Bishkek, Osh, Tashkent 506 euro |
+| Brasov to Baku and Tbilisi, 2 nights each | 0 | 1; 404 euro checked live (no land border open, so all flights) |
+| Santiago to Paraguay | 0 | 1; Asuncion 191 euro |
+| Brasov to Japan in March: Tokyo, Kyoto, Osaka | 1 (80 h of travel) | 20; Osaka, Kyoto by train, Tokyo: 910 euro checked live (the overland links now run 200 days ahead, not 100, so a March trip has the Kyoto train) |
+
+Benchmark (budget 0, the map alone, 17 questions): 16 answered; the new cases answer from the map alone the next time,
+because every live answer was written to the fare memory. Lisbon on exact dates still needs live prices.
+
+Chat evaluation (12 real questions on the dev server, up to 20 live searches a turn): 0 tool calls failed in the last
+round. The model put eight Central American countries in to and "Peru and Bolivia" in the wild region; both now read as
+several countries. San Francisco to Peru and Bolivia with Machu Picchu, Lake Titicaca and the salt flats answered in
+one search: La Paz, Uyuni by overnight coach, Puno, Cusco, Aguas Calientes, 1,208 euro. Lima to Cusco offers the
+22 h coach (26 to 66 euro) beside the 55 euro flight.

@@ -1,15 +1,441 @@
 {
   "about": "The benchmark (docs/plans/one-brain.md): real questions, run through every brain and scored on the cheapest door-to-door price found, against the best any brain found and, where the owner gave one, his own answer (gold). Dates are relative: +Nd is N days from the run, next is next calendar month. Add the trips you plan by hand here, with your price as gold.",
-  "from": { "label": "Brasov", "lat": 45.657, "lon": 25.601, "airports": ["GHV", "SBZ", "OTP"], "home": "RO" },
+  "from": {
+    "label": "Brasov",
+    "lat": 45.657,
+    "lon": 25.601,
+    "airports": [
+      "GHV",
+      "SBZ",
+      "OTP"
+    ],
+    "home": "RO"
+  },
   "cases": [
-    { "id": "weekend-anywhere", "label": "A cheap weekend anywhere, the next six weeks", "query": { "to": { "kind": "anywhere" }, "when": { "kind": "window", "from": "+10d", "to": "+45d" }, "nights": [2, 3] } },
-    { "id": "week-anywhere", "label": "A week anywhere, the next two months", "query": { "to": { "kind": "anywhere" }, "when": { "kind": "window", "from": "+14d", "to": "+60d" }, "nights": [5, 7] } },
-    { "id": "two-cities-next-month", "label": "Two cities, 3 to 4 nights, next month", "query": { "to": { "kind": "anywhere" }, "when": { "kind": "month", "month": "next" }, "nights": [3, 4], "shape": "two" } },
-    { "id": "loop-next-month", "label": "A loop of three places, a week, next month", "query": { "to": { "kind": "anywhere" }, "when": { "kind": "month", "month": "next" }, "nights": [6, 7], "shape": "loop" } },
-    { "id": "poland-warsaw-gdansk", "label": "Poland: fly to Warsaw, train to Gdansk, home (the owner's own trip)", "query": { "to": { "kind": "country", "name": "Poland", "code": "PL" }, "when": { "kind": "window", "from": "+10d", "to": "+40d" }, "nights": [5, 7], "shape": "two" }, "gold": { "note": "the owner's way: Brasov to Warsaw by plane, train to Gdansk, Gdansk to Otopeni (Ryanair, 32 euro on 31 Oct)" } },
-    { "id": "italy-long-weekend", "label": "Italy, a long weekend", "query": { "to": { "kind": "country", "name": "Italy", "code": "IT" }, "when": { "kind": "window", "from": "+14d", "to": "+45d" }, "nights": [3, 4] } },
-    { "id": "lisbon-exact", "label": "Lisbon on exact dates", "query": { "to": { "kind": "place", "name": "Lisbon", "code": "LIS" }, "when": { "kind": "dates", "out": "+35d", "back": "+39d" } } },
-    { "id": "sea-wild", "label": "Two weeks in Southeast Asia (Wild)", "query": { "to": { "kind": "anywhere" }, "when": { "kind": "window", "from": "+40d", "to": "+70d" }, "nights": [14, 14], "advanced": { "wild": { "region": "sea", "nights": 14 } } } },
-    { "id": "hanoi-vientiane", "label": "Hanoi to Vientiane, one way, around the trip that went wrong", "from": { "label": "Hanoi", "lat": 21.028, "lon": 105.854, "airports": ["HAN"], "home": "VN" }, "query": { "to": { "kind": "place", "name": "Vientiane", "code": "VTE" }, "when": { "kind": "window", "from": "+52d", "to": "+60d" }, "oneWay": true }, "gold": { "price": 93, "note": "Travelpayouts saw 93 euro with one stop (a 52 h layover); the engine picked 157 euro" } }
+    {
+      "id": "weekend-anywhere",
+      "label": "A cheap weekend anywhere, the next six weeks",
+      "query": {
+        "to": {
+          "kind": "anywhere"
+        },
+        "when": {
+          "kind": "window",
+          "from": "+10d",
+          "to": "+45d"
+        },
+        "nights": [
+          2,
+          3
+        ]
+      }
+    },
+    {
+      "id": "week-anywhere",
+      "label": "A week anywhere, the next two months",
+      "query": {
+        "to": {
+          "kind": "anywhere"
+        },
+        "when": {
+          "kind": "window",
+          "from": "+14d",
+          "to": "+60d"
+        },
+        "nights": [
+          5,
+          7
+        ]
+      }
+    },
+    {
+      "id": "two-cities-next-month",
+      "label": "Two cities, 3 to 4 nights, next month",
+      "query": {
+        "to": {
+          "kind": "anywhere"
+        },
+        "when": {
+          "kind": "month",
+          "month": "next"
+        },
+        "nights": [
+          3,
+          4
+        ],
+        "shape": "two"
+      }
+    },
+    {
+      "id": "loop-next-month",
+      "label": "A loop of three places, a week, next month",
+      "query": {
+        "to": {
+          "kind": "anywhere"
+        },
+        "when": {
+          "kind": "month",
+          "month": "next"
+        },
+        "nights": [
+          6,
+          7
+        ],
+        "shape": "loop"
+      }
+    },
+    {
+      "id": "poland-warsaw-gdansk",
+      "label": "Poland: fly to Warsaw, train to Gdansk, home (the owner's own trip)",
+      "query": {
+        "to": {
+          "kind": "country",
+          "name": "Poland",
+          "code": "PL"
+        },
+        "when": {
+          "kind": "window",
+          "from": "+10d",
+          "to": "+40d"
+        },
+        "nights": [
+          5,
+          7
+        ],
+        "shape": "two"
+      },
+      "gold": {
+        "note": "the owner's way: Brasov to Warsaw by plane, train to Gdansk, Gdansk to Otopeni (Ryanair, 32 euro on 31 Oct)"
+      }
+    },
+    {
+      "id": "italy-long-weekend",
+      "label": "Italy, a long weekend",
+      "query": {
+        "to": {
+          "kind": "country",
+          "name": "Italy",
+          "code": "IT"
+        },
+        "when": {
+          "kind": "window",
+          "from": "+14d",
+          "to": "+45d"
+        },
+        "nights": [
+          3,
+          4
+        ]
+      }
+    },
+    {
+      "id": "lisbon-exact",
+      "label": "Lisbon on exact dates",
+      "query": {
+        "to": {
+          "kind": "place",
+          "name": "Lisbon",
+          "code": "LIS"
+        },
+        "when": {
+          "kind": "dates",
+          "out": "+35d",
+          "back": "+39d"
+        }
+      }
+    },
+    {
+      "id": "sea-wild",
+      "label": "Two weeks in Southeast Asia (Wild)",
+      "query": {
+        "to": {
+          "kind": "anywhere"
+        },
+        "when": {
+          "kind": "window",
+          "from": "+40d",
+          "to": "+70d"
+        },
+        "nights": [
+          14,
+          14
+        ],
+        "advanced": {
+          "wild": {
+            "region": "sea",
+            "nights": 14
+          }
+        }
+      }
+    },
+    {
+      "id": "hanoi-vientiane",
+      "label": "Hanoi to Vientiane, one way, around the trip that went wrong",
+      "from": {
+        "label": "Hanoi",
+        "lat": 21.028,
+        "lon": 105.854,
+        "airports": [
+          "HAN"
+        ],
+        "home": "VN"
+      },
+      "query": {
+        "to": {
+          "kind": "place",
+          "name": "Vientiane",
+          "code": "VTE"
+        },
+        "when": {
+          "kind": "window",
+          "from": "+52d",
+          "to": "+60d"
+        },
+        "oneWay": true
+      },
+      "gold": {
+        "price": 93,
+        "note": "Travelpayouts saw 93 euro with one stop (a 52 h layover); the engine picked 157 euro"
+      }
+    },
+    {
+      "id": "sf-mexico",
+      "label": "San Francisco to Mexico, a week in late November",
+      "from": {
+        "label": "San Francisco",
+        "lat": 37.775,
+        "lon": -122.419,
+        "airports": [
+          "SFO",
+          "OAK",
+          "SJC"
+        ],
+        "home": "US"
+      },
+      "query": {
+        "to": {
+          "kind": "country",
+          "name": "Mexico",
+          "code": "MX"
+        },
+        "when": {
+          "kind": "window",
+          "from": "+33d",
+          "to": "+49d"
+        },
+        "nights": [
+          6,
+          8
+        ]
+      }
+    },
+    {
+      "id": "sf-peru-must",
+      "label": "San Francisco to Peru with Machu Picchu and Lake Titicaca, two weeks",
+      "from": {
+        "label": "San Francisco",
+        "lat": 37.775,
+        "lon": -122.419,
+        "airports": [
+          "SFO",
+          "OAK",
+          "SJC"
+        ],
+        "home": "US"
+      },
+      "query": {
+        "to": {
+          "kind": "country",
+          "name": "Peru",
+          "code": "PE"
+        },
+        "must": [
+          "Machu Picchu",
+          "Lake Titicaca"
+        ],
+        "when": {
+          "kind": "window",
+          "from": "+85d",
+          "to": "+111d"
+        },
+        "nights": [
+          10,
+          14
+        ]
+      },
+      "gold": {
+        "note": "2026-10-12: Cusco, Aguas Calientes by train, back through Cusco, Puno by coach, Lima, home: 848 euro checked live"
+      }
+    },
+    {
+      "id": "sf-peru-bolivia",
+      "label": "San Francisco to Peru and Bolivia, a loop in January",
+      "from": {
+        "label": "San Francisco",
+        "lat": 37.775,
+        "lon": -122.419,
+        "airports": [
+          "SFO",
+          "OAK",
+          "SJC"
+        ],
+        "home": "US"
+      },
+      "query": {
+        "to": {
+          "kind": "region",
+          "key": "countries:pe,bo"
+        },
+        "when": {
+          "kind": "window",
+          "from": "+85d",
+          "to": "+111d"
+        },
+        "nights": [
+          12,
+          15
+        ],
+        "shape": "loop"
+      }
+    },
+    {
+      "id": "caucasus-ge-am",
+      "label": "Georgia and Armenia, a loop of 9 to 10 nights",
+      "query": {
+        "to": {
+          "kind": "region",
+          "key": "countries:ge,am"
+        },
+        "when": {
+          "kind": "window",
+          "from": "+20d",
+          "to": "+50d"
+        },
+        "nights": [
+          9,
+          10
+        ],
+        "shape": "loop"
+      },
+      "gold": {
+        "note": "2026-10-12: Kutaisi, Tbilisi by train, Yerevan by coach: 179 euro checked live"
+      }
+    },
+    {
+      "id": "uzbekistan-must",
+      "label": "Tashkent, Samarkand and Bukhara in December",
+      "query": {
+        "to": {
+          "kind": "region",
+          "key": "central-asia"
+        },
+        "must": [
+          "Tashkent",
+          "Samarkand",
+          "Bukhara"
+        ],
+        "when": {
+          "kind": "window",
+          "from": "+50d",
+          "to": "+79d"
+        },
+        "nights": [
+          8,
+          10
+        ]
+      },
+      "gold": {
+        "note": "2026-10-12: Tashkent, Khiva, Bukhara, Samarkand by train: 475 euro checked live"
+      }
+    },
+    {
+      "id": "scl-paraguay",
+      "label": "Santiago to Paraguay, about 8 nights in December",
+      "from": {
+        "label": "Santiago",
+        "lat": -33.45,
+        "lon": -70.667,
+        "airports": [
+          "SCL"
+        ],
+        "home": "CL"
+      },
+      "query": {
+        "to": {
+          "kind": "country",
+          "name": "Paraguay",
+          "code": "PY"
+        },
+        "when": {
+          "kind": "window",
+          "from": "+50d",
+          "to": "+69d"
+        },
+        "nights": [
+          7,
+          9
+        ]
+      }
+    },
+    {
+      "id": "lima-machu-picchu",
+      "label": "Lima to Machu Picchu, 3 to 5 nights",
+      "from": {
+        "label": "Lima",
+        "lat": -12.046,
+        "lon": -77.043,
+        "airports": [
+          "LIM"
+        ],
+        "home": "PE"
+      },
+      "query": {
+        "to": {
+          "kind": "place",
+          "name": "Machu Picchu"
+        },
+        "when": {
+          "kind": "window",
+          "from": "+29d",
+          "to": "+49d"
+        },
+        "nights": [
+          3,
+          5
+        ]
+      },
+      "gold": {
+        "note": "2026-10-12: coach to Cusco, train to Aguas Calientes and back, fly home: 224 euro"
+      }
+    },
+    {
+      "id": "japan-must",
+      "label": "Japan for 10 nights in March: Tokyo, Kyoto and Osaka",
+      "query": {
+        "to": {
+          "kind": "country",
+          "name": "Japan",
+          "code": "JP"
+        },
+        "must": [
+          "Tokyo",
+          "Kyoto",
+          "Osaka"
+        ],
+        "when": {
+          "kind": "window",
+          "from": "+140d",
+          "to": "+175d"
+        },
+        "nights": [
+          10,
+          10
+        ],
+        "shape": "loop"
+      },
+      "gold": {
+        "note": "2026-10-12: Osaka, Kyoto by train, Tokyo: 910 euro checked live (Kyoto has no airport; before the overland horizon went to 200 days it had no train in March)"
+      }
+    }
   ]
 }

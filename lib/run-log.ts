@@ -22,6 +22,8 @@ export type RunRecord = {
   steps: RunStep[];
   result?: unknown;
   error?: string;
+  /** Saved already: a turn that errors and is then aborted is one row, not two. */
+  saved?: boolean;
 };
 
 const als = new AsyncLocalStorage<RunRecord>();
@@ -62,7 +64,8 @@ export function step(kind: string, title: string, opts: { ms?: number; error?: s
 
 /** Saves the run, never throwing and never holding the answer up for long. */
 export async function saveRun(rec: RunRecord | null): Promise<void> {
-  if (!rec) return;
+  if (!rec || rec.saved) return;
+  rec.saved = true;
   try {
     const ms = Date.now() - rec.startedAt;
     const errors = rec.steps.filter((x) => x.error).length + (rec.error ? 1 : 0);

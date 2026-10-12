@@ -17,6 +17,11 @@ export const maxDuration = 300;
 /** The browser posts the whole thread; past this many bytes it is not a thread but a payload. */
 const MAX_BODY_BYTES = 512 * 1024;
 /**
+ * A turn's own limit, under the function's 300 s: past it the model is stopped, the traveller gets what was written,
+ * and the run is saved with the reason (a Medellin turn once hung 5 minutes to the platform's cut, with no run kept).
+ */
+const TURN_DEADLINE_MS = 270_000;
+/**
  * What one turn may hand the model. The body cap alone let a single 500 KB message ride through up to ten model
  * steps (about 125k input tokens each), and the daily chat_turn cap counts turns, not that work. A traveller's message
  * is a few sentences: the newest one is refused past MAX_USER_CHARS, older ones are cut there, and the history the
@@ -151,6 +156,7 @@ export async function POST(request: Request) {
     tools,
     stopWhen: [stepCountIs(10), hasToolCall("ask")],
     maxOutputTokens: 1400,
+    abortSignal: AbortSignal.any([request.signal, AbortSignal.timeout(TURN_DEADLINE_MS)]),
     onStepFinish: (st) => {
       if (rec && st.text?.trim()) step("say", st.text.trim().slice(0, 400), { data: { finish: st.finishReason } }, rec);
     },
@@ -162,6 +168,13 @@ export async function POST(request: Request) {
     onError: async ({ error }) => {
       if (!rec) return;
       rec.error = errorLine(error);
+      await saveRun(rec);
+    },
+    // Stopped: the traveller left or pressed Stop, or the turn passed its deadline. What was written is kept.
+    onAbort: async ({ steps }) => {
+      if (!rec) return;
+      rec.error = request.signal.aborted ? "stopped: the traveller left or pressed Stop" : `stopped: the turn passed ${TURN_DEADLINE_MS / 1000} s`;
+      rec.result = { text: steps.map((x) => x.text).join(" ").slice(0, 2000), steps: steps.length, finish: "aborted" };
       await saveRun(rec);
     },
   }));

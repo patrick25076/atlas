@@ -1,0 +1,5789 @@
+{
+  "generated": "2026-10-12",
+  "currencyNote": "prices in EUR, converted at rough 2026 rates: 1 EUR = 1.16 USD (also PAB), 4.1 PEN, 8.1 BOB, 1100 CLP, 1700 ARS, 8200 PYG, 46 UYU, 6.3 BRL, 4500 COP, 21.5 MXN, 8.9 GTQ, 2.32 BZD, 585 CRC, 42.5 NIO, 30 HNL, 1.97 AZN, 3.15 GEL, 450 AMD, 101 KGS, 600 KZT, 14500 UZS, 11 TJS, 102 INR, 163 NPR, 350 LKR, 175 JPY, 1620 KRW, 35 TWD, 8.3 CNY, 9.05 HKD, 0.82 JOD, 56 EGP, 150 KES, 2850 TZS, 10.7 MAD; Ecuador, El Salvador and Panama use USD",
+  "links": [
+    {
+      "from": {
+        "name": "Lima",
+        "code": "LIM",
+        "country": "PE",
+        "lat": -12.046,
+        "lon": -77.043
+      },
+      "to": {
+        "name": "Cusco",
+        "code": "CUZ",
+        "country": "PE",
+        "lat": -13.517,
+        "lon": -71.979
+      },
+      "mode": "coach",
+      "minutes": 1320,
+      "priceEur": [
+        26,
+        66
+      ],
+      "both": true,
+      "operator": "Cruz del Sur, Oltursa, Civa (Superciva), Palomino, Imperial Cusco and others",
+      "book": "https://www.checkmybus.com/lima-lp/cusco-cs",
+      "note": "About 24 buses a day, 20 to 25 h, mostly leaving Lima in the afternoon. Each firm uses its own terminal (Cruz del Sur at Javier Prado, others at Plaza Norte).",
+      "sources": [
+        "https://www.checkmybus.com/lima-lp/cusco-cs",
+        "https://howtoperu.com/answers/is-cruz-del-sur-lima-to-cusco-worth-it/"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Lima",
+        "code": "LIM",
+        "country": "PE",
+        "lat": -12.046,
+        "lon": -77.043
+      },
+      "to": {
+        "name": "Huacachina",
+        "code": null,
+        "country": "PE",
+        "lat": -14.087,
+        "lon": -75.763
+      },
+      "mode": "coach",
+      "minutes": 300,
+      "priceEur": [
+        13,
+        34
+      ],
+      "both": true,
+      "operator": "Cruz del Sur, Peru Bus, Turismo Tacna Internacional and others; Peru Hop",
+      "book": "https://www.checkmybus.com/lima-lp/ica-ic",
+      "note": "Buses go to Ica, 4 to 5.5 h and very frequent; Huacachina is a 5 km taxi ride from the Ica terminal. Peru Hop runs hostel to hostel with stops.",
+      "sources": [
+        "https://www.checkmybus.com/lima-lp/ica-ic",
+        "https://www.rome2rio.com/s/Lima/Huacachina"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Lima",
+        "code": "LIM",
+        "country": "PE",
+        "lat": -12.046,
+        "lon": -77.043
+      },
+      "to": {
+        "name": "Paracas",
+        "code": null,
+        "country": "PE",
+        "lat": -13.834,
+        "lon": -76.251
+      },
+      "mode": "coach",
+      "minutes": 225,
+      "priceEur": [
+        9.5,
+        22
+      ],
+      "both": true,
+      "operator": "Cruz del Sur, Oltursa, Peru Bus; Peru Hop",
+      "book": "https://www.cruzdelsur.com.pe",
+      "note": "Direct coaches into Paracas town, about 3.5 to 4 h. Cruz del Sur leaves from its Javier Prado terminal several times a day; Oltursa twice daily.",
+      "sources": [
+        "https://www.rome2rio.com/s/Lima/Paracas",
+        "https://howtoperu.com/?p=11613"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Paracas",
+        "code": null,
+        "country": "PE",
+        "lat": -13.834,
+        "lon": -76.251
+      },
+      "to": {
+        "name": "Huacachina",
+        "code": null,
+        "country": "PE",
+        "lat": -14.087,
+        "lon": -75.763
+      },
+      "mode": "coach",
+      "minutes": 75,
+      "priceEur": [
+        6,
+        15
+      ],
+      "both": true,
+      "operator": "Cruz del Sur, Oltursa (to Ica)",
+      "book": "https://www.cruzdelsur.com.pe",
+      "note": "No direct public bus: Cruz del Sur to Ica (several a day, about 1 to 1.5 h), then a 5 km taxi to Huacachina. Peru Hop covers it with stops.",
+      "sources": [
+        "https://www.rome2rio.com/s/Paracas/Ica",
+        "https://www.rome2rio.com/s/Ica/Paracas"
+      ],
+      "confidence": "medium"
+    },
+    {
+      "from": {
+        "name": "Lima",
+        "code": "LIM",
+        "country": "PE",
+        "lat": -12.046,
+        "lon": -77.043
+      },
+      "to": {
+        "name": "Arequipa",
+        "code": "AQP",
+        "country": "PE",
+        "lat": -16.399,
+        "lon": -71.537
+      },
+      "mode": "coach",
+      "minutes": 1080,
+      "priceEur": [
+        17,
+        65
+      ],
+      "both": true,
+      "operator": "Cruz del Sur, Oltursa, Transzela, Turismo Tacna Internacional, Reyna, Civa and others",
+      "book": "https://www.checkmybus.com/lima-lp/arequipa-ar",
+      "note": "About 80 buses a day from 12 firms along the Panamericana Sur, 16 to 19 h, many overnight. Cheapest seats are basic; Cruz del Sur VIP tops the range.",
+      "sources": [
+        "https://www.checkmybus.com/lima-lp/arequipa-ar"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Arequipa",
+        "code": "AQP",
+        "country": "PE",
+        "lat": -16.399,
+        "lon": -71.537
+      },
+      "to": {
+        "name": "Puno",
+        "code": null,
+        "country": "PE",
+        "lat": -15.84,
+        "lon": -70.022
+      },
+      "mode": "coach",
+      "minutes": 360,
+      "priceEur": [
+        6.9,
+        22
+      ],
+      "both": true,
+      "operator": "Cruz del Sur, Transzela, Turismo Mer, Zolorzano, San Martin Nobleza",
+      "book": "https://www.checkmybus.com/arequipa-ar/puno-pu",
+      "note": "About 38 buses a day, day and night, about 6 h over the altiplano via Juliaca, climbing past 4,500 m. From Arequipa Terminal Terrestre.",
+      "sources": [
+        "https://www.checkmybus.com/arequipa-ar/puno-pu"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Arequipa",
+        "code": "AQP",
+        "country": "PE",
+        "lat": -16.399,
+        "lon": -71.537
+      },
+      "to": {
+        "name": "Cusco",
+        "code": "CUZ",
+        "country": "PE",
+        "lat": -13.517,
+        "lon": -71.979
+      },
+      "mode": "coach",
+      "minutes": 660,
+      "priceEur": [
+        11,
+        31
+      ],
+      "both": true,
+      "operator": "Cruz del Sur, Oltursa, Transzela, Turismo Mer, Jean Buss, Excluciva and others",
+      "book": "https://www.checkmybus.com/arequipa-ar/cusco-cs",
+      "note": "About 32 buses a day, mostly overnight with 8 to 9 pm departures, 10 to 12 h via Juliaca. Cruz del Sur and Oltursa are the dearer options.",
+      "sources": [
+        "https://www.checkmybus.com/arequipa-ar/cusco-cs"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Cusco",
+        "code": "CUZ",
+        "country": "PE",
+        "lat": -13.517,
+        "lon": -71.979
+      },
+      "to": {
+        "name": "Puno",
+        "code": null,
+        "country": "PE",
+        "lat": -15.84,
+        "lon": -70.022
+      },
+      "mode": "coach",
+      "minutes": 420,
+      "priceEur": [
+        10,
+        25
+      ],
+      "both": true,
+      "operator": "Cruz del Sur, Transzela, Turismo Mer, Libertad, San Luis and others",
+      "book": "https://www.checkmybus.com/cusco-cs/puno-pu",
+      "note": "About 69 buses a day, day and night, 6.5 to 8 h. Tourist buses with guided stops and lunch (Inka Express) take 10.5 to 11 h and cost more.",
+      "sources": [
+        "https://www.checkmybus.com/cusco-cs/puno-pu",
+        "https://howtoperu.com/answers/how-travelers-rate-inka-express-with-examples/"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Cusco",
+        "code": "CUZ",
+        "country": "PE",
+        "lat": -13.517,
+        "lon": -71.979
+      },
+      "to": {
+        "name": "Puno",
+        "code": null,
+        "country": "PE",
+        "lat": -15.84,
+        "lon": -70.022
+      },
+      "mode": "train",
+      "minutes": 630,
+      "priceEur": [
+        216,
+        302
+      ],
+      "both": true,
+      "operator": "PeruRail Titicaca",
+      "book": "https://www.perurail.com/trains/perurail-titicaca/",
+      "note": "From Cusco Wanchaq Wed, Fri, Sun (back Mon, Thu, Sat), meals included. Since Aug 2026 a landslide means a bus to Mollebamba, then the train.",
+      "sources": [
+        "https://www.perurail.com/news-releases/information-update-perurail-titicaca/",
+        "https://www.perurail.com/train-schedules-and-frequencies/",
+        "https://www.seat61.com/Peru.htm"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Cusco",
+        "code": "CUZ",
+        "country": "PE",
+        "lat": -13.517,
+        "lon": -71.979
+      },
+      "to": {
+        "name": "Aguas Calientes (Machu Picchu)",
+        "code": null,
+        "country": "PE",
+        "lat": -13.155,
+        "lon": -72.525
+      },
+      "mode": "train",
+      "minutes": 250,
+      "priceEur": [
+        52,
+        86
+      ],
+      "both": true,
+      "operator": "PeruRail (Expedition, Vistadome); Inca Rail bus plus train",
+      "book": "https://www.perurail.com",
+      "note": "May to Dec trains start at Cusco San Pedro or Poroy; other runs and Jan to Apr are bus to Pachar or Ollantaytambo, then train. Inca Rail is bus plus train only.",
+      "sources": [
+        "https://www.perurail.com/train-schedules-and-frequencies/",
+        "https://www.seat61.com/Peru.htm"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Ollantaytambo",
+        "code": null,
+        "country": "PE",
+        "lat": -13.258,
+        "lon": -72.263
+      },
+      "to": {
+        "name": "Aguas Calientes (Machu Picchu)",
+        "code": null,
+        "country": "PE",
+        "lat": -13.155,
+        "lon": -72.525
+      },
+      "mode": "train",
+      "minutes": 90,
+      "priceEur": [
+        51,
+        85
+      ],
+      "both": true,
+      "operator": "PeruRail (Expedition, Vistadome), Inca Rail",
+      "book": "https://www.perurail.com",
+      "note": "The main railhead: about 15 PeruRail and 6 Inca Rail departures a day, 5 am to 9 pm. Trains end at Machu Picchu Pueblo station in Aguas Calientes.",
+      "sources": [
+        "https://www.seat61.com/Peru.htm",
+        "https://www.perurail.com/train-schedules-and-frequencies/",
+        "https://www.rome2rio.com/s/Cusco/Aguas-Calientes"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Cusco",
+        "code": "CUZ",
+        "country": "PE",
+        "lat": -13.517,
+        "lon": -71.979
+      },
+      "to": {
+        "name": "Ollantaytambo",
+        "code": null,
+        "country": "PE",
+        "lat": -13.258,
+        "lon": -72.263
+      },
+      "mode": "van",
+      "minutes": 105,
+      "priceEur": [
+        2.4,
+        3.7
+      ],
+      "both": true,
+      "operator": "shared colectivo vans",
+      "book": "https://www.rome2rio.com/s/Cusco/Ollantaytambo",
+      "note": "Shared vans leave when full from Calle Pavitos in central Cusco, 10 to 15 soles cash. Cheaper option: van to Urubamba, then another van.",
+      "sources": [
+        "https://www.lorenzoexpeditions.com/?p=48719",
+        "https://www.rome2rio.com/s/Cusco/Ollantaytambo"
+      ],
+      "confidence": "medium"
+    },
+    {
+      "from": {
+        "name": "Puno",
+        "code": null,
+        "country": "PE",
+        "lat": -15.84,
+        "lon": -70.022
+      },
+      "to": {
+        "name": "Copacabana",
+        "code": null,
+        "country": "BO",
+        "lat": -16.166,
+        "lon": -69.086
+      },
+      "mode": "coach",
+      "minutes": 210,
+      "priceEur": [
+        6.9,
+        16
+      ],
+      "both": true,
+      "operator": "Trans Titicaca, Transzela, Trans El Cisne; Bolivia Hop",
+      "book": "https://www.checkmybus.com/puno-pu/copacabana",
+      "note": "About 7 buses a day, mostly mornings, from Puno Terminal Terrestre. Border at Kasani/Yunguyo: get off for both stamps. Bolivia is 1 h ahead.",
+      "sources": [
+        "https://www.checkmybus.com/puno-pu/copacabana",
+        "https://howtoperu.com/?p=11651"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Copacabana",
+        "code": null,
+        "country": "BO",
+        "lat": -16.166,
+        "lon": -69.086
+      },
+      "to": {
+        "name": "La Paz",
+        "code": "LPB",
+        "country": "BO",
+        "lat": -16.496,
+        "lon": -68.133
+      },
+      "mode": "coach",
+      "minutes": 225,
+      "priceEur": [
+        3.4,
+        8.6
+      ],
+      "both": true,
+      "operator": "Trans Titicaca, Trans Manco Kapac, Vicuna Travel, local minibuses",
+      "book": "https://www.checkmybus.com/copacabana/la-paz-bo-l",
+      "note": "Buses and vans through the day. Passengers cross the Tiquina strait by small boat (about 2 Bs) while the bus goes on a barge. Ends near La Paz cemetery or main terminal.",
+      "sources": [
+        "https://www.checkmybus.com/copacabana/la-paz-bo-l",
+        "https://thedailypackers.com/bus-from-copacabana-to-la-paz/",
+        "https://bushop.com/bolivia/guides/la-paz-to-copacabana-bus-options-lake-titicaca-routes-travel-tips/"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Puno",
+        "code": null,
+        "country": "PE",
+        "lat": -15.84,
+        "lon": -70.022
+      },
+      "to": {
+        "name": "La Paz",
+        "code": "LPB",
+        "country": "BO",
+        "lat": -16.496,
+        "lon": -68.133
+      },
+      "mode": "coach",
+      "minutes": 450,
+      "priceEur": [
+        10,
+        37
+      ],
+      "both": true,
+      "operator": "Trans Salvador, Nuevo Continente, Transzela, Trans Titicaca, Trans El Cisne",
+      "book": "https://www.checkmybus.com/puno-pu/la-paz-bo-l",
+      "note": "Direct buses mostly via the Desaguadero border, 7 to 9 h. Splitting at Copacabana is cheaper and adds the lake; Bolivia Hop takes that route.",
+      "sources": [
+        "https://www.checkmybus.com/puno-pu/la-paz-bo-l",
+        "https://www.theonlyperuguide.com/bus/puno-la-paz/"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Cusco",
+        "code": "CUZ",
+        "country": "PE",
+        "lat": -13.517,
+        "lon": -71.979
+      },
+      "to": {
+        "name": "La Paz",
+        "code": "LPB",
+        "country": "BO",
+        "lat": -16.496,
+        "lon": -68.133
+      },
+      "mode": "coach",
+      "minutes": 900,
+      "priceEur": [
+        34,
+        64
+      ],
+      "both": true,
+      "operator": "Trans Salvador, Nuevo Continente, Transzela; Bolivia Hop",
+      "book": "https://www.checkmybus.com/cusco-cs/la-paz-bo-l",
+      "note": "Overnight, 9:30 to 10:30 pm departures, about 15 h via Puno and the Desaguadero border. Bolivia Hop goes via Copacabana and takes about 24 h.",
+      "sources": [
+        "https://www.checkmybus.com/cusco-cs/la-paz-bo-l"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Lima",
+        "code": "LIM",
+        "country": "PE",
+        "lat": -12.046,
+        "lon": -77.043
+      },
+      "to": {
+        "name": "Puno",
+        "code": null,
+        "country": "PE",
+        "lat": -15.84,
+        "lon": -70.022
+      },
+      "mode": "coach",
+      "minutes": 1440,
+      "priceEur": [
+        36,
+        41
+      ],
+      "both": true,
+      "operator": "Superciva",
+      "book": "https://www.checkmybus.com/lima-lp/puno-pu",
+      "note": "Superciva runs direct from Plaza Norte or Atocongo, 23 to 25 h. Changing in Arequipa is often cheaper and breaks the trip.",
+      "sources": [
+        "https://www.checkmybus.com/lima-lp/puno-pu"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "La Paz",
+        "code": "LPB",
+        "country": "BO",
+        "lat": -16.496,
+        "lon": -68.133
+      },
+      "to": {
+        "name": "Uyuni",
+        "code": "UYU",
+        "country": "BO",
+        "lat": -20.46,
+        "lon": -66.825
+      },
+      "mode": "coach",
+      "minutes": 600,
+      "priceEur": [
+        13,
+        42
+      ],
+      "both": true,
+      "operator": "Todo Turismo, Trans Titicaca, Trans Omar, Panasur, Cruz del Norte, Emperador",
+      "book": "https://www.todoturismo.bo/",
+      "note": "Overnight, leaving 8 to 10 pm and arriving 6 to 8 am. Todo Turismo (USD 44 to 49) is the tourist pick. Protests and blockades can stop services at short notice.",
+      "sources": [
+        "https://www.todoturismo.bo/",
+        "https://bushop.com/bolivia/guides/la-paz-to-uyuni-transport-guide-bus-tour-travel-options/"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "La Paz",
+        "code": "LPB",
+        "country": "BO",
+        "lat": -16.496,
+        "lon": -68.133
+      },
+      "to": {
+        "name": "Oruro",
+        "code": "ORU",
+        "country": "BO",
+        "lat": -17.97,
+        "lon": -67.112
+      },
+      "mode": "coach",
+      "minutes": 225,
+      "priceEur": [
+        3.4,
+        11
+      ],
+      "both": true,
+      "operator": "Trans Aroma, Flota Urus and others",
+      "book": "https://www.checkmybus.com/oruro/la-paz-bo-l",
+      "note": "About 39 buses a day, 3.5 to 4 h on the paved altiplano highway. Oruro is where the train to Uyuni starts.",
+      "sources": [
+        "https://www.checkmybus.com/oruro/la-paz-bo-l"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Oruro",
+        "code": "ORU",
+        "country": "BO",
+        "lat": -17.97,
+        "lon": -67.112
+      },
+      "to": {
+        "name": "Uyuni",
+        "code": "UYU",
+        "country": "BO",
+        "lat": -20.46,
+        "lon": -66.825
+      },
+      "mode": "train",
+      "minutes": 420,
+      "priceEur": [
+        7.4,
+        7.4
+      ],
+      "both": true,
+      "operator": "Ferroviaria Andina (Ferrobus Expreso del Sur)",
+      "book": "https://ferroviaria-andina.com.bo/Ferrobus",
+      "note": "Once a week each way: Mon 21:30 from Oruro, arriving Uyuni before dawn; northbound from Villazon on Thu. The line has had suspensions, so confirm first.",
+      "sources": [
+        "https://www.villazonbolivia.com/2009/09/informacion-viajes-en-tren-desde.html",
+        "https://www.rome2rio.com/Train/Oruro/Uyuni"
+      ],
+      "confidence": "medium"
+    },
+    {
+      "from": {
+        "name": "Uyuni",
+        "code": "UYU",
+        "country": "BO",
+        "lat": -20.46,
+        "lon": -66.825
+      },
+      "to": {
+        "name": "San Pedro de Atacama",
+        "code": null,
+        "country": "CL",
+        "lat": -22.911,
+        "lon": -68.2
+      },
+      "mode": "van",
+      "minutes": 2880,
+      "priceEur": [
+        129,
+        284
+      ],
+      "both": false,
+      "operator": "shared 4x4 tours from Uyuni agencies",
+      "book": "https://www.rome2rio.com/s/Uyuni/San-Pedro-de-Atacama",
+      "note": "A 3-day jeep tour, not a bus: nights in a salt hotel and a refuge near Laguna Colorada, drop at Hito Cajon, shuttle to San Pedro. Park fee about 150 Bs extra.",
+      "sources": [
+        "https://www.lapazlife.com/guides/the-uyuni-3-day-tour-a-day-by-day-breakdown/",
+        "https://bushop.com/bolivia/guides/how-much-does-it-cost-to-visit-the-uyuni-salt-flats-full-budget-breakdown/"
+      ],
+      "confidence": "medium"
+    },
+    {
+      "from": {
+        "name": "Uyuni",
+        "code": "UYU",
+        "country": "BO",
+        "lat": -20.46,
+        "lon": -66.825
+      },
+      "to": {
+        "name": "Calama",
+        "code": "CJC",
+        "country": "CL",
+        "lat": -22.456,
+        "lon": -68.926
+      },
+      "mode": "coach",
+      "minutes": 480,
+      "priceEur": [
+        22,
+        47
+      ],
+      "both": true,
+      "operator": "Cruz del Norte, Trans Salvador, Trans Ricardo, Frontera del Norte",
+      "book": "https://www.checkmybus.com/travel/uyuni/calama-an",
+      "note": "Early morning departures only (5 to 9 am), 7 to 9 h via the Ollague border. Change in Calama for San Pedro de Atacama, 1.5 h away.",
+      "sources": [
+        "https://www.checkmybus.com/travel/uyuni/calama-an",
+        "https://www.checkmybus.com/calama-an/uyuni",
+        "https://www.rome2rio.com/s/Uyuni/Calama"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "San Pedro de Atacama",
+        "code": null,
+        "country": "CL",
+        "lat": -22.911,
+        "lon": -68.2
+      },
+      "to": {
+        "name": "Calama",
+        "code": "CJC",
+        "country": "CL",
+        "lat": -22.456,
+        "lon": -68.926
+      },
+      "mode": "coach",
+      "minutes": 95,
+      "priceEur": [
+        5.2,
+        6.9
+      ],
+      "both": true,
+      "operator": "Buses Atacama 2000, Frontera del Norte, Turbus",
+      "book": "https://www.kupos.cl/en/bus/tickets/san-pedro-de-atacama/calama",
+      "note": "About 20 buses a day, 7 am to 9 pm, flat fare about CLP 7,000. Buses go to Calama town terminals; the airport needs a separate transfer.",
+      "sources": [
+        "https://www.kupos.cl/en/bus/tickets/san-pedro-de-atacama/calama",
+        "https://www.checkmybus.com/san-pedro-de-atacama-an/calama-an"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "La Paz",
+        "code": "LPB",
+        "country": "BO",
+        "lat": -16.496,
+        "lon": -68.133
+      },
+      "to": {
+        "name": "Sucre",
+        "code": "SRE",
+        "country": "BO",
+        "lat": -19.048,
+        "lon": -65.26
+      },
+      "mode": "coach",
+      "minutes": 660,
+      "priceEur": [
+        16,
+        39
+      ],
+      "both": true,
+      "operator": "Trans Copacabana, El Dorado, 6 de Octubre",
+      "book": "https://www.checkmybus.com/la-paz-bo-l/sucre-bo",
+      "note": "Overnight only, departures about 7 to 7:30 pm, arriving about 6 am. Bus cama on Trans Copacabana and El Dorado. Cheaper with a change in Oruro.",
+      "sources": [
+        "https://www.checkmybus.com/la-paz-bo-l/sucre-bo",
+        "https://www.rome2rio.com/s/La-Paz/Sucre"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Sucre",
+        "code": "SRE",
+        "country": "BO",
+        "lat": -19.048,
+        "lon": -65.26
+      },
+      "to": {
+        "name": "Potosi",
+        "code": null,
+        "country": "BO",
+        "lat": -19.584,
+        "lon": -65.753
+      },
+      "mode": "coach",
+      "minutes": 210,
+      "priceEur": [
+        4.3,
+        8.6
+      ],
+      "both": true,
+      "operator": "Trans Emperador, Real Audiencia and others; shared taxis",
+      "book": "https://www.checkmybus.com/sucre-bo/potosi-bo",
+      "note": "Frequent buses from Sucre main terminal to Potosi new terminal, 3 to 4 h. Fares reached about 50 Bs in 2026. Shared taxis leave when full, a bit faster.",
+      "sources": [
+        "https://www.checkmybus.com/sucre-bo/potosi-bo",
+        "https://correodelsur.com/opinion/20260820/robos-en-los-pasajes.html",
+        "https://www.rome2rio.com/s/Sucre/Potosi"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Potosi",
+        "code": null,
+        "country": "BO",
+        "lat": -19.584,
+        "lon": -65.753
+      },
+      "to": {
+        "name": "Uyuni",
+        "code": "UYU",
+        "country": "BO",
+        "lat": -20.46,
+        "lon": -66.825
+      },
+      "mode": "coach",
+      "minutes": 240,
+      "priceEur": [
+        6,
+        16
+      ],
+      "both": true,
+      "operator": "11 de Julio, Linea Emperador, Trans ATL Grevalug, ZC American",
+      "book": "https://www.checkmybus.com/potosi-bo/uyuni",
+      "note": "About 14 buses a day, 7 am to 3 pm and some evenings, about 4 h on a paved road across high passes.",
+      "sources": [
+        "https://www.checkmybus.com/potosi-bo/uyuni",
+        "https://www.rome2rio.com/s/Potosi/Uyuni"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Santa Cruz",
+        "code": "SRZ",
+        "country": "BO",
+        "lat": -17.784,
+        "lon": -63.182
+      },
+      "to": {
+        "name": "Sucre",
+        "code": "SRE",
+        "country": "BO",
+        "lat": -19.048,
+        "lon": -65.26
+      },
+      "mode": "coach",
+      "minutes": 780,
+      "priceEur": [
+        10,
+        28
+      ],
+      "both": true,
+      "operator": "Flota Capital, 6 de Octubre",
+      "book": "https://www.checkmybus.com/santa-cruz-de-la-sierra/sucre-bo",
+      "note": "About 4 overnight buses from the Terminal Bimodal, leaving 4 to 4:30 pm and arriving about 5 am, 13 h on a winding mountain road.",
+      "sources": [
+        "https://www.checkmybus.com/santa-cruz-de-la-sierra/sucre-bo"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Santiago",
+        "code": "SCL",
+        "country": "CL",
+        "lat": -33.449,
+        "lon": -70.669
+      },
+      "to": {
+        "name": "Valparaiso",
+        "code": null,
+        "country": "CL",
+        "lat": -33.047,
+        "lon": -71.613
+      },
+      "mode": "coach",
+      "minutes": 110,
+      "priceEur": [
+        2.5,
+        7
+      ],
+      "both": true,
+      "operator": "Turbus, Condor Bus, Buses Romani, Pullman and others",
+      "book": "https://www.recorrido.cl/es/bus/santiago/valparaiso",
+      "note": "From Terminal Alameda and Pajaritos to the Valparaiso Rodoviario, every 15 to 30 min from about 06:00 to 22:20. Premium seats on some Turbus runs cost far more.",
+      "sources": [
+        "https://www.recorrido.cl/es/bus/santiago/valparaiso",
+        "https://www.rome2rio.com/s/Santiago/Valpara%C3%ADso"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Santiago",
+        "code": "SCL",
+        "country": "CL",
+        "lat": -33.449,
+        "lon": -70.669
+      },
+      "to": {
+        "name": "Mendoza",
+        "code": "MDZ",
+        "country": "AR",
+        "lat": -32.89,
+        "lon": -68.845
+      },
+      "mode": "coach",
+      "minutes": 420,
+      "priceEur": [
+        21,
+        34
+      ],
+      "both": true,
+      "operator": "Andesmar, El Rapido Internacional, Ahumada, Nevada Internacional, Turbus and others",
+      "book": "https://www.recorrido.cl/es/bus/santiago/mendoza",
+      "note": "Via Paso Los Libertadores (Cristo Redentor), open about 08:00 to 20:00 Chile time. Snow can close it, mostly June to August; border checks add time.",
+      "sources": [
+        "https://www.recorrido.cl/es/bus/santiago/mendoza",
+        "https://www.rome2rio.com/s/Santiago/Mendoza",
+        "https://www.pauta.cl/dato-en-pauta/2026/10/06/paso-los-libertadores-hoy-martes-6-de-octubre-horario-estado-y-requisitos.html"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Santiago",
+        "code": "SCL",
+        "country": "CL",
+        "lat": -33.449,
+        "lon": -70.669
+      },
+      "to": {
+        "name": "Pucon",
+        "code": null,
+        "country": "CL",
+        "lat": -39.282,
+        "lon": -71.954
+      },
+      "mode": "coach",
+      "minutes": 600,
+      "priceEur": [
+        14,
+        37
+      ],
+      "both": true,
+      "operator": "Buses JAC, Jet Sur, Condor Bus, Pullman and others",
+      "book": "https://www.recorrido.cl/es/bus/santiago/pucon",
+      "note": "Mostly overnight, leaving 20:00 to midnight, plus a few morning buses. About 10 h; semi cama is cheapest, salon cama costs more.",
+      "sources": [
+        "https://www.recorrido.cl/es/bus/santiago/pucon",
+        "https://www.rome2rio.com/s/Santiago/Puc%C3%B3n"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Santiago",
+        "code": "SCL",
+        "country": "CL",
+        "lat": -33.449,
+        "lon": -70.669
+      },
+      "to": {
+        "name": "Puerto Montt",
+        "code": "PMC",
+        "country": "CL",
+        "lat": -41.469,
+        "lon": -72.942
+      },
+      "mode": "coach",
+      "minutes": 750,
+      "priceEur": [
+        12,
+        34
+      ],
+      "both": true,
+      "operator": "ETM, Pullman Bus, Cruz del Sur, Queilen Bus, Buses Fierro and others",
+      "book": "https://www.recorrido.cl/es/bus/santiago/puerto-montt",
+      "note": "Mostly overnight from Terminal Sur and Alameda, 12 to 13 h for 940 km. Semi cama from about CLP 13,000; salon cama and premium cost more.",
+      "sources": [
+        "https://www.recorrido.cl/es/bus/santiago/puerto-montt",
+        "https://www.rome2rio.com/s/Santiago/Puerto-Montt"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Puerto Montt",
+        "code": "PMC",
+        "country": "CL",
+        "lat": -41.469,
+        "lon": -72.942
+      },
+      "to": {
+        "name": "Bariloche",
+        "code": "BRC",
+        "country": "AR",
+        "lat": -41.134,
+        "lon": -71.31
+      },
+      "mode": "coach",
+      "minutes": 450,
+      "priceEur": [
+        14,
+        41
+      ],
+      "both": true,
+      "operator": "Andesmar, Viatac and others",
+      "book": "https://www.andesmar.com",
+      "note": "Day buses only, via Osorno and Paso Cardenal Samore. 6 to 9 h depending on the border queue, often longer in summer. One or two departures a day.",
+      "sources": [
+        "https://www.checkmybus.com/coach-providers/andesmar-chile",
+        "https://www.rome2rio.com/s/Puerto-Montt/Bariloche",
+        "https://cochamo.com/en/bus-bariloche-puerto-montt-varas/"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Puerto Natales",
+        "code": "PNT",
+        "country": "CL",
+        "lat": -51.729,
+        "lon": -72.506
+      },
+      "to": {
+        "name": "El Calafate",
+        "code": "FTE",
+        "country": "AR",
+        "lat": -50.338,
+        "lon": -72.265
+      },
+      "mode": "coach",
+      "minutes": 330,
+      "priceEur": [
+        18,
+        35
+      ],
+      "both": true,
+      "operator": "Bus-Sur, Turismo Zaahj, Marga Taqsa and others",
+      "book": "https://www.bussur.com",
+      "note": "Bus-Sur runs it September to April, about daily in season. About 5.5 to 6 h with the border. El Calafate terminal charges a cash boarding fee (ARS 3,000 in 2025).",
+      "sources": [
+        "https://www.rome2rio.com/s/Puerto-Natales/El-Calafate",
+        "https://www.minimalistjourneys.com/el-calafate-puerto-natales-bus-guide/",
+        "https://www.bussur.com"
+      ],
+      "confidence": "medium"
+    },
+    {
+      "from": {
+        "name": "Buenos Aires",
+        "code": "BUE",
+        "country": "AR",
+        "lat": -34.604,
+        "lon": -58.382
+      },
+      "to": {
+        "name": "Puerto Iguazu",
+        "code": "IGR",
+        "country": "AR",
+        "lat": -25.598,
+        "lon": -54.573
+      },
+      "mode": "coach",
+      "minutes": 1050,
+      "priceEur": [
+        40,
+        97
+      ],
+      "both": true,
+      "operator": "Rio Uruguay, Crucero del Norte, La 20 de Junio and others",
+      "book": "https://www.centraldepasajes.com.ar/cdp/pasajes-micro/retiro-buenos-aires/puerto-iguazu",
+      "note": "From Retiro, about 8 afternoon and evening departures, 17 to 19 h overnight. Semicama from about ARS 68,000; cama costs up to double.",
+      "sources": [
+        "https://www.centraldepasajes.com.ar/cdp/pasajes-micro/retiro-buenos-aires/puerto-iguazu",
+        "https://www.rome2rio.com/s/Buenos-Aires/Puerto-Iguaz%C3%BA"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Salta",
+        "code": "SLA",
+        "country": "AR",
+        "lat": -24.789,
+        "lon": -65.41
+      },
+      "to": {
+        "name": "San Pedro de Atacama",
+        "code": null,
+        "country": "CL",
+        "lat": -22.911,
+        "lon": -68.2
+      },
+      "mode": "coach",
+      "minutes": 630,
+      "priceEur": [
+        60,
+        82
+      ],
+      "both": true,
+      "operator": "Andesmar; Pullman Bus on some days",
+      "book": "https://www.centraldepasajes.com.ar/cdp/pasajes-micro/salta/san-pedro-de-atacama",
+      "note": "Andesmar leaves Salta at 01:00 about 6 days a week, via Paso de Jama, arriving late morning. Pullman runs a few early morning buses. Weather can close the pass.",
+      "sources": [
+        "https://www.centraldepasajes.com.ar/cdp/pasajes-micro/salta/san-pedro-de-atacama",
+        "https://www.checkmybus.com/salta-st/san-pedro-de-atacama-an",
+        "https://www.rome2rio.com/s/Salta/San-Pedro-de-Atacama"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Mendoza",
+        "code": "MDZ",
+        "country": "AR",
+        "lat": -32.89,
+        "lon": -68.845
+      },
+      "to": {
+        "name": "Salta",
+        "code": "SLA",
+        "country": "AR",
+        "lat": -24.789,
+        "lon": -65.41
+      },
+      "mode": "coach",
+      "minutes": 1200,
+      "priceEur": [
+        100,
+        131
+      ],
+      "both": true,
+      "operator": "Andesmar, Flechabus, La 20 de Junio, Transportes Rincon, CATA Internacional",
+      "book": "https://www.centraldepasajes.com.ar/cdp/pasajes-micro/mendoza/salta",
+      "note": "Several departures a day, 18 to 21 h with one night on board. Cama about 15 percent dearer than semicama.",
+      "sources": [
+        "https://www.centraldepasajes.com.ar/cdp/pasajes-micro/mendoza/salta",
+        "https://www.centraldepasajes.com.ar/cdp/pasajes-micro/salta/mendoza"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "El Calafate",
+        "code": "FTE",
+        "country": "AR",
+        "lat": -50.338,
+        "lon": -72.265
+      },
+      "to": {
+        "name": "El Chalten",
+        "code": null,
+        "country": "AR",
+        "lat": -49.331,
+        "lon": -72.886
+      },
+      "mode": "coach",
+      "minutes": 170,
+      "priceEur": [
+        34,
+        41
+      ],
+      "both": true,
+      "operator": "Chalten Travel, Taqsa Marga, Caltur",
+      "book": "https://www.centraldepasajes.com.ar/cdp/pasajes-micro/el-calafate/el-chalten",
+      "note": "About 8 departures a day between 08:00 and 18:00, 2 h 40 to 3 h. In the current listing every operator charges the same fare.",
+      "sources": [
+        "https://www.centraldepasajes.com.ar/cdp/pasajes-micro/el-calafate/el-chalten",
+        "https://www.rome2rio.com/s/El-Calafate/El-Chalt%C3%A9n"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Bariloche",
+        "code": "BRC",
+        "country": "AR",
+        "lat": -41.134,
+        "lon": -71.31
+      },
+      "to": {
+        "name": "Mendoza",
+        "code": "MDZ",
+        "country": "AR",
+        "lat": -32.89,
+        "lon": -68.845
+      },
+      "mode": "coach",
+      "minutes": 1170,
+      "priceEur": [
+        114,
+        131
+      ],
+      "both": true,
+      "operator": "Andesmar, CATA Internacional",
+      "book": "https://www.centraldepasajes.com.ar/cdp/pasajes-micro/bariloche/mendoza",
+      "note": "One daily wave of departures, 12:00 from Bariloche and 17:00 from Mendoza, about 19 to 20.5 h overnight.",
+      "sources": [
+        "https://www.centraldepasajes.com.ar/cdp/pasajes-micro/bariloche/mendoza",
+        "https://www.centraldepasajes.com.ar/cdp/pasajes-micro/mendoza/bariloche"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Buenos Aires",
+        "code": "BUE",
+        "country": "AR",
+        "lat": -34.604,
+        "lon": -58.382
+      },
+      "to": {
+        "name": "Mendoza",
+        "code": "MDZ",
+        "country": "AR",
+        "lat": -32.89,
+        "lon": -68.845
+      },
+      "mode": "coach",
+      "minutes": 870,
+      "priceEur": [
+        76,
+        112
+      ],
+      "both": true,
+      "operator": "Andesmar, Chevallier, CATA Internacional, Autotransportes San Juan, Central Argentino and others",
+      "book": "https://www.centraldepasajes.com.ar/cdp/pasajes-micro/retiro-buenos-aires/mendoza",
+      "note": "From Retiro, about 20 departures a day, mostly in the evening, 13.5 to 17 h. Cama about 20 percent dearer than semicama.",
+      "sources": [
+        "https://www.centraldepasajes.com.ar/cdp/pasajes-micro/retiro-buenos-aires/mendoza"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Buenos Aires",
+        "code": "BUE",
+        "country": "AR",
+        "lat": -34.604,
+        "lon": -58.382
+      },
+      "to": {
+        "name": "Bariloche",
+        "code": "BRC",
+        "country": "AR",
+        "lat": -41.134,
+        "lon": -71.31
+      },
+      "mode": "coach",
+      "minutes": 1470,
+      "priceEur": [
+        117,
+        143
+      ],
+      "both": true,
+      "operator": "Chevallier and others",
+      "book": "https://www.centraldepasajes.com.ar/cdp/pasajes-micro/retiro-buenos-aires/bariloche",
+      "note": "From Retiro or Liniers, a long overnight run of about 24 to 25 h. The weekly Tren Patagonico from Viedma is the rail alternative.",
+      "sources": [
+        "https://www.centraldepasajes.com.ar/cdp/pasajes-micro/retiro-buenos-aires/bariloche",
+        "https://www.rome2rio.com/s/Buenos-Aires/Bariloche"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Buenos Aires",
+        "code": "BUE",
+        "country": "AR",
+        "lat": -34.604,
+        "lon": -58.382
+      },
+      "to": {
+        "name": "Montevideo",
+        "code": "MVD",
+        "country": "UY",
+        "lat": -34.906,
+        "lon": -56.191
+      },
+      "mode": "ferry",
+      "minutes": 150,
+      "priceEur": [
+        60,
+        155
+      ],
+      "both": true,
+      "operator": "Buquebus (direct fast ferry)",
+      "book": "https://www.buquebus.com",
+      "note": "Direct fast ferry Puerto Madero to Montevideo port, about 2 h 15 to 2 h 30, about twice a day. Ferry to Colonia plus bus (about 3.5 h) is usually cheaper.",
+      "sources": [
+        "https://www.rome2rio.com/s/Buenos-Aires/Montevideo",
+        "https://cuantomecuesta.com/uy/pasaje-buquebus/"
+      ],
+      "confidence": "medium"
+    },
+    {
+      "from": {
+        "name": "Buenos Aires",
+        "code": "BUE",
+        "country": "AR",
+        "lat": -34.604,
+        "lon": -58.382
+      },
+      "to": {
+        "name": "Colonia del Sacramento",
+        "code": null,
+        "country": "UY",
+        "lat": -34.471,
+        "lon": -57.844
+      },
+      "mode": "ferry",
+      "minutes": 75,
+      "priceEur": [
+        43,
+        64
+      ],
+      "both": true,
+      "operator": "Buquebus, Colonia Express",
+      "book": "https://www.coloniaexpress.com/en/ar/",
+      "note": "From Puerto Madero, about 75 min. Colonia Express sails 5 times a day and is usually cheaper; Buquebus has more classes. Fares are set in ARS and rise fast.",
+      "sources": [
+        "https://www.canal26.com/turismo/2025/12/04/el-mejor-plan-para-el-fin-de-semana-largo-cuanto-sale-ir-y-volver-desde-buenos-aires-a-colonia-en-ferry/",
+        "https://www.coloniaexpress.com/en/ar/more-information/schedules-and-routes/",
+        "https://www.ferryscanner.com/en/ferry-routes/ferry-buenos-aires-colonia-del-sacramento"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Colonia del Sacramento",
+        "code": null,
+        "country": "UY",
+        "lat": -34.471,
+        "lon": -57.844
+      },
+      "to": {
+        "name": "Montevideo",
+        "code": "MVD",
+        "country": "UY",
+        "lat": -34.906,
+        "lon": -56.191
+      },
+      "mode": "coach",
+      "minutes": 165,
+      "priceEur": [
+        12,
+        15
+      ],
+      "both": true,
+      "operator": "COT, Turil",
+      "book": "https://www.cot.com.uy/horarios-y-tarifas",
+      "note": "Colonia bus terminal to Montevideo Tres Cruces, about hourly from early morning to late evening, about 2 h 45. COT fare UYU 579.",
+      "sources": [
+        "https://www.cot.com.uy/horarios-y-tarifas",
+        "https://www.rome2rio.com/s/Colonia-del-Sacramento/Montevideo"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Montevideo",
+        "code": "MVD",
+        "country": "UY",
+        "lat": -34.906,
+        "lon": -56.191
+      },
+      "to": {
+        "name": "Punta del Este",
+        "code": "PDP",
+        "country": "UY",
+        "lat": -34.962,
+        "lon": -54.945
+      },
+      "mode": "coach",
+      "minutes": 140,
+      "priceEur": [
+        8.6,
+        11
+      ],
+      "both": true,
+      "operator": "COT, COPSA and others",
+      "book": "https://www.cot.com.uy/horarios-y-tarifas",
+      "note": "From Tres Cruces about every 30 min, 2 h 15 to 2 h 45 depending on stops. COT fare UYU 466.",
+      "sources": [
+        "https://www.cot.com.uy/horarios-y-tarifas",
+        "https://www.rome2rio.com/s/Montevideo/Punta-del-Este"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Asuncion",
+        "code": "ASU",
+        "country": "PY",
+        "lat": -25.282,
+        "lon": -57.635
+      },
+      "to": {
+        "name": "Encarnacion",
+        "code": null,
+        "country": "PY",
+        "lat": -27.33,
+        "lon": -55.866
+      },
+      "mode": "coach",
+      "minutes": 300,
+      "priceEur": [
+        14,
+        26
+      ],
+      "both": true,
+      "operator": "Expreso Paraguay, Rio Paraguay, Nuestra Senora de la Asuncion (NSA), San Juan and others",
+      "book": "https://www.checkmybus.com/asuncion-py/encarnacion-it",
+      "note": "From the Asuncion bus terminal, day and overnight buses, about 5 h direct and up to 7 h on stopping services.",
+      "sources": [
+        "https://www.checkmybus.com/asuncion-py/encarnacion-it",
+        "https://www.rome2rio.com/s/Asunci%C3%B3n/Encarnaci%C3%B3n"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Asuncion",
+        "code": "ASU",
+        "country": "PY",
+        "lat": -25.282,
+        "lon": -57.635
+      },
+      "to": {
+        "name": "Ciudad del Este",
+        "code": "AGT",
+        "country": "PY",
+        "lat": -25.509,
+        "lon": -54.611
+      },
+      "mode": "coach",
+      "minutes": 300,
+      "priceEur": [
+        12,
+        18
+      ],
+      "both": true,
+      "operator": "Nuestra Senora de la Asuncion, Canindeyu, La Santaniana, San Luis, Crucero del Este and others",
+      "book": "https://www.checkmybus.com/asuncion-py/ciudad-del-este-ap",
+      "note": "Frequent day and night buses from the Asuncion terminal, 4 h 50 to 6 h. Drop-offs at the Km 7 terminal or stops along the highway.",
+      "sources": [
+        "https://www.checkmybus.com/asuncion-py/ciudad-del-este-ap",
+        "https://www.rome2rio.com/s/Asunci%C3%B3n/Ciudad-del-Este"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Ciudad del Este",
+        "code": "AGT",
+        "country": "PY",
+        "lat": -25.509,
+        "lon": -54.611
+      },
+      "to": {
+        "name": "Foz do Iguacu",
+        "code": "IGU",
+        "country": "BR",
+        "lat": -25.547,
+        "lon": -54.588
+      },
+      "mode": "coach",
+      "minutes": 40,
+      "priceEur": [
+        1.6,
+        2.4
+      ],
+      "both": true,
+      "operator": "local cross-border buses over the Ponte da Amizade",
+      "book": "https://www.rome2rio.com/s/Ciudad-del-Este/Foz-do-Igua%C3%A7u",
+      "note": "Frequent buses over the Friendship Bridge, about 30 to 45 min, paid in BRL or PYG. Bridge traffic can add hours; get off at both posts if you need stamps.",
+      "sources": [
+        "https://www.hoteltarobafoz.com.br/en/?p=11593",
+        "https://www.rome2rio.com/s/Ciudad-del-Este/Foz-do-Igua%C3%A7u"
+      ],
+      "confidence": "medium"
+    },
+    {
+      "from": {
+        "name": "Asuncion",
+        "code": "ASU",
+        "country": "PY",
+        "lat": -25.282,
+        "lon": -57.635
+      },
+      "to": {
+        "name": "Buenos Aires",
+        "code": "BUE",
+        "country": "AR",
+        "lat": -34.604,
+        "lon": -58.382
+      },
+      "mode": "coach",
+      "minutes": 1080,
+      "priceEur": [
+        71,
+        100
+      ],
+      "both": true,
+      "operator": "Nuestra Senora de la Asuncion, Sol Bus, Crucero del Norte, La Santaniana, Expreso Rio Parana and others",
+      "book": "https://www.centraldepasajes.com.ar/cdp/pasajes-micro/asuncion-del-paraguay/retiro-buenos-aires",
+      "note": "Many daily departures, Asuncion terminal to Retiro, 17 to 22 h with one night on board and a border stop on the way.",
+      "sources": [
+        "https://www.centraldepasajes.com.ar/cdp/pasajes-micro/asuncion-del-paraguay/retiro-buenos-aires",
+        "https://www.centraldepasajes.com.ar/cdp/pasajes-micro/retiro-buenos-aires/asuncion-del-paraguay"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Encarnacion",
+        "code": null,
+        "country": "PY",
+        "lat": -27.33,
+        "lon": -55.866
+      },
+      "to": {
+        "name": "Posadas",
+        "code": "PSS",
+        "country": "AR",
+        "lat": -27.367,
+        "lon": -55.896
+      },
+      "mode": "coach",
+      "minutes": 25,
+      "priceEur": [
+        1.5,
+        2.6
+      ],
+      "both": true,
+      "operator": "international city buses (Beato Roque Gonzalez and others)",
+      "book": "https://www.rome2rio.com/s/Posadas/Encarnaci%C3%B3n",
+      "note": "Buses every 10 to 15 min across the San Roque Gonzalez bridge, about 25 min plus border stops on both sides. Fare payable in ARS or PYG.",
+      "sources": [
+        "https://www.canal12misiones.com/aaa-modulo-e/transporte-internacional-actualizan-el-precio-del-pasaje-entre-posadas-y-encarnacion",
+        "https://www.rome2rio.com/s/Posadas/Encarnaci%C3%B3n"
+      ],
+      "confidence": "medium"
+    },
+    {
+      "from": {
+        "name": "Encarnacion",
+        "code": null,
+        "country": "PY",
+        "lat": -27.33,
+        "lon": -55.866
+      },
+      "to": {
+        "name": "Posadas",
+        "code": "PSS",
+        "country": "AR",
+        "lat": -27.367,
+        "lon": -55.896
+      },
+      "mode": "train",
+      "minutes": 8,
+      "priceEur": [
+        0.6,
+        1.8
+      ],
+      "both": true,
+      "operator": "Ferrocarril Internacional Casimiro",
+      "book": "https://www.canal26.com/turismo/2025/12/05/viajar-a-paraguay-en-tren-cuanto-sale-el-viaje-desde-argentina-que-dura-menos-de-10-minutos-y-es-muy-economico/",
+      "note": "Shuttle train over the bridge, Mon to Sat about every 30 min, 07:15 to 18:15 from Posadas, 07:30 to 18:30 from Encarnacion. No Sunday trains; joint border check.",
+      "sources": [
+        "https://www.canal26.com/turismo/2025/12/05/viajar-a-paraguay-en-tren-cuanto-sale-el-viaje-desde-argentina-que-dura-menos-de-10-minutos-y-es-muy-economico/",
+        "https://www.sirchandler.com.ar/2025/10/cruzar-en-tren-a-encarnacion-del-paraguay-desde-posadas/"
+      ],
+      "confidence": "medium"
+    },
+    {
+      "from": {
+        "name": "Rio de Janeiro",
+        "code": "RIO",
+        "country": "BR",
+        "lat": -22.907,
+        "lon": -43.173
+      },
+      "to": {
+        "name": "Sao Paulo",
+        "code": "SAO",
+        "country": "BR",
+        "lat": -23.55,
+        "lon": -46.633
+      },
+      "mode": "coach",
+      "minutes": 390,
+      "priceEur": [
+        14,
+        33
+      ],
+      "both": true,
+      "operator": "1001, Expresso do Sul, Aguia Branca, Viacao Penha, Catarinense, Buser and others",
+      "book": "https://www.buser.com.br/onibus/rio-de-janeiro-rj/sao-paulo-sp",
+      "note": "Novo Rio to Tiete, departures round the clock, about 6 h 30, longer in traffic. Leito and cama seats cost more than convencional.",
+      "sources": [
+        "https://www.checkmybus.com/rio-de-janeiro/sao-paulo",
+        "https://www.buser.com.br/onibus/rio-de-janeiro-rj/sao-paulo-sp",
+        "https://www.rome2rio.com/s/Rio-de-Janeiro/S%C3%A3o-Paulo"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Rio de Janeiro",
+        "code": "RIO",
+        "country": "BR",
+        "lat": -22.907,
+        "lon": -43.173
+      },
+      "to": {
+        "name": "Paraty",
+        "code": null,
+        "country": "BR",
+        "lat": -23.219,
+        "lon": -44.713
+      },
+      "mode": "coach",
+      "minutes": 300,
+      "priceEur": [
+        13,
+        21
+      ],
+      "both": true,
+      "operator": "Costa Verde Transportes",
+      "book": "https://www.costaverdetransportes.com.br/",
+      "note": "From Novo Rio roughly hourly, 4 h 40 to 5 h 45. Official full fare R$79.20; return tickets bought together are discounted.",
+      "sources": [
+        "https://www.costaverdetransportes.com.br/",
+        "https://www.checkmybus.com/rio-de-janeiro/paraty",
+        "https://www.rome2rio.com/s/Rio-de-Janeiro/Paraty"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Rio de Janeiro",
+        "code": "RIO",
+        "country": "BR",
+        "lat": -22.907,
+        "lon": -43.173
+      },
+      "to": {
+        "name": "Ilha Grande (Abraao)",
+        "code": null,
+        "country": "BR",
+        "lat": -23.142,
+        "lon": -44.169
+      },
+      "mode": "van",
+      "minutes": 240,
+      "priceEur": [
+        29,
+        48
+      ],
+      "both": true,
+      "operator": "shared shuttle vans with speedboat (several agencies)",
+      "book": "https://rioairportshuttle.rezdy.com/334113/from-rio-de-janeiro-south-hotels-to-ilha-grande-abraao-pier-shared-shuttle-service-includes-boat",
+      "note": "Hotel pickup in Rio, van to Conceicao de Jacarei, then a 20 min speedboat to Abraao; price includes the boat. Angra charges a R$50 visitor tax since June 2026.",
+      "sources": [
+        "https://globaltripdiaries.com/?p=6524"
+      ],
+      "confidence": "medium"
+    },
+    {
+      "from": {
+        "name": "Foz do Iguacu",
+        "code": "IGU",
+        "country": "BR",
+        "lat": -25.547,
+        "lon": -54.588
+      },
+      "to": {
+        "name": "Puerto Iguazu",
+        "code": "IGR",
+        "country": "AR",
+        "lat": -25.598,
+        "lon": -54.573
+      },
+      "mode": "coach",
+      "minutes": 35,
+      "priceEur": [
+        2,
+        3
+      ],
+      "both": true,
+      "operator": "Rio Uruguay, Crucero del Norte and others",
+      "book": "https://www.riouruguaybus.com.ar",
+      "note": "From central Foz near the TTU to Puerto Iguazu terminal about every 30 to 40 min by day. All get off at Argentine immigration; the bus may not wait at the Brazil post.",
+      "sources": [
+        "https://www.essemundoenosso.com.br/?p=6629",
+        "https://wanderlog.com/place/details/11981306/transporte-rio-uruguay",
+        "https://barefoot-backpacker.com/crossing-the-borders-at-iguazu/"
+      ],
+      "confidence": "medium"
+    },
+    {
+      "from": {
+        "name": "Sao Paulo",
+        "code": "SAO",
+        "country": "BR",
+        "lat": -23.55,
+        "lon": -46.633
+      },
+      "to": {
+        "name": "Paraty",
+        "code": null,
+        "country": "BR",
+        "lat": -23.219,
+        "lon": -44.713
+      },
+      "mode": "coach",
+      "minutes": 380,
+      "priceEur": [
+        14,
+        21
+      ],
+      "both": true,
+      "operator": "Reunidas Paulista, Primar Turismo, FlixBus",
+      "book": "https://www.checkmybus.com/sao-paulo/paraty",
+      "note": "From Tiete terminal, many buses a day, 5 h 40 to 6 h 40. FlixBus runs one late night bus.",
+      "sources": [
+        "https://www.checkmybus.com/sao-paulo/paraty",
+        "https://www.rome2rio.com/s/S%C3%A3o-Paulo/Paraty"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Bogota",
+        "code": "BOG",
+        "country": "CO",
+        "lat": 4.711,
+        "lon": -74.072
+      },
+      "to": {
+        "name": "Medellin",
+        "code": "MDE",
+        "country": "CO",
+        "lat": 6.244,
+        "lon": -75.574
+      },
+      "mode": "coach",
+      "minutes": 600,
+      "priceEur": [
+        18,
+        32
+      ],
+      "both": true,
+      "operator": "Expreso Bolivariano, Expreso Brasilia, Rapido Tolima, Rapido Ochoa and others",
+      "book": "https://www.checkmybus.com/travel/medellin-an/bogota-dc",
+      "note": "Terminal Salitre (Bogota) to Terminal del Norte (Medellin), over 100 buses a day incl. overnight. Mountain road via Honda, 9 to 11 h; delays are common.",
+      "sources": [
+        "https://geckoroutes.com/colombia/bogota-to-medellin/",
+        "https://www.checkmybus.com/travel/medellin-an/bogota-dc"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Medellin",
+        "code": "MDE",
+        "country": "CO",
+        "lat": 6.244,
+        "lon": -75.574
+      },
+      "to": {
+        "name": "Guatape",
+        "code": null,
+        "country": "CO",
+        "lat": 6.233,
+        "lon": -75.158
+      },
+      "mode": "coach",
+      "minutes": 120,
+      "priceEur": [
+        4.9,
+        5.6
+      ],
+      "both": true,
+      "operator": "Sotrasanvicente, Sotrapenol",
+      "book": "https://geckoroutes.com/colombia/medellin-to-guatape/",
+      "note": "From Terminal del Norte (Metro Caribe), about hourly, cash at windows 9 and 14. Ask to stop at El Penol rock. Return tickets bought in Guatape; last bus back about 18:30.",
+      "sources": [
+        "https://couplestravelstories.ca/guatape-without-tour-medellin/",
+        "https://geckoroutes.com/colombia/medellin-to-guatape/"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Cartagena",
+        "code": "CTG",
+        "country": "CO",
+        "lat": 10.391,
+        "lon": -75.479
+      },
+      "to": {
+        "name": "Santa Marta",
+        "code": "SMR",
+        "country": "CO",
+        "lat": 11.241,
+        "lon": -74.205
+      },
+      "mode": "coach",
+      "minutes": 270,
+      "priceEur": [
+        9.6,
+        21
+      ],
+      "both": true,
+      "operator": "Expreso Brasilia, Unitransco, Copetran, plus Berlinastur and Marsol vans",
+      "book": "https://geckoroutes.com/colombia/cartagena-to-santa-marta/",
+      "note": "Buses leave the outlying Terminal de Transportes via Barranquilla. Berlinastur (Marbella) and Marsol (own terminal) vans run hourly or better at 70,000 to 95,000 COP.",
+      "sources": [
+        "https://www.alongdustyroads.com/posts/how-to-get-from-cartagena-to-santa-marta",
+        "https://geckoroutes.com/colombia/cartagena-to-santa-marta/"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Santa Marta",
+        "code": "SMR",
+        "country": "CO",
+        "lat": 11.241,
+        "lon": -74.205
+      },
+      "to": {
+        "name": "Palomino",
+        "code": null,
+        "country": "CO",
+        "lat": 11.246,
+        "lon": -73.563
+      },
+      "mode": "coach",
+      "minutes": 120,
+      "priceEur": [
+        3.8,
+        7.9
+      ],
+      "both": true,
+      "operator": "Cootransoriente, Expreso Brasilia, Unitransco and others",
+      "book": "https://geckoroutes.com/colombia/santa-marta-to-palomino/",
+      "note": "Cheapest buses leave from behind the Mercado Publico when full, about 04:40 to 18:00; Brasilia and Unitransco use the main terminal. Drop-off on the highway in Palomino.",
+      "sources": [
+        "https://geckoroutes.com/colombia/santa-marta-to-palomino/"
+      ],
+      "confidence": "medium"
+    },
+    {
+      "from": {
+        "name": "Santa Marta",
+        "code": "SMR",
+        "country": "CO",
+        "lat": 11.241,
+        "lon": -74.205
+      },
+      "to": {
+        "name": "Minca",
+        "code": null,
+        "country": "CO",
+        "lat": 11.143,
+        "lon": -74.119
+      },
+      "mode": "van",
+      "minutes": 45,
+      "priceEur": [
+        2.2,
+        2.2
+      ],
+      "both": true,
+      "operator": "Cootrasminca",
+      "book": "https://geckoroutes.com/colombia/santa-marta-to-minca/",
+      "note": "Shared vans leave when full from Carrera 9 with Calle 12, behind the Mercado Publico, about 07:00 to 18:00, not from the bus terminal. Waits of 30 to 40 min are normal.",
+      "sources": [
+        "https://geckoroutes.com/colombia/santa-marta-to-minca/"
+      ],
+      "confidence": "medium"
+    },
+    {
+      "from": {
+        "name": "Bogota",
+        "code": "BOG",
+        "country": "CO",
+        "lat": 4.711,
+        "lon": -74.072
+      },
+      "to": {
+        "name": "Armenia",
+        "code": "AXM",
+        "country": "CO",
+        "lat": 4.534,
+        "lon": -75.681
+      },
+      "mode": "coach",
+      "minutes": 480,
+      "priceEur": [
+        10,
+        20
+      ],
+      "both": true,
+      "operator": "Expreso Bolivariano, Flota Magdalena, Velotax and others",
+      "book": "https://www.bolivariano.com.co/",
+      "note": "From Terminal Salitre (module 2), some from Terminal del Sur, about 04:30 to late evening. Night buses take about 7 h; daytime traffic can make it 8 to 10 h.",
+      "sources": [
+        "https://geckoroutes.com/colombia/bogota-to-salento/",
+        "https://travelersanddreamers.com/bogota-to-salento/",
+        "https://www.rome2rio.com/s/Bogota/Armenia-Colombia"
+      ],
+      "confidence": "medium"
+    },
+    {
+      "from": {
+        "name": "Armenia",
+        "code": "AXM",
+        "country": "CO",
+        "lat": 4.534,
+        "lon": -75.681
+      },
+      "to": {
+        "name": "Salento",
+        "code": null,
+        "country": "CO",
+        "lat": 4.637,
+        "lon": -75.57
+      },
+      "mode": "van",
+      "minutes": 50,
+      "priceEur": [
+        1.3,
+        1.6
+      ],
+      "both": true,
+      "operator": "Cootracir, Expreso Alcala",
+      "book": "https://www.rome2rio.com/s/Terminal-de-Transportes-de-Armenia/Salento",
+      "note": "Minibuses from Armenia bus terminal every 20 minutes or when full, about 05:00 to 20:00. Buy at the window or know the fare; drivers sometimes overcharge.",
+      "sources": [
+        "https://nomadsbeyond.com/how-to-get-to-salento/",
+        "https://geckoroutes.com/colombia/bogota-to-salento/",
+        "https://www.rome2rio.com/s/Terminal-de-Transportes-de-Armenia/Salento"
+      ],
+      "confidence": "medium"
+    },
+    {
+      "from": {
+        "name": "Medellin",
+        "code": "MDE",
+        "country": "CO",
+        "lat": 6.244,
+        "lon": -75.574
+      },
+      "to": {
+        "name": "Salento",
+        "code": null,
+        "country": "CO",
+        "lat": 4.637,
+        "lon": -75.57
+      },
+      "mode": "coach",
+      "minutes": 450,
+      "priceEur": [
+        17,
+        26
+      ],
+      "both": true,
+      "operator": "Flota Occidental",
+      "book": "https://www.checkmybus.com/medellin-an/salento-qd",
+      "note": "The only direct bus, from Terminal del Sur, a few departures a day incl. one after midnight. Roadworks often stretch it to 8 or 9 h. Seats sell out, book ahead.",
+      "sources": [
+        "https://geckoroutes.com/colombia/medellin-to-salento/",
+        "https://www.checkmybus.com/medellin-an/salento-qd",
+        "https://nomadsbeyond.com/how-to-get-to-salento/"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Medellin",
+        "code": "MDE",
+        "country": "CO",
+        "lat": 6.244,
+        "lon": -75.574
+      },
+      "to": {
+        "name": "Cartagena",
+        "code": "CTG",
+        "country": "CO",
+        "lat": 10.391,
+        "lon": -75.479
+      },
+      "mode": "coach",
+      "minutes": 840,
+      "priceEur": [
+        28,
+        48
+      ],
+      "both": true,
+      "operator": "Rapido Ochoa, Expreso Brasilia, Flota La Macarena",
+      "book": "https://www.checkmybus.com/travel/medellin-an/cartagena-de-indias-by",
+      "note": "Terminal del Norte to the Cartagena Terminal de Transportes on the city edge, day and overnight departures, 12 to 16 h. Budget flights often cost about the same.",
+      "sources": [
+        "https://geckoroutes.com/colombia/medellin-to-cartagena/",
+        "https://www.checkmybus.com/travel/medellin-an/cartagena-de-indias-by"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Ipiales",
+        "code": "IPI",
+        "country": "CO",
+        "lat": 0.828,
+        "lon": -77.64
+      },
+      "to": {
+        "name": "Tulcan",
+        "code": null,
+        "country": "EC",
+        "lat": 0.812,
+        "lon": -77.717
+      },
+      "mode": "van",
+      "minutes": 35,
+      "priceEur": [
+        1.8,
+        9
+      ],
+      "both": true,
+      "operator": "shared taxis and colectivos (two legs)",
+      "book": "https://www.aworldover.com/the-colombia-ecuador-border-crossing-at-rumichaca/",
+      "note": "Colectivo Ipiales to the Rumichaca bridge (15 min), walk across for both stamps, then colectivo or taxi to Tulcan (20 min). Queues 20 min to 4 h; shut on election days.",
+      "sources": [
+        "https://www.aworldover.com/the-colombia-ecuador-border-crossing-at-rumichaca/",
+        "https://theblogofdimi.com/colombia-ecuador-border-crossing-rumichaca/"
+      ],
+      "confidence": "medium"
+    },
+    {
+      "from": {
+        "name": "Tulcan",
+        "code": null,
+        "country": "EC",
+        "lat": 0.812,
+        "lon": -77.717
+      },
+      "to": {
+        "name": "Quito",
+        "code": "UIO",
+        "country": "EC",
+        "lat": -0.18,
+        "lon": -78.468
+      },
+      "mode": "coach",
+      "minutes": 330,
+      "priceEur": [
+        7.6,
+        10
+      ],
+      "both": true,
+      "operator": "Expreso Tulcan, Pullman Carchi, Flota Imbabura",
+      "book": "https://www.checkmybus.com/tulcan/quito",
+      "note": "Frequent buses to Quito Carcelen (north) or Quitumbe (south). Official fare USD 8.77 since Aug 2026. Avoid the 01:00 runs that reach Carcelen before dawn.",
+      "sources": [
+        "https://www.checkmybus.com/tulcan/quito",
+        "https://www.expreso.ec/ecuador/viajar-ecuador-25-caro-cuanto-costara-trasladarse-proximo-feriado-291059.html"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Quito",
+        "code": "UIO",
+        "country": "EC",
+        "lat": -0.18,
+        "lon": -78.468
+      },
+      "to": {
+        "name": "Banos",
+        "code": null,
+        "country": "EC",
+        "lat": -1.396,
+        "lon": -78.425
+      },
+      "mode": "coach",
+      "minutes": 225,
+      "priceEur": [
+        5.4,
+        6.9
+      ],
+      "both": true,
+      "operator": "Cooperativa Banos, Amazonas, Expreso Banos",
+      "book": "https://www.busbud.com/en-gb/bus-quito-banos/r/6rbnyr-6rb0p6",
+      "note": "From Quitumbe terminal in south Quito via Ambato, frequent daytime departures. Fare rose to USD 6.25 in Aug 2026. Banos terminal is a short walk from town.",
+      "sources": [
+        "https://www.primicias.ec/economia/alza-pasajes-interprovinciales-nuevas-tarifas-eliminacion-subsidio-diesel-129197/",
+        "https://www.travelwithhello.com/blog/ecuador-10-day-itinerary",
+        "https://www.rome2rio.com/s/Quito/Ba%C3%B1os-Ecuador"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Quito",
+        "code": "UIO",
+        "country": "EC",
+        "lat": -0.18,
+        "lon": -78.468
+      },
+      "to": {
+        "name": "Otavalo",
+        "code": null,
+        "country": "EC",
+        "lat": 0.234,
+        "lon": -78.262
+      },
+      "mode": "coach",
+      "minutes": 120,
+      "priceEur": [
+        2.2,
+        3.4
+      ],
+      "both": true,
+      "operator": "Cooperativa Otavalo, Los Lagos, Flota Imbabura",
+      "book": "https://www.rome2rio.com/s/Quito-Terminal-Carcel%C3%A9n/Otavalo",
+      "note": "From Carcelen terminal in north Quito, several buses an hour; no need to book except holiday weekends. National fares rose about 25% in Aug 2026.",
+      "sources": [
+        "https://www.travelwithhello.com/blog/ecuador-10-day-itinerary",
+        "https://happygringo.com/blog/otavalo-ecuador/"
+      ],
+      "confidence": "medium"
+    },
+    {
+      "from": {
+        "name": "Quito",
+        "code": "UIO",
+        "country": "EC",
+        "lat": -0.18,
+        "lon": -78.468
+      },
+      "to": {
+        "name": "Cuenca",
+        "code": "CUE",
+        "country": "EC",
+        "lat": -2.897,
+        "lon": -79.005
+      },
+      "mode": "coach",
+      "minutes": 540,
+      "priceEur": [
+        15,
+        23
+      ],
+      "both": true,
+      "operator": "Flota Imbabura, Cooperativa Loja, Turismo Oriental and others",
+      "book": "https://www.checkmybus.com/cuenca-ec/quito",
+      "note": "Mostly from Quitumbe, some from Carcelen, many overnight runs. Official fare USD 17.25 since Aug 2026. A flight takes under 1 h.",
+      "sources": [
+        "https://www.checkmybus.com/cuenca-ec/quito",
+        "https://www.expreso.ec/ecuador/viajar-ecuador-25-caro-cuanto-costara-trasladarse-proximo-feriado-291059.html"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Guayaquil",
+        "code": "GYE",
+        "country": "EC",
+        "lat": -2.19,
+        "lon": -79.889
+      },
+      "to": {
+        "name": "Montanita",
+        "code": null,
+        "country": "EC",
+        "lat": -1.828,
+        "lon": -80.753
+      },
+      "mode": "coach",
+      "minutes": 165,
+      "priceEur": [
+        5.2,
+        6.9
+      ],
+      "both": true,
+      "operator": "CLP (Cooperativa Libertad Peninsular)",
+      "book": "https://www.rome2rio.com/s/Guayaquil/Monta%C3%B1ita",
+      "note": "Direct CLP buses from the Terminal Terrestre near the airport, about hourly 05:00 to 19:30, daytime only. Cheaper with a change in Santa Elena. 2026 curfews cut late runs.",
+      "sources": [
+        "https://gobackpacking.com/travel-guides/ecuador/montanita/",
+        "https://www.rome2rio.com/s/Guayaquil/Monta%C3%B1ita"
+      ],
+      "confidence": "medium"
+    },
+    {
+      "from": {
+        "name": "Guayaquil",
+        "code": "GYE",
+        "country": "EC",
+        "lat": -2.19,
+        "lon": -79.889
+      },
+      "to": {
+        "name": "Cuenca",
+        "code": "CUE",
+        "country": "EC",
+        "lat": -2.897,
+        "lon": -79.005
+      },
+      "mode": "coach",
+      "minutes": 240,
+      "priceEur": [
+        8.6,
+        10
+      ],
+      "both": true,
+      "operator": "Alianza, Ejecutivo San Luis, Super Semeria and others",
+      "book": "https://www.rome2rio.com/s/Guayaquil/Cuenca",
+      "note": "From the Terminal Terrestre every 20 to 30 min, mostly over Cajas National Park. Official fare USD 11.50 since Aug 2026. Night runs were cut during 2026 curfews.",
+      "sources": [
+        "https://www.expreso.ec/ecuador/viajar-ecuador-25-caro-cuanto-costara-trasladarse-proximo-feriado-291059.html",
+        "https://elyex.com/estas-son-las-nuevas-tarifas-de-los-buses-interprovinciales-desde-guayaquil/",
+        "https://www.rome2rio.com/s/Guayaquil/Cuenca"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Cuenca",
+        "code": "CUE",
+        "country": "EC",
+        "lat": -2.897,
+        "lon": -79.005
+      },
+      "to": {
+        "name": "Mancora",
+        "code": null,
+        "country": "PE",
+        "lat": -4.106,
+        "lon": -81.047
+      },
+      "mode": "coach",
+      "minutes": 420,
+      "priceEur": [
+        26,
+        31
+      ],
+      "both": true,
+      "operator": "Super Semeria, Azuay Internacional",
+      "book": "https://www.rome2rio.com/s/Cuenca/M%C3%A1ncora",
+      "note": "Overnight only, about 21:30 and 22:00, via Huaquillas; the driver waits while all clear both border posts. Arrives before dawn. El Oro curfews in 2026 hit night runs.",
+      "sources": [
+        "https://en.wikivoyage.org/wiki/M%C3%A1ncora",
+        "https://www.rome2rio.com/s/Cuenca/M%C3%A1ncora"
+      ],
+      "confidence": "medium"
+    },
+    {
+      "from": {
+        "name": "Mexico City",
+        "code": "MEX",
+        "country": "MX",
+        "lat": 19.433,
+        "lon": -99.133
+      },
+      "to": {
+        "name": "Oaxaca",
+        "code": "OAX",
+        "country": "MX",
+        "lat": 17.061,
+        "lon": -96.725
+      },
+      "mode": "coach",
+      "minutes": 420,
+      "priceEur": [
+        31,
+        68
+      ],
+      "both": true,
+      "operator": "ADO, ADO GL, ADO Platino, AU",
+      "book": "https://www.ado.com.mx/",
+      "note": "Buses about hourly from TAPO, Norte, Taxquena and the Sur terminal to the ADO station in Oaxaca. AU is the cheapest, ADO Platino the top class.",
+      "sources": [
+        "https://www.obilet.com/mx/bus-ticket/mexico_city-oaxaca_de_juarez",
+        "https://www.geckoroutes.com/es/mexico/oaxaca-a-ciudad-de-mexico/"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Mexico City",
+        "code": "MEX",
+        "country": "MX",
+        "lat": 19.433,
+        "lon": -99.133
+      },
+      "to": {
+        "name": "Puebla",
+        "code": "PBC",
+        "country": "MX",
+        "lat": 19.041,
+        "lon": -98.206
+      },
+      "mode": "coach",
+      "minutes": 135,
+      "priceEur": [
+        11,
+        16
+      ],
+      "both": true,
+      "operator": "ADO, AU, Estrella Roja and others",
+      "book": "https://www.ado.com.mx/",
+      "note": "Departures every few minutes from TAPO, Norte, Taxquena and the airport to CAPU. Traffic decides the time, 2 to 2.5 h. Airport buses cost more.",
+      "sources": [
+        "https://www.obilet.com/mx/bus-ticket/mexico_city-puebla",
+        "https://geckoroutes.com/mexico/mexico-city-to-puebla/"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Oaxaca",
+        "code": "OAX",
+        "country": "MX",
+        "lat": 17.061,
+        "lon": -96.725
+      },
+      "to": {
+        "name": "San Cristobal de las Casas",
+        "code": null,
+        "country": "MX",
+        "lat": 16.737,
+        "lon": -92.638
+      },
+      "mode": "coach",
+      "minutes": 660,
+      "priceEur": [
+        52,
+        72
+      ],
+      "both": true,
+      "operator": "ADO, ADO GL, OCC",
+      "book": "https://www.ado.com.mx/",
+      "note": "About 4 to 5 buses a day, mostly overnight (19:00 to 22:30), 10 to 12 h across the Isthmus. Check for road blockades (bloqueos) before you travel.",
+      "sources": [
+        "https://www.obilet.com/mx/bus-ticket/oaxaca_de_juarez-san_cristobal_de_las_casas",
+        "https://geckoroutes.com/mexico/san-cristobal-to-oaxaca/"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "San Cristobal de las Casas",
+        "code": null,
+        "country": "MX",
+        "lat": 16.737,
+        "lon": -92.638
+      },
+      "to": {
+        "name": "Palenque",
+        "code": null,
+        "country": "MX",
+        "lat": 17.51,
+        "lon": -91.982
+      },
+      "mode": "coach",
+      "minutes": 505,
+      "priceEur": [
+        22,
+        27
+      ],
+      "both": true,
+      "operator": "ADO, OCC",
+      "book": "https://www.ado.com.mx/",
+      "note": "About 4 buses a day, 8 to 9 h the long way. The shorter Highway 199 via Ocosingo has frequent roadblocks and the UK FCDO advises against it. Allow for delays.",
+      "sources": [
+        "https://www.obilet.com/mx/bus-ticket/san_cristobal_de_las_casas-palenque",
+        "https://geckoroutes.com/mexico/san-cristobal-de-las-casas-to-palenque/",
+        "https://livinginguatemala.com/transport/la-mesilla-border-crossing/"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Cancun",
+        "code": "CUN",
+        "country": "MX",
+        "lat": 21.161,
+        "lon": -86.851
+      },
+      "to": {
+        "name": "Tulum",
+        "code": "TQO",
+        "country": "MX",
+        "lat": 20.211,
+        "lon": -87.465
+      },
+      "mode": "coach",
+      "minutes": 160,
+      "priceEur": [
+        11,
+        15
+      ],
+      "both": true,
+      "operator": "ADO, AU",
+      "book": "https://www.ado.com.mx/",
+      "note": "Many buses a day from the downtown ADO terminal to Tulum ADO station in town; some also stop at the ruins. Airport buses cost about 445 to 475 MXN.",
+      "sources": [
+        "https://www.geckoroutes.com/mexico/cancun-to-tulum/",
+        "https://www.obilet.com/mx/bus-ticket/cancun-tulum"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Cancun",
+        "code": "CUN",
+        "country": "MX",
+        "lat": 21.161,
+        "lon": -86.851
+      },
+      "to": {
+        "name": "Merida",
+        "code": "MID",
+        "country": "MX",
+        "lat": 20.967,
+        "lon": -89.623
+      },
+      "mode": "coach",
+      "minutes": 250,
+      "priceEur": [
+        22,
+        48
+      ],
+      "both": true,
+      "operator": "ADO, ADO Platino",
+      "book": "https://www.ado.com.mx/",
+      "note": "Frequent day and night buses from the downtown ADO terminal to CAME or Altabrisa in Merida. Services stopping at Valladolid take longer.",
+      "sources": [
+        "https://www.geckoroutes.com/mexico/cancun-to-merida/",
+        "https://tulumtimes.com/tren-maya-fares-reduced"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Merida",
+        "code": "MID",
+        "country": "MX",
+        "lat": 20.967,
+        "lon": -89.623
+      },
+      "to": {
+        "name": "Valladolid",
+        "code": null,
+        "country": "MX",
+        "lat": 20.689,
+        "lon": -88.201
+      },
+      "mode": "coach",
+      "minutes": 145,
+      "priceEur": [
+        12,
+        16
+      ],
+      "both": true,
+      "operator": "ADO",
+      "book": "https://www.ado.com.mx/",
+      "note": "ADO from the central CAME terminal (some from Fiesta Americana) to Valladolid bus station in the centre, many a day. ADO GL costs a little more.",
+      "sources": [
+        "https://www.checkmybus.com/travel/merida-yn/valladolid-yn",
+        "https://www.rome2rio.com/s/Mérida/Valladolid-Mexico"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Playa del Carmen",
+        "code": null,
+        "country": "MX",
+        "lat": 20.629,
+        "lon": -87.073
+      },
+      "to": {
+        "name": "Cozumel",
+        "code": "CZM",
+        "country": "MX",
+        "lat": 20.509,
+        "lon": -86.949
+      },
+      "mode": "ferry",
+      "minutes": 40,
+      "priceEur": [
+        12,
+        18
+      ],
+      "both": true,
+      "operator": "Ultramar, Winjet, Xailing",
+      "book": "https://www.ultramarferry.com/en/",
+      "note": "Fast ferries from the Playa del Carmen pier by 5th Avenue, about hourly from 08:00 to 22:00. Cheaper resident fares need a Quintana Roo ID.",
+      "sources": [
+        "https://www.cancun-discounts.com/cozumel-ferry.htm",
+        "https://www.tusbuenasnoticias.com/amp/noticias/turismo/2025/06/02/45967-cuanto-cobra-el-ferry-de-playa-del-carmen-a-cozumel"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Tulum",
+        "code": "TQO",
+        "country": "MX",
+        "lat": 20.211,
+        "lon": -87.465
+      },
+      "to": {
+        "name": "Bacalar",
+        "code": null,
+        "country": "MX",
+        "lat": 18.677,
+        "lon": -88.393
+      },
+      "mode": "coach",
+      "minutes": 170,
+      "priceEur": [
+        16,
+        22
+      ],
+      "both": true,
+      "operator": "ADO, AU",
+      "book": "https://www.ado.com.mx/",
+      "note": "About 12 buses a day from Tulum ADO terminal to the Bacalar bus station on the main road. AU runs evenings only and has no toilet.",
+      "sources": [
+        "https://www.geckoroutes.com/mexico/tulum-to-bacalar/",
+        "https://www.obilet.com/mx/bus-ticket/tulum-bacalar"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Cancun",
+        "code": "CUN",
+        "country": "MX",
+        "lat": 21.161,
+        "lon": -86.851
+      },
+      "to": {
+        "name": "Playa del Carmen",
+        "code": null,
+        "country": "MX",
+        "lat": 20.629,
+        "lon": -87.073
+      },
+      "mode": "coach",
+      "minutes": 80,
+      "priceEur": [
+        4,
+        5.9
+      ],
+      "both": true,
+      "operator": "ADO, AU",
+      "book": "https://www.ado.com.mx/",
+      "note": "Buses every few minutes from the downtown ADO terminal; airport buses cost about 250 to 270 MXN. Playa Express colectivos also run, from about 45 MXN.",
+      "sources": [
+        "https://www.obilet.com/mx/bus-ticket/cancun-playa_del_carmen",
+        "https://www.geckoroutes.com/mexico/cancun-to-playa-del-carmen/"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Cancun",
+        "code": "CUN",
+        "country": "MX",
+        "lat": 21.161,
+        "lon": -86.851
+      },
+      "to": {
+        "name": "Merida",
+        "code": "MID",
+        "country": "MX",
+        "lat": 20.967,
+        "lon": -89.623
+      },
+      "mode": "train",
+      "minutes": 210,
+      "priceEur": [
+        25,
+        48
+      ],
+      "both": true,
+      "operator": "Tren Maya",
+      "book": "https://reservas.ventaboletostrenmaya.com.mx/",
+      "note": "6 trains a day each way, Cancun Aeropuerto station to Merida Teya on the east edge of Merida. Tourist fare cut to 547 MXN in April 2026; some listings still show more.",
+      "sources": [
+        "https://www.trenmaya.gob.mx/horarios.php",
+        "https://tulumtimes.com/tren-maya-fares-reduced",
+        "https://www.poresto.com/yucatan/2026/7/8/viaja-en-tren-maya-de-merida-a-cancun-en-verano-2026-costos-tiempo-de-recorrido-y-como-comprar-boletos.html"
+      ],
+      "confidence": "medium"
+    },
+    {
+      "from": {
+        "name": "Cancun",
+        "code": "CUN",
+        "country": "MX",
+        "lat": 21.161,
+        "lon": -86.851
+      },
+      "to": {
+        "name": "Tulum",
+        "code": "TQO",
+        "country": "MX",
+        "lat": 20.211,
+        "lon": -87.465
+      },
+      "mode": "train",
+      "minutes": 105,
+      "priceEur": [
+        20,
+        34
+      ],
+      "both": true,
+      "operator": "Tren Maya",
+      "book": "https://reservas.ventaboletostrenmaya.com.mx/",
+      "note": "Only a few trains a day from Cancun Aeropuerto station via Playa del Carmen; Tulum station is outside town. The ADO bus from downtown is cheaper and more frequent.",
+      "sources": [
+        "https://www.rome2rio.com/s/Cancún/Tulum",
+        "https://www.trenmaya.gob.mx/horarios.php"
+      ],
+      "confidence": "medium"
+    },
+    {
+      "from": {
+        "name": "Merida",
+        "code": "MID",
+        "country": "MX",
+        "lat": 20.967,
+        "lon": -89.623
+      },
+      "to": {
+        "name": "Valladolid",
+        "code": null,
+        "country": "MX",
+        "lat": 20.689,
+        "lon": -88.201
+      },
+      "mode": "train",
+      "minutes": 105,
+      "priceEur": [
+        20,
+        27
+      ],
+      "both": true,
+      "operator": "Tren Maya",
+      "book": "https://reservas.ventaboletostrenmaya.com.mx/",
+      "note": "Turista class from Merida Teya, about 23 min from Paseo de Montejo. Valladolid station is about 20 min from the centre by bus or taxi. Premier costs about 60 percent more.",
+      "sources": [
+        "https://www.poresto.com/yucatan/2026/1/7/tren-maya-precios-actualizados-de-2026-para-viajar-en-yucatan.html",
+        "https://midcitybeat.com/travel/first-mid-citybeat-maya-tren-experience-the-pros-cons-of-the-merida-valladolid-ride/",
+        "https://www.rome2rio.com/s/Mérida/Valladolid-Mexico"
+      ],
+      "confidence": "medium"
+    },
+    {
+      "from": {
+        "name": "Palenque",
+        "code": null,
+        "country": "MX",
+        "lat": 17.51,
+        "lon": -91.982
+      },
+      "to": {
+        "name": "Merida",
+        "code": "MID",
+        "country": "MX",
+        "lat": 20.967,
+        "lon": -89.623
+      },
+      "mode": "train",
+      "minutes": 450,
+      "priceEur": [
+        47,
+        78
+      ],
+      "both": true,
+      "operator": "Tren Maya",
+      "book": "https://reservas.ventaboletostrenmaya.com.mx/",
+      "note": "Two trains a day (07:15 and 08:40 from Palenque) via Campeche to Merida Teya. Turista class range shown; the April 2026 tourist fare cut may make it cheaper.",
+      "sources": [
+        "https://www.trenmaya.gob.mx/horarios.php",
+        "https://www.rome2rio.com/s/Palenque/Mérida"
+      ],
+      "confidence": "medium"
+    },
+    {
+      "from": {
+        "name": "San Cristobal de las Casas",
+        "code": null,
+        "country": "MX",
+        "lat": 16.737,
+        "lon": -92.638
+      },
+      "to": {
+        "name": "Antigua Guatemala",
+        "code": null,
+        "country": "GT",
+        "lat": 14.557,
+        "lon": -90.734
+      },
+      "mode": "van",
+      "minutes": 780,
+      "priceEur": [
+        65,
+        85
+      ],
+      "both": true,
+      "operator": "tourist shuttles (Eterna Primavera, AtitlanTour, Adrenalina Tours, Guatemala Transportation and others)",
+      "book": "https://vps.geckoroutes.com/guatemala/san-cristobal-to-antigua",
+      "note": "Weekdays only, 06:00 hotel pickup, change vans at La Mesilla. Roadblocks are common before the border; the UK FCDO advises against non-essential travel near it.",
+      "sources": [
+        "https://livinginguatemala.com/transport/la-mesilla-border-crossing/",
+        "https://vps.geckoroutes.com/guatemala/san-cristobal-to-antigua"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Antigua Guatemala",
+        "code": null,
+        "country": "GT",
+        "lat": 14.557,
+        "lon": -90.734
+      },
+      "to": {
+        "name": "Panajachel",
+        "code": null,
+        "country": "GT",
+        "lat": 14.741,
+        "lon": -91.159
+      },
+      "mode": "van",
+      "minutes": 180,
+      "priceEur": [
+        11,
+        22
+      ],
+      "both": true,
+      "operator": "tourist shuttles (Guatemala Transportation, Adrenalina Tours, Atitrans, GuateGo and others)",
+      "book": "https://www.bookaway.com/routes/guatemala/antigua-guatemala-to-panajachel",
+      "note": "About 4 shared shuttles a day (05:30 to 16:00) with hotel pickup. Chicken buses via Chimaltenango and Solola are cheaper but need 2 to 3 changes.",
+      "sources": [
+        "https://livinginguatemala.com/transport/antigua-to-lake-atitlan/",
+        "https://www.bookaway.com/routes/guatemala/antigua-guatemala-to-panajachel"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Antigua Guatemala",
+        "code": null,
+        "country": "GT",
+        "lat": 14.557,
+        "lon": -90.734
+      },
+      "to": {
+        "name": "Flores",
+        "code": "FRS",
+        "country": "GT",
+        "lat": 16.929,
+        "lon": -89.892
+      },
+      "mode": "coach",
+      "minutes": 720,
+      "priceEur": [
+        60,
+        65
+      ],
+      "both": true,
+      "operator": "Fuente del Norte (sold with the shuttle by Adrenalina Tours, Kahk Bahlam)",
+      "book": "https://livinginguatemala.com/transport/antigua-to-flores-tikal/",
+      "note": "Shuttle at 18:30 to the Fuente del Norte terminal in Guatemala City, night bus at 22:30, arrives Santa Elena about 06:30. Book and prepay 48 h ahead.",
+      "sources": [
+        "https://livinginguatemala.com/transport/antigua-to-flores-tikal/"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Antigua Guatemala",
+        "code": null,
+        "country": "GT",
+        "lat": 14.557,
+        "lon": -90.734
+      },
+      "to": {
+        "name": "Flores",
+        "code": "FRS",
+        "country": "GT",
+        "lat": 16.929,
+        "lon": -89.892
+      },
+      "mode": "van",
+      "minutes": 900,
+      "priceEur": [
+        39,
+        65
+      ],
+      "both": true,
+      "operator": "tourist shuttles (Adrenalina Tours, Kahk Bahlam, Maya de Oro)",
+      "book": "https://livinginguatemala.com/transport/antigua-to-flores-tikal/",
+      "note": "Daytime shuttle at 04:00 with a stop at Rio Dulce, arrives about 19:00. Drop off at the I love Peten sign, not at hotels.",
+      "sources": [
+        "https://livinginguatemala.com/transport/antigua-to-flores-tikal/"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Guatemala City",
+        "code": "GUA",
+        "country": "GT",
+        "lat": 14.635,
+        "lon": -90.507
+      },
+      "to": {
+        "name": "Flores",
+        "code": "FRS",
+        "country": "GT",
+        "lat": 16.929,
+        "lon": -89.892
+      },
+      "mode": "coach",
+      "minutes": 540,
+      "priceEur": [
+        29,
+        47
+      ],
+      "both": true,
+      "operator": "Fuente del Norte, Cristobal Colon",
+      "book": "https://livinginguatemala.com/transport/guatemala-city-to-flores-tikal/",
+      "note": "Fuente del Norte from 17 Calle, Zona 1, day and night buses; Cristobal Colon from 7a Avenida, Zona 1, evenings. Arrives Santa Elena, a short tuk tuk from Flores.",
+      "sources": [
+        "https://livinginguatemala.com/transport/guatemala-city-to-flores-tikal/",
+        "https://www.checkmybus.com/flores-gt/guatemala-city-gt"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Flores",
+        "code": "FRS",
+        "country": "GT",
+        "lat": 16.929,
+        "lon": -89.892
+      },
+      "to": {
+        "name": "Belize City",
+        "code": "BZE",
+        "country": "BZ",
+        "lat": 17.495,
+        "lon": -88.197
+      },
+      "mode": "van",
+      "minutes": 330,
+      "priceEur": [
+        22,
+        30
+      ],
+      "both": true,
+      "operator": "shuttles (Marlin Espadas, Marvelus, Adrenalina Tours, Coban Travels)",
+      "book": "https://livinginguatemala.com/transport/flores-to-belize-city/",
+      "note": "Shuttles leave about 06:00, cross at Melchor de Mencos and end at the water taxi terminal. Fuente del Norte coach about Q157.50. BZD 40 fee when leaving Belize.",
+      "sources": [
+        "https://livinginguatemala.com/transport/flores-to-belize-city/",
+        "https://www.backpackerswanderlust.com/flores-to-belize-city/"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Belize City",
+        "code": "BZE",
+        "country": "BZ",
+        "lat": 17.495,
+        "lon": -88.197
+      },
+      "to": {
+        "name": "Caye Caulker",
+        "code": "CUK",
+        "country": "BZ",
+        "lat": 17.742,
+        "lon": -88.025
+      },
+      "mode": "ferry",
+      "minutes": 45,
+      "priceEur": [
+        16,
+        25
+      ],
+      "both": true,
+      "operator": "San Pedro Belize Express, Caribbean Sprinter (ex Ocean Ferry)",
+      "book": "https://www.belizewatertaxi.com/",
+      "note": "Water taxis from the Belize City marine terminal every 1 to 1.5 h, 08:00 to 17:30. Tourist fares are higher than local fares.",
+      "sources": [
+        "https://www.rome2rio.com/s/Belize-City/Caye-Caulker",
+        "https://www.backpackerswanderlust.com/belize-city-to-caye-caulker/",
+        "https://www.sanpedrosun.com/?p=95913"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Chetumal",
+        "code": "CTM",
+        "country": "MX",
+        "lat": 18.503,
+        "lon": -88.296
+      },
+      "to": {
+        "name": "Caye Caulker",
+        "code": "CUK",
+        "country": "BZ",
+        "lat": 17.742,
+        "lon": -88.025
+      },
+      "mode": "ferry",
+      "minutes": 195,
+      "priceEur": [
+        69,
+        73
+      ],
+      "both": true,
+      "operator": "San Pedro Belize Express, Water Jets International",
+      "book": "https://www.belizewatertaxi.com/",
+      "note": "From the Chetumal marine terminal with a Belize immigration stop in San Pedro. Not daily outside high season (late December to June), so check the schedule.",
+      "sources": [
+        "https://www.rome2rio.com/s/Chetumal/Caye-Caulker",
+        "https://www.backpackerswanderlust.com/bacalar-to-caye-caulker/"
+      ],
+      "confidence": "medium"
+    },
+    {
+      "from": {
+        "name": "San Jose",
+        "code": "SJO",
+        "country": "CR",
+        "lat": 9.933,
+        "lon": -84.079
+      },
+      "to": {
+        "name": "La Fortuna",
+        "code": "FON",
+        "country": "CR",
+        "lat": 10.471,
+        "lon": -84.645
+      },
+      "mode": "coach",
+      "minutes": 225,
+      "priceEur": [
+        6,
+        7.5
+      ],
+      "both": true,
+      "operator": "public bus",
+      "book": "https://www.geckoroutes.com/costa-rica/san-jose-to-la-fortuna/",
+      "note": "One direct bus a day (about 08:00) from Terminal Atlantico Norte; otherwise change at Ciudad Quesada, about 5 h. Terminal 7-10 closed in April 2025.",
+      "sources": [
+        "https://www.geckoroutes.com/costa-rica/san-jose-to-la-fortuna/",
+        "http://montetours.com/blog/how-to-get-from-san-jose-to-la-fortuna-costa-rica/"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "San Jose",
+        "code": "SJO",
+        "country": "CR",
+        "lat": 9.933,
+        "lon": -84.079
+      },
+      "to": {
+        "name": "La Fortuna",
+        "code": "FON",
+        "country": "CR",
+        "lat": 10.471,
+        "lon": -84.645
+      },
+      "mode": "van",
+      "minutes": 210,
+      "priceEur": [
+        42,
+        59
+      ],
+      "both": true,
+      "operator": "shared shuttles (Interbus, RideCR, Volcano Travel and others)",
+      "book": "https://www.busbud.com/en/bus-company/interbus-cr",
+      "note": "Shared shuttles with San Jose hotel or airport pickup, several morning and midday runs. Some need 2 passengers to run.",
+      "sources": [
+        "https://www.geckoroutes.com/costa-rica/san-jose-to-la-fortuna/",
+        "https://www.busbud.com/en/bus-company/interbus-cr"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "San Jose",
+        "code": "SJO",
+        "country": "CR",
+        "lat": 9.933,
+        "lon": -84.079
+      },
+      "to": {
+        "name": "Puerto Viejo de Talamanca",
+        "code": null,
+        "country": "CR",
+        "lat": 9.656,
+        "lon": -82.754
+      },
+      "mode": "coach",
+      "minutes": 285,
+      "priceEur": [
+        12,
+        12
+      ],
+      "both": true,
+      "operator": "Autotransportes MEPE",
+      "book": "https://www.mepecr.com/",
+      "note": "5 to 6 buses a day from Terminal MEPE (ex Atlantico Norte), Barrio Mexico; tickets only at the terminal. 15 min stop in Limon. Route 32 works can add 1 h.",
+      "sources": [
+        "https://vps.geckoroutes.com/costa-rica/san-jose-to-puerto-viejo-de-talamanca/",
+        "https://www.puertoviejosatellite.com/bus-to-puerto-viejo.php"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Granada",
+        "code": null,
+        "country": "NI",
+        "lat": 11.93,
+        "lon": -85.956
+      },
+      "to": {
+        "name": "San Jose",
+        "code": "SJO",
+        "country": "CR",
+        "lat": 9.933,
+        "lon": -84.079
+      },
+      "mode": "coach",
+      "minutes": 600,
+      "priceEur": [
+        25,
+        36
+      ],
+      "both": true,
+      "operator": "Central Line, Tica Bus (from Managua)",
+      "book": "https://www.ticabus.com/rutas-horarios-y-tarifas",
+      "note": "Central Line leaves Granada about 05:20; Tica Bus starts in Managua. Penas Blancas border adds 1 to 3 h. Since Feb 2026 many nationalities need a Nicaraguan visa first.",
+      "sources": [
+        "https://www.ticabus.com/rutas-horarios-y-tarifas",
+        "https://www.bookaway.com/routes/costa-rica/granada-to-san-jose",
+        "https://www.rome2rio.com/s/Granada-Nicaragua/San-José-Costa-Rica"
+      ],
+      "confidence": "medium"
+    },
+    {
+      "from": {
+        "name": "Panama City",
+        "code": "PTY",
+        "country": "PA",
+        "lat": 8.983,
+        "lon": -79.52
+      },
+      "to": {
+        "name": "David",
+        "code": "DAV",
+        "country": "PA",
+        "lat": 8.427,
+        "lon": -82.431
+      },
+      "mode": "coach",
+      "minutes": 390,
+      "priceEur": [
+        17,
+        19
+      ],
+      "both": true,
+      "operator": "Panachif and others",
+      "book": "https://www.rome2rio.com/s/Panama-City/David",
+      "note": "About hourly from Albrook terminal to the David terminal. For Boquete there is no direct bus: change at David to the local Boquete bus.",
+      "sources": [
+        "https://www.rome2rio.com/s/Panama-City/David",
+        "https://www.rome2rio.com/s/Albrook/David"
+      ],
+      "confidence": "medium"
+    },
+    {
+      "from": {
+        "name": "David",
+        "code": "DAV",
+        "country": "PA",
+        "lat": 8.427,
+        "lon": -82.431
+      },
+      "to": {
+        "name": "Boquete",
+        "code": null,
+        "country": "PA",
+        "lat": 8.78,
+        "lon": -82.441
+      },
+      "mode": "coach",
+      "minutes": 45,
+      "priceEur": [
+        0.9,
+        1.7
+      ],
+      "both": true,
+      "operator": "local buses (Cooperativa de Buses Boquete)",
+      "book": "https://www.rome2rio.com/s/David/Boquete",
+      "note": "Local buses from the David terminal to Bajo Boquete about every 20 min, pay on board.",
+      "sources": [
+        "https://www.rome2rio.com/s/David/Boquete",
+        "https://www.rome2rio.com/s/Panama-City/Boquete"
+      ],
+      "confidence": "medium"
+    },
+    {
+      "from": {
+        "name": "Panama City",
+        "code": "PTY",
+        "country": "PA",
+        "lat": 8.983,
+        "lon": -79.52
+      },
+      "to": {
+        "name": "Bocas del Toro",
+        "code": "BOC",
+        "country": "PA",
+        "lat": 9.34,
+        "lon": -82.241
+      },
+      "mode": "coach",
+      "minutes": 775,
+      "priceEur": [
+        27,
+        31
+      ],
+      "both": true,
+      "operator": "Tranceibosa, then Almirante water taxis",
+      "book": "https://www.rome2rio.com/s/Panama-City/Almirante",
+      "note": "Bus from Albrook to Almirante, about 4 a day, then a water taxi to Bocas Town (about USD 6, every 30 min). Price and time include both legs.",
+      "sources": [
+        "https://www.rome2rio.com/s/Panama-City/Almirante",
+        "https://www.rome2rio.com/s/Almirante/Bocas-del-Toro"
+      ],
+      "confidence": "medium"
+    },
+    {
+      "from": {
+        "name": "Boquete",
+        "code": null,
+        "country": "PA",
+        "lat": 8.78,
+        "lon": -82.441
+      },
+      "to": {
+        "name": "Bocas del Toro",
+        "code": "BOC",
+        "country": "PA",
+        "lat": 9.34,
+        "lon": -82.241
+      },
+      "mode": "van",
+      "minutes": 255,
+      "priceEur": [
+        26,
+        34
+      ],
+      "both": true,
+      "operator": "shared shuttles (PanaBocas and others)",
+      "book": "https://www.bookaway.com/routes/panama/boquete-to-bocas-del-toro",
+      "note": "About 4 shuttles a day over the mountains to Almirante, with the boat to Bocas Town at the end. Hotel pickup in Bajo Boquete.",
+      "sources": [
+        "https://www.rome2rio.com/s/Boquete/Bocas-del-Toro",
+        "https://www.bookaway.com/routes/panama/boquete-to-bocas-del-toro"
+      ],
+      "confidence": "medium"
+    },
+    {
+      "from": {
+        "name": "Baku",
+        "code": "BAK",
+        "country": "AZ",
+        "lat": 40.409,
+        "lon": 49.867
+      },
+      "to": {
+        "name": "Sheki",
+        "code": null,
+        "country": "AZ",
+        "lat": 41.192,
+        "lon": 47.17
+      },
+      "mode": "coach",
+      "minutes": 360,
+      "priceEur": [
+        6.9,
+        6.9
+      ],
+      "both": true,
+      "operator": "intercity buses (Azerbaijan Transport)",
+      "book": "https://www.rome2rio.com/s/Baku/Sheki",
+      "note": "Buses from Baku International Bus Terminal (Avtovagzal metro), about 5 a day, about 6 h with a stop. A night train (about 23:15, 13 to 15 AZN) also runs.",
+      "sources": [
+        "https://www.rome2rio.com/s/Baku/Sheki",
+        "https://www.theworldwasherefirst.com/baku-to-sheki/",
+        "https://museumofwander.com/baku-to-yerevan-overland/"
+      ],
+      "confidence": "medium"
+    },
+    {
+      "from": {
+        "name": "Baku",
+        "code": "BAK",
+        "country": "AZ",
+        "lat": 40.409,
+        "lon": 49.867
+      },
+      "to": {
+        "name": "Qabala",
+        "code": "GBB",
+        "country": "AZ",
+        "lat": 40.981,
+        "lon": 47.846
+      },
+      "mode": "train",
+      "minutes": 212,
+      "priceEur": [
+        4.3,
+        10
+      ],
+      "both": true,
+      "operator": "Azerbaijan Railways (ADY)",
+      "book": "https://ticket.ady.az/en/",
+      "note": "One train a day, Baku 07:30 to Qabala 11:02, back at 19:00, stops at Kurdamir since May 2026. Buses from Baku Bus Terminal take about 5 h for about 7 USD.",
+      "sources": [
+        "https://report.az/infrastruktur/ady-baki-qebele-qatari-kurdemirde-de-dayanacaq",
+        "https://www.rome2rio.com/s/Baku/Gabala"
+      ],
+      "confidence": "medium"
+    },
+    {
+      "from": {
+        "name": "Baku",
+        "code": "BAK",
+        "country": "AZ",
+        "lat": 40.409,
+        "lon": 49.867
+      },
+      "to": {
+        "name": "Ganja",
+        "code": "GNJ",
+        "country": "AZ",
+        "lat": 40.683,
+        "lon": 46.361
+      },
+      "mode": "train",
+      "minutes": 238,
+      "priceEur": [
+        5.2,
+        12
+      ],
+      "both": true,
+      "operator": "Azerbaijan Railways (ADY)",
+      "book": "https://ticket.ady.az/en/",
+      "note": "About 3 trains a day, about 4 h, Standard, Standard+ and Business classes. Buses from Baku Bus Terminal leave about every 30 min and take about 6 h for about 8 USD.",
+      "sources": [
+        "https://www.rome2rio.com/s/Baku/Ganja"
+      ],
+      "confidence": "medium"
+    },
+    {
+      "from": {
+        "name": "Tbilisi",
+        "code": "TBS",
+        "country": "GE",
+        "lat": 41.715,
+        "lon": 44.827
+      },
+      "to": {
+        "name": "Sighnaghi",
+        "code": null,
+        "country": "GE",
+        "lat": 41.62,
+        "lon": 45.922
+      },
+      "mode": "van",
+      "minutes": 135,
+      "priceEur": [
+        4.8,
+        4.8
+      ],
+      "both": true,
+      "operator": "marshrutkas from Navtlughi (Samgori)",
+      "book": "https://www.rome2rio.com/s/Tbilisi/Sighnaghi",
+      "note": "Marshrutka from Navtlughi terminal by Samgori metro at 9, 11, 13, 15, 17 and 18 h, 15 GEL cash to the driver. Vans leave early if full. No passenger train to Kakheti.",
+      "sources": [
+        "https://wander-lush.org/tbilisi-to-sighnaghi-telavi/"
+      ],
+      "confidence": "medium"
+    },
+    {
+      "from": {
+        "name": "Tbilisi",
+        "code": "TBS",
+        "country": "GE",
+        "lat": 41.715,
+        "lon": 44.827
+      },
+      "to": {
+        "name": "Mestia",
+        "code": null,
+        "country": "GE",
+        "lat": 43.046,
+        "lon": 42.727
+      },
+      "mode": "van",
+      "minutes": 540,
+      "priceEur": [
+        13,
+        16
+      ],
+      "both": true,
+      "operator": "marshrutkas",
+      "book": "https://www.rome2rio.com/s/Tbilisi/Mestia",
+      "note": "Direct marshrutka about 7:00 from the Main Railway Station or Samgori, 8 to 10 h. Many take the day train to Zugdidi, then a van onward (35 to 40 GEL, about 4 h).",
+      "sources": [
+        "https://caucasus-trekking.com/treks/trek-mestia-to-ushguli",
+        "https://www.theworldwasherefirst.com/travel-to-mestia/"
+      ],
+      "confidence": "medium"
+    },
+    {
+      "from": {
+        "name": "Kutaisi",
+        "code": "KUT",
+        "country": "GE",
+        "lat": 42.27,
+        "lon": 42.7
+      },
+      "to": {
+        "name": "Mestia",
+        "code": null,
+        "country": "GE",
+        "lat": 43.046,
+        "lon": 42.727
+      },
+      "mode": "van",
+      "minutes": 300,
+      "priceEur": [
+        13,
+        13
+      ],
+      "both": true,
+      "operator": "marshrutkas",
+      "book": "https://www.rome2rio.com/s/Kutaisi/Mestia",
+      "note": "One direct marshrutka a day, about 9 to 10 am from the main bus station by McDonald's, 40 GEL cash. Else go via Zugdidi. Snow can delay or cancel it in winter.",
+      "sources": [
+        "https://caucasus-trekking.com/treks/trek-mestia-to-ushguli",
+        "https://www.thebudgetsavvytravelers.com/how-to-get-from-kutaisi-to-mestia/",
+        "https://www.rome2rio.com/s/Kutaisi/Mestia"
+      ],
+      "confidence": "medium"
+    },
+    {
+      "from": {
+        "name": "Tbilisi",
+        "code": "TBS",
+        "country": "GE",
+        "lat": 41.715,
+        "lon": 44.827
+      },
+      "to": {
+        "name": "Borjomi",
+        "code": null,
+        "country": "GE",
+        "lat": 41.84,
+        "lon": 43.39
+      },
+      "mode": "van",
+      "minutes": 150,
+      "priceEur": [
+        3.8,
+        3.8
+      ],
+      "both": true,
+      "operator": "marshrutkas from Didube",
+      "book": "https://www.rome2rio.com/s/Tbilisi/Borjomi",
+      "note": "Marshrutka from Didube roughly hourly 8 am to 6 pm, leaves when full, 12 GEL to the driver. A slow evening train (about 4 h) runs to Borjomi Park station.",
+      "sources": [
+        "https://www.theworldwasherefirst.com/tbilisi-to-borjomi/"
+      ],
+      "confidence": "medium"
+    },
+    {
+      "from": {
+        "name": "Tbilisi",
+        "code": "TBS",
+        "country": "GE",
+        "lat": 41.715,
+        "lon": 44.827
+      },
+      "to": {
+        "name": "Kutaisi",
+        "code": "KUT",
+        "country": "GE",
+        "lat": 42.27,
+        "lon": 42.7
+      },
+      "mode": "train",
+      "minutes": 170,
+      "priceEur": [
+        4.4,
+        8.3
+      ],
+      "both": true,
+      "operator": "Georgian Railway",
+      "book": "https://www.railway.ge/en/",
+      "note": "Trains stop at Rioni station, 10 km from central Kutaisi, or Kutaisi Airport station. 2nd class 14 GEL, 1st 26 GEL. Marshrutkas from Didube take 3 to 3.5 h for 25 GEL.",
+      "sources": [
+        "https://wander-lush.org/kutaisi-to-tbilisi-bus-train/",
+        "https://www.rome2rio.com/s/Tbilisi/Kutaisi"
+      ],
+      "confidence": "medium"
+    },
+    {
+      "from": {
+        "name": "Kutaisi",
+        "code": "KUT",
+        "country": "GE",
+        "lat": 42.27,
+        "lon": 42.7
+      },
+      "to": {
+        "name": "Batumi",
+        "code": "BUS",
+        "country": "GE",
+        "lat": 41.617,
+        "lon": 41.637
+      },
+      "mode": "van",
+      "minutes": 165,
+      "priceEur": [
+        6.3,
+        6.3
+      ],
+      "both": true,
+      "operator": "marshrutkas",
+      "book": "https://www.rome2rio.com/s/Kutaisi/Batumi",
+      "note": "Marshrutka from Kutaisi main bus station through the day, leaves when full, 20 GEL to the driver, to Batumi central bus station. Trains from Kopitnari take over 4 h.",
+      "sources": [
+        "https://www.theworldwasherefirst.com/kutaisi-to-batumi/"
+      ],
+      "confidence": "medium"
+    },
+    {
+      "from": {
+        "name": "Yerevan",
+        "code": "EVN",
+        "country": "AM",
+        "lat": 40.187,
+        "lon": 44.515
+      },
+      "to": {
+        "name": "Dilijan",
+        "code": null,
+        "country": "AM",
+        "lat": 40.741,
+        "lon": 44.863
+      },
+      "mode": "van",
+      "minutes": 120,
+      "priceEur": [
+        2.2,
+        2.2
+      ],
+      "both": true,
+      "operator": "marshrutkas 651, 654, 655, 656",
+      "book": "https://www.rome2rio.com/s/Yerevan/Dilijan",
+      "note": "Marshrutkas from the Northern Bus Station, about 10 km from the centre, 9:00 to 17:30, 1,000 AMD. They are Ijevan route vans and leave when full.",
+      "sources": [
+        "https://absolutearmenia.com/yerevan-to-dilijan"
+      ],
+      "confidence": "medium"
+    },
+    {
+      "from": {
+        "name": "Yerevan",
+        "code": "EVN",
+        "country": "AM",
+        "lat": 40.187,
+        "lon": 44.515
+      },
+      "to": {
+        "name": "Sevan",
+        "code": null,
+        "country": "AM",
+        "lat": 40.548,
+        "lon": 44.948
+      },
+      "mode": "van",
+      "minutes": 60,
+      "priceEur": [
+        1.1,
+        1.6
+      ],
+      "both": true,
+      "operator": "marshrutkas",
+      "book": "https://www.rome2rio.com/s/Yerevan/Sevan",
+      "note": "Marshrutkas from the Northern Bus Station hourly 9:00 to 19:00 (about 500 AMD), or from Yeritasardakan metro 8:00 to 20:15 (700 AMD). Taxi on to Sevanavank.",
+      "sources": [
+        "https://absolutearmenia.com/?p=3246",
+        "https://www.rome2rio.com/s/Yerevan/Sevan"
+      ],
+      "confidence": "medium"
+    },
+    {
+      "from": {
+        "name": "Yerevan",
+        "code": "EVN",
+        "country": "AM",
+        "lat": 40.187,
+        "lon": 44.515
+      },
+      "to": {
+        "name": "Goris",
+        "code": null,
+        "country": "AM",
+        "lat": 39.511,
+        "lon": 46.338
+      },
+      "mode": "van",
+      "minutes": 240,
+      "priceEur": [
+        4.3,
+        6.9
+      ],
+      "both": true,
+      "operator": "minibuses (route 607 and others)",
+      "book": "https://t-armenia.com/en/yerevan-to-goris",
+      "note": "About 2 minibuses a day, morning and afternoon, about 2,500 AMD. Departure points differ by operator (Kilikia or the Central Railway Station area), so check t-armenia.com.",
+      "sources": [
+        "https://t-armenia.com/en/yerevan-to-goris",
+        "https://www.rome2rio.com/s/Yerevan/Goris"
+      ],
+      "confidence": "medium"
+    },
+    {
+      "from": {
+        "name": "Bishkek",
+        "code": "BSZ",
+        "country": "KG",
+        "lat": 42.875,
+        "lon": 74.57
+      },
+      "to": {
+        "name": "Karakol",
+        "code": "IKG",
+        "country": "KG",
+        "lat": 42.491,
+        "lon": 78.393
+      },
+      "mode": "van",
+      "minutes": 390,
+      "priceEur": [
+        5,
+        5.9
+      ],
+      "both": true,
+      "operator": "marshrutkas",
+      "book": "https://www.rome2rio.com/s/Bishkek/Karakol",
+      "note": "Marshrutkas from the new Bishkek bus station (the Western station closed in 2024), about hourly from 7 am, leave when full, via Cholpon-Ata. A GoBus night coach is 700 KGS.",
+      "sources": [
+        "https://backpackmoments.com/bishkek-to-karakol-by-bus/",
+        "https://www.meganstarr.com/?p=96089",
+        "https://24.kg/english/309108_Western_Bus_Station_in_Bishkek_stops_working"
+      ],
+      "confidence": "medium"
+    },
+    {
+      "from": {
+        "name": "Bishkek",
+        "code": "BSZ",
+        "country": "KG",
+        "lat": 42.875,
+        "lon": 74.57
+      },
+      "to": {
+        "name": "Cholpon-Ata",
+        "code": null,
+        "country": "KG",
+        "lat": 42.65,
+        "lon": 77.083
+      },
+      "mode": "van",
+      "minutes": 210,
+      "priceEur": [
+        4,
+        4
+      ],
+      "both": true,
+      "operator": "marshrutkas (Karakol route)",
+      "book": "https://backpackmoments.com/bishkek-to-karakol-by-bus/",
+      "note": "Take a Karakol marshrutka from the new Bishkek bus station and get off at Cholpon-Ata, about 400 KGS. A summer train to Balykchy runs June to mid September only.",
+      "sources": [
+        "https://backpackmoments.com/bishkek-to-karakol-by-bus/",
+        "https://www.mustseespots.com/kyrgyzstan/articles/how-to-get-from-bishkek-to-issyk-kul-your-transportation-guide/"
+      ],
+      "confidence": "medium"
+    },
+    {
+      "from": {
+        "name": "Bishkek",
+        "code": "BSZ",
+        "country": "KG",
+        "lat": 42.875,
+        "lon": 74.57
+      },
+      "to": {
+        "name": "Osh",
+        "code": "OSS",
+        "country": "KG",
+        "lat": 40.528,
+        "lon": 72.799
+      },
+      "mode": "van",
+      "minutes": 840,
+      "priceEur": [
+        17,
+        20
+      ],
+      "both": true,
+      "operator": "shared taxis and minivans",
+      "book": "https://www.rome2rio.com/s/Bishkek/Osh",
+      "note": "Shared taxis and minivans gather just south of Osh Bazaar, best before 6 am, about 14 h and up to 17 on the mountain road. From Osh they leave the north bus station.",
+      "sources": [
+        "https://backpackmoments.com/how-to-get-from-bishkek-to-osh-the-smart-way/"
+      ],
+      "confidence": "medium"
+    },
+    {
+      "from": {
+        "name": "Dushanbe",
+        "code": "DYU",
+        "country": "TJ",
+        "lat": 38.56,
+        "lon": 68.774
+      },
+      "to": {
+        "name": "Khujand",
+        "code": "LBD",
+        "country": "TJ",
+        "lat": 40.283,
+        "lon": 69.622
+      },
+      "mode": "van",
+      "minutes": 330,
+      "priceEur": [
+        11,
+        14
+      ],
+      "both": true,
+      "operator": "shared taxis; Asian Express minibus",
+      "book": "https://www.rome2rio.com/s/Dushanbe/Khujand",
+      "note": "Shared taxis from Chorbog terminal leave when full, best early, via the Anzob tunnel. Drivers open high, 120 to 150 TJS is fair. Asian Express minibus 8:00, 8 h, 85 TJS.",
+      "sources": [
+        "https://eurasia.travel/forum/transport-tajikistan/how-to-get-from-khujand-to-dushanbe/"
+      ],
+      "confidence": "medium"
+    },
+    {
+      "from": {
+        "name": "Tashkent",
+        "code": "TAS",
+        "country": "UZ",
+        "lat": 41.3,
+        "lon": 69.24
+      },
+      "to": {
+        "name": "Fergana",
+        "code": "FEG",
+        "country": "UZ",
+        "lat": 40.386,
+        "lon": 71.786
+      },
+      "mode": "train",
+      "minutes": 310,
+      "priceEur": [
+        10,
+        16
+      ],
+      "both": true,
+      "operator": "Uzbekistan Railways (Ozbekiston and others)",
+      "book": "https://eticket.railway.uz/en/home",
+      "note": "Trains stop at Margilan, about 10 km from Fergana city, 2 to 3 a day over the Kamchik pass. Expect the top of the range after the Feb 2026 fare rise. Passport needed.",
+      "sources": [
+        "https://www.rome2rio.com/s/Tashkent/Fergana",
+        "https://www.advantour.com/uzbekistan/trains/tashkent-margilan.htm"
+      ],
+      "confidence": "medium"
+    },
+    {
+      "from": {
+        "name": "Tashkent",
+        "code": "TAS",
+        "country": "UZ",
+        "lat": 41.3,
+        "lon": 69.24
+      },
+      "to": {
+        "name": "Khiva",
+        "code": null,
+        "country": "UZ",
+        "lat": 41.378,
+        "lon": 60.364
+      },
+      "mode": "train",
+      "minutes": 451,
+      "priceEur": [
+        54,
+        54
+      ],
+      "both": true,
+      "operator": "Uzbekistan Railways (Jaloliddin Manguberdi high-speed)",
+      "book": "https://eticket.railway.uz/en/home",
+      "note": "High-speed train since May 2026: Tashkent 07:00 Tue, Thu, Sat, back from Khiva 07:20 Wed, Fri, Sun, 780,000 UZS. Older trains take about 13 h and cost less.",
+      "sources": [
+        "https://kun.uz/en/70270792",
+        "https://eurasia.travel/tashkent-to-khiva-in-7-hours/"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Delhi",
+        "code": "DEL",
+        "country": "IN",
+        "lat": 28.643,
+        "lon": 77.219
+      },
+      "to": {
+        "name": "Agra",
+        "code": "AGR",
+        "country": "IN",
+        "lat": 27.177,
+        "lon": 78.008
+      },
+      "mode": "train",
+      "minutes": 100,
+      "priceEur": [
+        5.2,
+        15
+      ],
+      "both": true,
+      "operator": "Indian Railways (Gatimaan Express, Vande Bharat, Shatabdi Express)",
+      "book": "https://www.confirmtkt.com/trains/new-delhi-to-agra-train-tickets",
+      "note": "Gatimaan and Vande Bharat leave Hazrat Nizamuddin, Shatabdi 12002 leaves New Delhi 06:00, all to Agra Cantt. Range is Shatabdi CC to Gatimaan EC.",
+      "sources": [
+        "https://www.confirmtkt.com/trains/new-delhi-to-agra-train-tickets",
+        "https://www.seat61.com/India.htm"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Delhi",
+        "code": "DEL",
+        "country": "IN",
+        "lat": 28.643,
+        "lon": 77.219
+      },
+      "to": {
+        "name": "Jaipur",
+        "code": "JAI",
+        "country": "IN",
+        "lat": 26.912,
+        "lon": 75.787
+      },
+      "mode": "train",
+      "minutes": 265,
+      "priceEur": [
+        5,
+        16
+      ],
+      "both": true,
+      "operator": "Indian Railways (Ajmer Shatabdi, Vande Bharat, Double Decker and others)",
+      "book": "https://www.confirmtkt.com/trains/new-delhi-to-jaipur-train-tickets",
+      "note": "About 19 trains a day. Ajmer Shatabdi 06:10 from New Delhi, Vande Bharat from Delhi Cantt, Double Decker from Sarai Rohilla. Range is CC to EC.",
+      "sources": [
+        "https://www.confirmtkt.com/trains/new-delhi-to-jaipur-train-tickets"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Jaipur",
+        "code": "JAI",
+        "country": "IN",
+        "lat": 26.912,
+        "lon": 75.787
+      },
+      "to": {
+        "name": "Udaipur",
+        "code": "UDR",
+        "country": "IN",
+        "lat": 24.585,
+        "lon": 73.713
+      },
+      "mode": "train",
+      "minutes": 440,
+      "priceEur": [
+        2.7,
+        10
+      ],
+      "both": true,
+      "operator": "Indian Railways (Jaipur Udaipur Superfast and overnight expresses)",
+      "book": "https://www.confirmtkt.com/trains/jaipur-to-udaipur-train-tickets",
+      "note": "About 5 trains a day to Udaipur City, 7 to 9.5 h. Day superfasts at 06:10 and 14:10, overnight trains at 20:45 and 22:50. Range is sleeper to 2AC.",
+      "sources": [
+        "https://www.confirmtkt.com/trains/jaipur-to-udaipur-train-tickets"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Delhi",
+        "code": "DEL",
+        "country": "IN",
+        "lat": 28.643,
+        "lon": 77.219
+      },
+      "to": {
+        "name": "Varanasi",
+        "code": "VNS",
+        "country": "IN",
+        "lat": 25.318,
+        "lon": 82.974
+      },
+      "mode": "train",
+      "minutes": 480,
+      "priceEur": [
+        4.5,
+        18
+      ],
+      "both": true,
+      "operator": "Indian Railways (Vande Bharat, Shiv Ganga, Swatantrata Senani and others)",
+      "book": "https://www.confirmtkt.com/trains/new-delhi-to-varanasi-train-tickets",
+      "note": "Vande Bharat from New Delhi at 06:00 and 15:00, 8 h, chair car only. Overnight Shiv Ganga and Swatantrata Senani take 10 to 11 h. Range is sleeper to Vande Bharat CC.",
+      "sources": [
+        "https://www.confirmtkt.com/trains/new-delhi-to-varanasi-train-tickets",
+        "https://www.seat61.com/India.htm"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Mumbai",
+        "code": "BOM",
+        "country": "IN",
+        "lat": 19.076,
+        "lon": 72.878
+      },
+      "to": {
+        "name": "Goa (Madgaon)",
+        "code": "GOI",
+        "country": "IN",
+        "lat": 15.273,
+        "lon": 73.958
+      },
+      "mode": "train",
+      "minutes": 480,
+      "priceEur": [
+        4.2,
+        18
+      ],
+      "both": true,
+      "operator": "Konkan Railway / Indian Railways (Vande Bharat, Jan Shatabdi, Konkan Kanya, Mandovi)",
+      "book": "https://www.confirmtkt.com/trains/mumbai-to-goa-train-tickets",
+      "note": "From Mumbai CSMT: Vande Bharat 05:25, Jan Shatabdi, overnight Konkan Kanya. Monsoon timetable to end Oct: Vande Bharat 10.5 h, about 7.75 h rest of year. Range sleeper to CC.",
+      "sources": [
+        "https://www.confirmtkt.com/trains/mumbai-to-goa-train-tickets",
+        "https://www.trainspnrstatus.com/trains/CSMT-MAO",
+        "https://www.railmitra.com/trains-between-stations/CSMT/MAO"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Delhi",
+        "code": "DEL",
+        "country": "IN",
+        "lat": 28.643,
+        "lon": 77.219
+      },
+      "to": {
+        "name": "Haridwar",
+        "code": null,
+        "country": "IN",
+        "lat": 29.945,
+        "lon": 78.164
+      },
+      "mode": "train",
+      "minutes": 270,
+      "priceEur": [
+        4.9,
+        17
+      ],
+      "both": true,
+      "operator": "Indian Railways (Dehradun Shatabdi, Jan Shatabdi, Vande Bharat)",
+      "book": "https://www.confirmtkt.com/trains/new-delhi-to-haridwar-train-tickets",
+      "note": "Dehradun Shatabdi 06:45 and Jan Shatabdi 15:20 from New Delhi, Vande Bharat 17:50 from Anand Vihar (3 h 20 min). Range is Jan Shatabdi CC to Vande Bharat EC.",
+      "sources": [
+        "https://www.confirmtkt.com/trains/new-delhi-to-haridwar-train-tickets"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Delhi",
+        "code": "DEL",
+        "country": "IN",
+        "lat": 28.643,
+        "lon": 77.219
+      },
+      "to": {
+        "name": "Rishikesh",
+        "code": null,
+        "country": "IN",
+        "lat": 30.087,
+        "lon": 78.268
+      },
+      "mode": "coach",
+      "minutes": 300,
+      "priceEur": [
+        3.4,
+        13
+      ],
+      "both": true,
+      "operator": "Uttarakhand Transport (UTC), FlixBus, Laxmi Holidays and private Volvo operators",
+      "book": "https://www.flixbus.in/bus-routes/bus-delhi-rishikesh",
+      "note": "UTC and private Volvos from ISBT Kashmere Gate. FlixBus runs about 43 trips a day from many Delhi stops to Nepali Farm, south of town. About 4 to 6 h.",
+      "sources": [
+        "https://www.flixbus.nl/bus-reisplanner/bus-delhi-rishikesh",
+        "https://www.rome2rio.com/s/Delhi/Rishikesh"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Agra",
+        "code": "AGR",
+        "country": "IN",
+        "lat": 27.177,
+        "lon": 78.008
+      },
+      "to": {
+        "name": "Jaipur",
+        "code": "JAI",
+        "country": "IN",
+        "lat": 26.912,
+        "lon": 75.787
+      },
+      "mode": "train",
+      "minutes": 255,
+      "priceEur": [
+        1.9,
+        7.5
+      ],
+      "both": true,
+      "operator": "Indian Railways (Agra Fort Ajmer Intercity and others)",
+      "book": "https://www.confirmtkt.com/trains/agra-to-jaipur-train-tickets",
+      "note": "About 11 trains a day. Intercity 12195 from Agra Fort 06:00 and 22988 at 14:35 take about 4 h 15 min, others leave Agra Cantt or Idgah. Range is sleeper to 2AC.",
+      "sources": [
+        "https://www.confirmtkt.com/trains/agra-to-jaipur-train-tickets"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Varanasi",
+        "code": "VNS",
+        "country": "IN",
+        "lat": 25.318,
+        "lon": 82.974
+      },
+      "to": {
+        "name": "Gorakhpur",
+        "code": "GOP",
+        "country": "IN",
+        "lat": 26.76,
+        "lon": 83.373
+      },
+      "mode": "train",
+      "minutes": 330,
+      "priceEur": [
+        1.8,
+        7.1
+      ],
+      "both": true,
+      "operator": "Indian Railways (Gorakhpur Intercity, Bapudham Express and others)",
+      "book": "https://www.confirmtkt.com/trains/varanasi-to-gorakhpur-train-tickets",
+      "note": "About 8 trains a day from Varanasi Junction, 4.3 to 6 h, the usual step toward the Sunauli border. Range is sleeper to 2AC.",
+      "sources": [
+        "https://www.confirmtkt.com/trains/varanasi-to-gorakhpur-train-tickets"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Gorakhpur",
+        "code": "GOP",
+        "country": "IN",
+        "lat": 26.76,
+        "lon": 83.373
+      },
+      "to": {
+        "name": "Sunauli (Bhairahawa)",
+        "code": "BWA",
+        "country": "NP",
+        "lat": 27.505,
+        "lon": 83.449
+      },
+      "mode": "coach",
+      "minutes": 180,
+      "priceEur": [
+        1.5,
+        2.5
+      ],
+      "both": true,
+      "operator": "UPSRTC and private buses",
+      "book": "https://www.ixigo.com/buses/gorakhpur-sonauli-sts",
+      "note": "Frequent buses from Gorakhpur bus stand to Sonauli. Walk through both immigration posts, then a short rickshaw ride to Bhairahawa. Shared taxis 400 to 500 INR.",
+      "sources": [
+        "https://whirled-away.com/cross-sonauli-border-between-india-nepal/",
+        "https://happyirishwanderers.com/india-to-nepal-sonauli-border-crossing/",
+        "https://www.ixigo.com/buses/gorakhpur-sonauli-sts"
+      ],
+      "confidence": "medium"
+    },
+    {
+      "from": {
+        "name": "Sunauli (Bhairahawa)",
+        "code": "BWA",
+        "country": "NP",
+        "lat": 27.505,
+        "lon": 83.449
+      },
+      "to": {
+        "name": "Kathmandu",
+        "code": "KTM",
+        "country": "NP",
+        "lat": 27.717,
+        "lon": 85.324
+      },
+      "mode": "coach",
+      "minutes": 600,
+      "priceEur": [
+        8.6,
+        12
+      ],
+      "both": true,
+      "operator": "Sakura and other tourist and local bus operators",
+      "book": "https://12go.asia/en/travel/bhairahawa/kathmandu",
+      "note": "Day and night buses from Bhairahawa bus park and the Belahiya border stand, 8 to 11 h via Narayanghat and Mugling, a road that landslides close at times in the rains.",
+      "sources": [
+        "https://www.rome2rio.com/s/Siddharthanagar/Kathmandu",
+        "https://www.inyourpocket.com/nepal/lumbini/articles/getting-to-lumbini/"
+      ],
+      "confidence": "medium"
+    },
+    {
+      "from": {
+        "name": "Sunauli (Bhairahawa)",
+        "code": "BWA",
+        "country": "NP",
+        "lat": 27.505,
+        "lon": 83.449
+      },
+      "to": {
+        "name": "Pokhara",
+        "code": "PKR",
+        "country": "NP",
+        "lat": 28.209,
+        "lon": 83.959
+      },
+      "mode": "coach",
+      "minutes": 450,
+      "priceEur": [
+        6.1,
+        9.2
+      ],
+      "both": true,
+      "operator": "tourist and local bus operators",
+      "book": "https://12go.asia/en/travel/bhairahawa/pokhara",
+      "note": "Tourist buses from the Belahiya border about hourly by day, 6 to 8 h on a winding hill road via Butwal. Do not buy onward tickets on the Indian side.",
+      "sources": [
+        "https://happyirishwanderers.com/india-to-nepal-sonauli-border-crossing/",
+        "https://www.inyourpocket.com/nepal/lumbini/articles/getting-to-lumbini/"
+      ],
+      "confidence": "medium"
+    },
+    {
+      "from": {
+        "name": "Kathmandu",
+        "code": "KTM",
+        "country": "NP",
+        "lat": 27.717,
+        "lon": 85.324
+      },
+      "to": {
+        "name": "Pokhara",
+        "code": "PKR",
+        "country": "NP",
+        "lat": 28.209,
+        "lon": 83.959
+      },
+      "mode": "coach",
+      "minutes": 480,
+      "priceEur": [
+        4.9,
+        22
+      ],
+      "both": true,
+      "operator": "tourist buses (Swift Holidays, Greenline, Jagadamba and others)",
+      "book": "https://www.bookaway.com/routes/nepal/kathmandu-to-pokhara",
+      "note": "Tourist buses leave Sorhakhutte near Thamel at 07:00, Greenline from Tridevi Marg. Oct 2026: night closures for repairs at Galaudi in Dhading, day traffic runs.",
+      "sources": [
+        "https://www.inyourpocket.com/nepal/pokhara/articles/getting-from-kathmandu-to-pokhara/",
+        "https://himalayanpartner.com/blog/kathmandu-to-pokhara-tourist-bus-ticket",
+        "https://kathmandupost.com/national/2026/10/12/prithvi-highway-s-galaudi-section-to-close-overnight-for-repairs-to-damaged-section"
+      ],
+      "confidence": "medium"
+    },
+    {
+      "from": {
+        "name": "Pokhara",
+        "code": "PKR",
+        "country": "NP",
+        "lat": 28.209,
+        "lon": 83.959
+      },
+      "to": {
+        "name": "Chitwan (Sauraha)",
+        "code": null,
+        "country": "NP",
+        "lat": 27.578,
+        "lon": 84.497
+      },
+      "mode": "coach",
+      "minutes": 330,
+      "priceEur": [
+        3.7,
+        14
+      ],
+      "both": true,
+      "operator": "tourist buses (Swift Holidays and others)",
+      "book": "https://www.bookaway.com/routes/nepal/pokhara-to-chitwan",
+      "note": "Tourist buses about 07:00 to 07:30 from Pokhara to the Sauraha tourist bus park, about 3 km from town. Uses the Mugling to Narayanghat road.",
+      "sources": [
+        "https://www.thelongestwayhome.com/travel-guides/nepal/how-to-travel-to-chitwan-national-park-sauraha.html",
+        "https://www.bookaway.com/routes/nepal/pokhara-to-chitwan"
+      ],
+      "confidence": "medium"
+    },
+    {
+      "from": {
+        "name": "Kathmandu",
+        "code": "KTM",
+        "country": "NP",
+        "lat": 27.717,
+        "lon": 85.324
+      },
+      "to": {
+        "name": "Chitwan (Sauraha)",
+        "code": null,
+        "country": "NP",
+        "lat": 27.578,
+        "lon": 84.497
+      },
+      "mode": "coach",
+      "minutes": 360,
+      "priceEur": [
+        4.9,
+        11
+      ],
+      "both": true,
+      "operator": "tourist buses (Mountain Overland and others)",
+      "book": "https://www.bookaway.com/routes/nepal/kathmandu-to-chitwan",
+      "note": "Tourist buses from Sorhakhutte near Thamel around 07:00 to the Sauraha tourist bus park (Bachhauli), about 3 km from town. Luxury buses are the top of the range.",
+      "sources": [
+        "https://www.thelongestwayhome.com/travel-guides/nepal/how-to-travel-to-chitwan-national-park-sauraha.html",
+        "https://www.bookaway.com/routes/nepal/kathmandu-to-chitwan"
+      ],
+      "confidence": "medium"
+    },
+    {
+      "from": {
+        "name": "Colombo",
+        "code": "CMB",
+        "country": "LK",
+        "lat": 6.934,
+        "lon": 79.85
+      },
+      "to": {
+        "name": "Kandy",
+        "code": null,
+        "country": "LK",
+        "lat": 7.291,
+        "lon": 80.634
+      },
+      "mode": "coach",
+      "minutes": 250,
+      "priceEur": [
+        0.9,
+        3.4
+      ],
+      "both": true,
+      "operator": "SLTB and private buses (normal, semi luxury, super luxury)",
+      "book": "https://sltb.eseat.lk/",
+      "note": "Buses about every 10 min from Bastian Mawatha to Kandy Goods Shed. Trains only reach Peradeniya, 6 km short, until the cyclone-damaged bridge is fixed (Oct 2026).",
+      "sources": [
+        "https://www.rome2rio.com/s/Colombo/Kandy",
+        "https://www.dailymirror.lk/breaking-news/Upcountry-train-services-to-Gampola-resume-from-Oct-2/108-351306"
+      ],
+      "confidence": "medium"
+    },
+    {
+      "from": {
+        "name": "Kandy",
+        "code": null,
+        "country": "LK",
+        "lat": 7.291,
+        "lon": 80.634
+      },
+      "to": {
+        "name": "Ella",
+        "code": null,
+        "country": "LK",
+        "lat": 6.867,
+        "lon": 81.046
+      },
+      "mode": "van",
+      "minutes": 270,
+      "priceEur": [
+        26,
+        34
+      ],
+      "both": true,
+      "operator": "shared shuttle vans (Tuktukdude Leisure and others)",
+      "book": "https://www.bookaway.com/routes/sri-lanka/kandy-to-ella",
+      "note": "Kandy to Ella train suspended since Cyclone Ditwah (Nov 2025). Shuttles take 3.5 to 5 h. Public buses take about 6 h for about LKR 1,360, usually with a change.",
+      "sources": [
+        "https://byc.lk/colombo-kandy-ella-train-status-2026",
+        "https://www.rome2rio.com/s/Kandy/Ella",
+        "https://www.bigworldsmallpockets.com/kandy-ella-train/"
+      ],
+      "confidence": "medium"
+    },
+    {
+      "from": {
+        "name": "Ella",
+        "code": null,
+        "country": "LK",
+        "lat": 6.867,
+        "lon": 81.046
+      },
+      "to": {
+        "name": "Mirissa",
+        "code": null,
+        "country": "LK",
+        "lat": 5.947,
+        "lon": 80.459
+      },
+      "mode": "van",
+      "minutes": 195,
+      "priceEur": [
+        27,
+        33
+      ],
+      "both": true,
+      "operator": "shared shuttle vans (Tuktukdude Leisure and others)",
+      "book": "https://www.bookaway.com/routes/sri-lanka/ella-to-mirissa",
+      "note": "No train and no direct public bus. Shared AC shuttle about 13:00 with hotel pickup. Private minivans cost about USD 90 and up per vehicle.",
+      "sources": [
+        "https://www.bookaway.com/routes/sri-lanka/ella-to-mirissa",
+        "https://www.rome2rio.com/s/Ella/Mirissa"
+      ],
+      "confidence": "medium"
+    },
+    {
+      "from": {
+        "name": "Colombo",
+        "code": "CMB",
+        "country": "LK",
+        "lat": 6.934,
+        "lon": 79.85
+      },
+      "to": {
+        "name": "Galle",
+        "code": null,
+        "country": "LK",
+        "lat": 6.033,
+        "lon": 80.217
+      },
+      "mode": "train",
+      "minutes": 150,
+      "priceEur": [
+        0.7,
+        3.1
+      ],
+      "both": true,
+      "operator": "Sri Lanka Railways (coastal line)",
+      "book": "https://seatreservation.railway.gov.lk/mtktwebslr/",
+      "note": "Coastal line from Colombo Fort, several trains a day, about 2 to 3.5 h. Almost all seats are unreserved. Range is 3rd unreserved to 1st reserved.",
+      "sources": [
+        "https://www.seat61.com/SriLanka.htm",
+        "https://www.rome2rio.com/s/Colombo/Galle"
+      ],
+      "confidence": "medium"
+    },
+    {
+      "from": {
+        "name": "Tokyo",
+        "code": "TYO",
+        "country": "JP",
+        "lat": 35.681,
+        "lon": 139.767
+      },
+      "to": {
+        "name": "Kyoto",
+        "code": null,
+        "country": "JP",
+        "lat": 34.985,
+        "lon": 135.758
+      },
+      "mode": "train",
+      "minutes": 135,
+      "priceEur": [
+        76,
+        81
+      ],
+      "both": true,
+      "operator": "JR Central (Tokaido Shinkansen Nozomi, Hikari)",
+      "book": "https://smart-ex.jp/en/",
+      "note": "Nozomi every 10 min or so, about 2h15. JR Pass rose to 53,000 yen (7 days) on 1 Oct 2026 and does not cover Nozomi without a 4,960 yen add-on.",
+      "sources": [
+        "https://www.seat61.com/Japan.htm",
+        "https://www.ticketsinjapan.com/media/?p=585",
+        "https://www.japan.travel/en/ca/news/price-increases-are-coming-to-the-nationwide-japan-rail-pass-2026/"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Tokyo",
+        "code": "TYO",
+        "country": "JP",
+        "lat": 35.681,
+        "lon": 139.767
+      },
+      "to": {
+        "name": "Osaka",
+        "code": "OSA",
+        "country": "JP",
+        "lat": 34.694,
+        "lon": 135.502
+      },
+      "mode": "train",
+      "minutes": 150,
+      "priceEur": [
+        80,
+        84
+      ],
+      "both": true,
+      "operator": "JR Central (Tokaido Shinkansen Nozomi, Hikari)",
+      "book": "https://smart-ex.jp/en/",
+      "note": "Arrives Shin-Osaka, a few minutes by JR from Osaka/Umeda. Nozomi every 10 to 15 min; Hikari takes about 3 h and is fully covered by the JR Pass.",
+      "sources": [
+        "https://ekitan.com/en/article/tokyo-to-osaka-shinkansen",
+        "https://www.seat61.com/Japan.htm"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Kyoto",
+        "code": null,
+        "country": "JP",
+        "lat": 34.985,
+        "lon": 135.758
+      },
+      "to": {
+        "name": "Hiroshima",
+        "code": "HIJ",
+        "country": "JP",
+        "lat": 34.397,
+        "lon": 132.475
+      },
+      "mode": "train",
+      "minutes": 100,
+      "priceEur": [
+        62,
+        67
+      ],
+      "both": true,
+      "operator": "JR Central and JR West (Nozomi, Hikari, Sakura)",
+      "book": "https://smart-ex.jp/en/",
+      "note": "Direct Nozomi about 1h36, or Hikari with a change at Shin-Osaka. JR Pass covers Hikari and Sakura; Nozomi needs an add-on.",
+      "sources": [
+        "https://ekitan.com/en/article/kyoto-to-hiroshima-shinkansen",
+        "https://www.seat61.com/Japan.htm"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Osaka",
+        "code": "OSA",
+        "country": "JP",
+        "lat": 34.694,
+        "lon": 135.502
+      },
+      "to": {
+        "name": "Hiroshima",
+        "code": "HIJ",
+        "country": "JP",
+        "lat": 34.397,
+        "lon": 132.475
+      },
+      "mode": "train",
+      "minutes": 85,
+      "priceEur": [
+        57,
+        63
+      ],
+      "both": true,
+      "operator": "JR West and JR Kyushu (Sanyo Shinkansen Nozomi, Mizuho, Sakura)",
+      "book": "https://smart-ex.jp/en/",
+      "note": "From Shin-Osaka by Nozomi, Mizuho or Sakura, a train every 10 to 20 min. Foreign tourists can buy a 7,900 yen one-way discount ticket.",
+      "sources": [
+        "https://www.japan-guide.com/e/e3404.html?aFROM=2157_2160",
+        "https://ekitan.com/en/article/osaka-to-hiroshima-shinkansen"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Tokyo",
+        "code": "TYO",
+        "country": "JP",
+        "lat": 35.681,
+        "lon": 139.767
+      },
+      "to": {
+        "name": "Hakone",
+        "code": null,
+        "country": "JP",
+        "lat": 35.233,
+        "lon": 139.106
+      },
+      "mode": "train",
+      "minutes": 85,
+      "priceEur": [
+        7.3,
+        14
+      ],
+      "both": true,
+      "operator": "Odakyu (Romancecar limited express); JR to Odawara",
+      "book": "https://odakyu-global.com/romancecar/",
+      "note": "Romancecar from Shinjuku direct to Hakone-Yumoto, 2,470 yen. Odakyu express with a change at Odawara takes about 2 h for 1,270 yen. JR Pass only reaches Odawara.",
+      "sources": [
+        "https://www.japan-guide.com/e/e5206.html",
+        "https://odakyu-global.com/romancecar/"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Osaka",
+        "code": "OSA",
+        "country": "JP",
+        "lat": 34.694,
+        "lon": 135.502
+      },
+      "to": {
+        "name": "Nara",
+        "code": null,
+        "country": "JP",
+        "lat": 34.685,
+        "lon": 135.805
+      },
+      "mode": "train",
+      "minutes": 40,
+      "priceEur": [
+        3.9,
+        7.4
+      ],
+      "both": true,
+      "operator": "Kintetsu (rapid express, limited express); JR West Yamatoji Rapid",
+      "book": "https://www.kintetsu.co.jp/foreign/english/",
+      "note": "Kintetsu from Osaka-Namba to Kintetsu-Nara, beside Nara Park: express 680 yen, limited express 30 min. JR Yamatoji Rapid from Osaka Station: 45 min, 840 yen.",
+      "sources": [
+        "https://www.japan-guide.com/e/e4107.html?aFROM=2157_2165",
+        "https://www.kintetsu.co.jp/foreign/english/planyourtrip/1day_plan01.html"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Kyoto",
+        "code": null,
+        "country": "JP",
+        "lat": 34.985,
+        "lon": 135.758
+      },
+      "to": {
+        "name": "Nara",
+        "code": null,
+        "country": "JP",
+        "lat": 34.685,
+        "lon": 135.805
+      },
+      "mode": "train",
+      "minutes": 45,
+      "priceEur": [
+        4.1,
+        7.3
+      ],
+      "both": true,
+      "operator": "JR West (Nara Line Miyakoji rapid); Kintetsu",
+      "book": "https://www.kintetsu.co.jp/foreign/english/",
+      "note": "JR Miyakoji rapid every 30 min, 720 yen, JR Pass valid; JR Nara is a 15 to 20 min walk from the park. Kintetsu express 760 yen, limited express 35 min, 1,280 yen.",
+      "sources": [
+        "https://www.japan-guide.com/e/e4107.html",
+        "https://www.kintetsu.co.jp/foreign/english/planyourtrip/1day_plan01.html"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Hiroshima",
+        "code": "HIJ",
+        "country": "JP",
+        "lat": 34.397,
+        "lon": 132.475
+      },
+      "to": {
+        "name": "Miyajima",
+        "code": null,
+        "country": "JP",
+        "lat": 34.296,
+        "lon": 132.32
+      },
+      "mode": "ferry",
+      "minutes": 45,
+      "priceEur": [
+        4,
+        14
+      ],
+      "both": true,
+      "operator": "JR West train plus JR Miyajima Ferry or Matsudai; Aqua Net Hiroshima boat",
+      "book": "https://www.jr-miyajimaferry.co.jp/en/",
+      "note": "JR to Miyajimaguchi (25 min, 420 yen) then 10 min ferry (180 yen) plus 100 yen visitor tax. Aqua Net boat from Peace Park: 45 min, 2,400 yen.",
+      "sources": [
+        "https://www.japan-guide.com/e/e3454.html",
+        "https://jr-miyajimaferry.co.jp/en/fare"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Kyoto",
+        "code": null,
+        "country": "JP",
+        "lat": 34.985,
+        "lon": 135.758
+      },
+      "to": {
+        "name": "Osaka",
+        "code": "OSA",
+        "country": "JP",
+        "lat": 34.694,
+        "lon": 135.502
+      },
+      "mode": "train",
+      "minutes": 30,
+      "priceEur": [
+        2.3,
+        8.3
+      ],
+      "both": true,
+      "operator": "JR West special rapid; Hankyu; Keihan; JR Central Shinkansen",
+      "book": "https://www.westjr.co.jp/global/en/",
+      "note": "JR special rapid Kyoto to Osaka Station, 580 yen. Hankyu from Kawaramachi 40 min, 410 yen. Shinkansen to Shin-Osaka 15 min, 1,450 yen unreserved.",
+      "sources": [
+        "https://www.japan-guide.com/e/e4006.html?aFROM=2157_2158"
+      ],
+      "confidence": "medium"
+    },
+    {
+      "from": {
+        "name": "Seoul",
+        "code": "SEL",
+        "country": "KR",
+        "lat": 37.555,
+        "lon": 126.971
+      },
+      "to": {
+        "name": "Busan",
+        "code": "PUS",
+        "country": "KR",
+        "lat": 35.115,
+        "lon": 129.041
+      },
+      "mode": "train",
+      "minutes": 160,
+      "priceEur": [
+        37,
+        52
+      ],
+      "both": true,
+      "operator": "Korail (KTX, KTX-Cheongnyong)",
+      "book": "https://www.letskorail.com/",
+      "note": "Seoul Station to Busan Station, several trains an hour from about 05:15 to 22:30. Standard 59,800 won, first class 83,700 won.",
+      "sources": [
+        "https://www.seat61.com/SouthKorea.htm",
+        "https://mileasia.com/korea/busan-to-seoul/"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Seoul",
+        "code": "SEL",
+        "country": "KR",
+        "lat": 37.555,
+        "lon": 126.971
+      },
+      "to": {
+        "name": "Gyeongju",
+        "code": null,
+        "country": "KR",
+        "lat": 35.856,
+        "lon": 129.225
+      },
+      "mode": "train",
+      "minutes": 130,
+      "priceEur": [
+        26,
+        30
+      ],
+      "both": true,
+      "operator": "Korail (KTX); SR (SRT from Suseo)",
+      "book": "https://www.letskorail.com/",
+      "note": "KTX to Gyeongju Station (Singyeongju until Dec 2023), well outside town; city buses take about 20 min to the centre. KTX 49,300 won, SRT from Suseo 42,600 won.",
+      "sources": [
+        "https://www.koreatodo.com/gyeongju-day-trip",
+        "https://uk.trip.com/trains/korail/route/seoul-to-singyeongju/"
+      ],
+      "confidence": "medium"
+    },
+    {
+      "from": {
+        "name": "Busan",
+        "code": "PUS",
+        "country": "KR",
+        "lat": 35.115,
+        "lon": 129.041
+      },
+      "to": {
+        "name": "Fukuoka",
+        "code": "FUK",
+        "country": "JP",
+        "lat": 33.59,
+        "lon": 130.402
+      },
+      "mode": "ferry",
+      "minutes": 540,
+      "priceEur": [
+        72,
+        98
+      ],
+      "both": false,
+      "operator": "Camellia Line / Koryo Ferry (New Camellia)",
+      "book": "https://www.waug.com/ko/activities/147285",
+      "note": "Overnight New Camellia, Busan 22:30 to Hakata 07:30, boarding from 19:40. Add about 24,000 won fuel, terminal and tax. JR Queen Beetle fast boat is discontinued.",
+      "sources": [
+        "https://glasswallet.com/blog/fukuoka-ferry-cost-guide",
+        "https://www.waug.com/ko/activities/147285",
+        "https://www.seat61.com/SouthKorea.htm"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Fukuoka",
+        "code": "FUK",
+        "country": "JP",
+        "lat": 33.59,
+        "lon": 130.402
+      },
+      "to": {
+        "name": "Busan",
+        "code": "PUS",
+        "country": "KR",
+        "lat": 35.115,
+        "lon": 129.041
+      },
+      "mode": "ferry",
+      "minutes": 360,
+      "priceEur": [
+        114,
+        125
+      ],
+      "both": false,
+      "operator": "Camellia Line / Koryo Ferry (New Camellia)",
+      "book": "https://www.camellia-line.co.jp/",
+      "note": "Daytime sailing, Hakata 12:30 to Busan 18:30. Includes 1,400 yen fuel, 500 yen terminal and 3,000 yen Japan departure tax. Fares revised 1 Oct 2026.",
+      "sources": [
+        "https://www.camellia-line.co.jp/fare/",
+        "https://www.trazy.com/ko/experience/detail/busan-fukuoka-ferry-new-camellia",
+        "https://glasswallet.com/blog/fukuoka-ferry-cost-guide"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Taipei",
+        "code": "TPE",
+        "country": "TW",
+        "lat": 25.048,
+        "lon": 121.517
+      },
+      "to": {
+        "name": "Hualien",
+        "code": "HUN",
+        "country": "TW",
+        "lat": 23.993,
+        "lon": 121.601
+      },
+      "mode": "train",
+      "minutes": 130,
+      "priceEur": [
+        17,
+        17
+      ],
+      "both": true,
+      "operator": "Taiwan Railway (Taroko, Puyuma, EMU3000 Tze-Chiang express)",
+      "book": "https://tip.railway.gov.tw/tra-tip-web/tip",
+      "note": "Express from Taipei Main or Songshan, about 2h10. NT$583 since the June 2025 fare rise (was NT$440). Weekend and holiday seats sell out, book early.",
+      "sources": [
+        "https://taiwanderers.com/hualien-station-taiwan-guide/",
+        "https://news.pts.org.tw/article/747969",
+        "https://t.media/2892206"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Taipei",
+        "code": "TPE",
+        "country": "TW",
+        "lat": 25.048,
+        "lon": 121.517
+      },
+      "to": {
+        "name": "Tainan",
+        "code": "TNN",
+        "country": "TW",
+        "lat": 22.997,
+        "lon": 120.213
+      },
+      "mode": "train",
+      "minutes": 110,
+      "priceEur": [
+        36,
+        39
+      ],
+      "both": true,
+      "operator": "Taiwan High Speed Rail (THSR)",
+      "book": "https://en.thsrc.com.tw/",
+      "note": "HSR Tainan station is in Guiren, outside the city; the Shalun line shuttle to Tainan station takes 22 min, NT$25. Reserved NT$1,350, non-reserved cheaper.",
+      "sources": [
+        "https://www.taipeitourism.org/?p=532",
+        "https://en.wikipedia.org/wiki/Shalun_railway_station"
+      ],
+      "confidence": "medium"
+    },
+    {
+      "from": {
+        "name": "Beijing",
+        "code": "BJS",
+        "country": "CN",
+        "lat": 39.904,
+        "lon": 116.407
+      },
+      "to": {
+        "name": "Shanghai",
+        "code": "SHA",
+        "country": "CN",
+        "lat": 31.231,
+        "lon": 121.474
+      },
+      "mode": "train",
+      "minutes": 270,
+      "priceEur": [
+        75,
+        134
+      ],
+      "both": true,
+      "operator": "China Railway (G trains)",
+      "book": "https://www.trip.com/trains/china/route/beijing-to-shanghai/",
+      "note": "About 50 G trains a day, Beijing South to Shanghai Hongqiao, fastest 4h18. Dynamic fares: 2nd class 626 to 695 yuan, 1st 1,035 to 1,111 yuan. Book with passport.",
+      "sources": [
+        "https://chinafortravelers.com/guides/beijing-to-shanghai/",
+        "https://www.chinahighlights.com/china-trains/beijing-shanghai-train.htm"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Beijing",
+        "code": "BJS",
+        "country": "CN",
+        "lat": 39.904,
+        "lon": 116.407
+      },
+      "to": {
+        "name": "Xi'an",
+        "code": "SIA",
+        "country": "CN",
+        "lat": 34.342,
+        "lon": 108.94
+      },
+      "mode": "train",
+      "minutes": 270,
+      "priceEur": [
+        62,
+        111
+      ],
+      "both": true,
+      "operator": "China Railway (G trains)",
+      "book": "https://www.12306.cn/en/index.html",
+      "note": "About 30 G trains a day, mostly Beijing West to Xi'an North, fastest about 4h10. 2nd class 515 to 578 yuan, 1st 824 to 923 yuan. Overnight sleepers also run.",
+      "sources": [
+        "https://chinafortravelers.com/guides/beijing-to-xian/",
+        "https://www.chinahighlights.com/china-trains/beijing-xian-train.htm",
+        "https://www.seat61.com/China.htm"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Shanghai",
+        "code": "SHA",
+        "country": "CN",
+        "lat": 31.231,
+        "lon": 121.474
+      },
+      "to": {
+        "name": "Hangzhou",
+        "code": "HGH",
+        "country": "CN",
+        "lat": 30.274,
+        "lon": 120.155
+      },
+      "mode": "train",
+      "minutes": 55,
+      "priceEur": [
+        8.8,
+        17
+      ],
+      "both": true,
+      "operator": "China Railway (G and D trains)",
+      "book": "https://www.trip.com/trains/china/route/shanghai-to-hangzhou/",
+      "note": "Over 300 trains a day, Shanghai Hongqiao to Hangzhou East, 45 to 60 min. 2nd class about 73 to 87 yuan, 1st class 117 to 140 yuan.",
+      "sources": [
+        "https://chinafortravelers.com/guides/shanghai-to-hangzhou/",
+        "https://www.acciyo.com/zh/%E4%B8%8A%E6%B5%B7%E5%88%B0%E6%9D%AD%E5%B7%9E%E9%AB%98%E9%93%81%E5%A4%9A%E4%B9%85%EF%BC%9F%E6%9C%80%E5%BF%AB45%E5%88%86%E9%92%9F%E7%9B%B4%E8%BE%BE%EF%BC%81%E5%85%A8%E7%A8%8B%E6%94%BB%E7%95%A5%E8%B4%AD%E7%A5%A8%E6%8A%80%E5%B7%A7/",
+        "https://www.chinahighlights.com/china-trains/shanghai-hangzhou-train.htm"
+      ],
+      "confidence": "medium"
+    },
+    {
+      "from": {
+        "name": "Guilin",
+        "code": "KWL",
+        "country": "CN",
+        "lat": 25.274,
+        "lon": 110.29
+      },
+      "to": {
+        "name": "Yangshuo",
+        "code": null,
+        "country": "CN",
+        "lat": 24.778,
+        "lon": 110.496
+      },
+      "mode": "coach",
+      "minutes": 90,
+      "priceEur": [
+        2.4,
+        5.4
+      ],
+      "both": true,
+      "operator": "intercity buses from Guilin South Bus Station",
+      "book": "https://www.chinatravel.com/guilin/transport/guilin-to-yangshuo",
+      "note": "Every 15 to 30 min from Guilin South Bus Station to Yangshuo Bus Station in town. The HSR to Yangshuo Station is faster but it sits near Xingping, about 35 km out.",
+      "sources": [
+        "https://chinafortravelers.com/guides/getting-around-guilin-yangshuo/",
+        "https://www.chinatravel.com/guilin/transport/guilin-to-yangshuo"
+      ],
+      "confidence": "medium"
+    },
+    {
+      "from": {
+        "name": "Guilin",
+        "code": "KWL",
+        "country": "CN",
+        "lat": 25.274,
+        "lon": 110.29
+      },
+      "to": {
+        "name": "Yangshuo",
+        "code": null,
+        "country": "CN",
+        "lat": 24.778,
+        "lon": 110.496
+      },
+      "mode": "ferry",
+      "minutes": 270,
+      "priceEur": [
+        26,
+        54
+      ],
+      "both": false,
+      "operator": "Li River cruise boats (3-star and 4-star)",
+      "book": "https://www.chinatravel.com/guilin/transport/guilin-to-yangshuo",
+      "note": "Downstream only, one morning sailing. 3-star boats leave Mopanshan pier, 4-star Zhujiang pier, about 40 min south of Guilin by road. Lands at Yangshuo.",
+      "sources": [
+        "https://chinafortravelers.com/guides/li-river-cruise/",
+        "https://www.chinatravel.com/guilin/transport/guilin-to-yangshuo"
+      ],
+      "confidence": "medium"
+    },
+    {
+      "from": {
+        "name": "Hong Kong",
+        "code": "HKG",
+        "country": "HK",
+        "lat": 22.302,
+        "lon": 114.172
+      },
+      "to": {
+        "name": "Guangzhou",
+        "code": "CAN",
+        "country": "CN",
+        "lat": 23.129,
+        "lon": 113.264
+      },
+      "mode": "train",
+      "minutes": 55,
+      "priceEur": [
+        22,
+        41
+      ],
+      "both": true,
+      "operator": "MTR and China Railway (XRL high-speed)",
+      "book": "https://www.highspeed.mtr.com.hk/en/main/index.html",
+      "note": "XRL West Kowloon to Guangzhou South, about 60 a day, most stop at Futian and Shenzhen North. Border checks at West Kowloon. Hung Hom through train ended 2024.",
+      "sources": [
+        "https://chinafortravelers.com/guides/hong-kong-to-guangzhou/",
+        "https://www.highspeed.mtr.com.hk/en/ticket/fare.html",
+        "https://en.wikipedia.org/wiki/Guangzhou%E2%80%93Kowloon_through_train"
+      ],
+      "confidence": "medium"
+    },
+    {
+      "from": {
+        "name": "Hong Kong",
+        "code": "HKG",
+        "country": "HK",
+        "lat": 22.302,
+        "lon": 114.172
+      },
+      "to": {
+        "name": "Shenzhen",
+        "code": "SZX",
+        "country": "CN",
+        "lat": 22.543,
+        "lon": 114.058
+      },
+      "mode": "train",
+      "minutes": 15,
+      "priceEur": [
+        8.2,
+        14
+      ],
+      "both": true,
+      "operator": "MTR and China Railway (XRL high-speed); MTR East Rail",
+      "book": "https://www.highspeed.mtr.com.hk/en/main/index.html",
+      "note": "XRL West Kowloon to Futian in 14 min, Shenzhen North 18 to 25 min. MTR East Rail to the Lo Wu or Lok Ma Chau crossings is cheaper but about 1 h from central HK.",
+      "sources": [
+        "https://chinafortravelers.com/guides/hong-kong-to-shenzhen/",
+        "https://www.chinatravel.com/china-trains/hong-kong-shenzhen-train"
+      ],
+      "confidence": "medium"
+    },
+    {
+      "from": {
+        "name": "Kunming",
+        "code": "KMG",
+        "country": "CN",
+        "lat": 25.04,
+        "lon": 102.717
+      },
+      "to": {
+        "name": "Dali",
+        "code": "DLU",
+        "country": "CN",
+        "lat": 25.607,
+        "lon": 100.268
+      },
+      "mode": "train",
+      "minutes": 130,
+      "priceEur": [
+        14,
+        28
+      ],
+      "both": true,
+      "operator": "China Railway (D, C and G trains)",
+      "book": "https://www.trip.com/trains/china/route/kunming-to-dali/",
+      "note": "Over 80 trains a day from Kunming or Kunming South to Dali station in Xiaguan. 2nd class 145 yuan, 1st 231 yuan. Dali Old Town is a bus or taxi ride further north.",
+      "sources": [
+        "https://www.chinahighlights.com/china-trains/kunming-dali-train.htm",
+        "https://www.trip.com/trains/china/route/kunming-to-dali/"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Dali",
+        "code": "DLU",
+        "country": "CN",
+        "lat": 25.607,
+        "lon": 100.268
+      },
+      "to": {
+        "name": "Lijiang",
+        "code": "LJG",
+        "country": "CN",
+        "lat": 26.855,
+        "lon": 100.228
+      },
+      "mode": "train",
+      "minutes": 110,
+      "priceEur": [
+        3.1,
+        11
+      ],
+      "both": true,
+      "operator": "China Railway (C trains and others)",
+      "book": "https://www.trip.com/trains/china/route/dali-to-lijiang/",
+      "note": "About 10 direct trains a day from Dali station (Xiaguan), 07:00 to 18:18, fastest 1h36 for 141 km. Buses from Dali Old Town take about 3.5 h.",
+      "sources": [
+        "https://www.trip.com/trains/china/route/dali-to-lijiang/",
+        "https://www.rome2rio.com/s/Dali/Lijiang"
+      ],
+      "confidence": "medium"
+    },
+    {
+      "from": {
+        "name": "Kunming",
+        "code": "KMG",
+        "country": "CN",
+        "lat": 25.04,
+        "lon": 102.717
+      },
+      "to": {
+        "name": "Lijiang",
+        "code": "LJG",
+        "country": "CN",
+        "lat": 26.855,
+        "lon": 100.228
+      },
+      "mode": "train",
+      "minutes": 225,
+      "priceEur": [
+        17,
+        35
+      ],
+      "both": true,
+      "operator": "China Railway (C trains, Y overnight sleeper)",
+      "book": "https://www.trip.com/trains/china/route/kunming-to-lijiang/",
+      "note": "C trains take 3.5 to 4 h, 6 to 14 a day; 2nd class 182 yuan, 1st 290 yuan. Overnight Y752 sleeper 21:30 to 07:55, hard sleeper 123 yuan.",
+      "sources": [
+        "https://www.chinahighlights.com/china-trains/kunming-lijiang-train.htm",
+        "https://www.trip.com/trains/china/route/kunming-to-lijiang/"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Amman",
+        "code": "AMM",
+        "country": "JO",
+        "lat": 31.954,
+        "lon": 35.911
+      },
+      "to": {
+        "name": "Petra (Wadi Musa)",
+        "code": null,
+        "country": "JO",
+        "lat": 30.322,
+        "lon": 35.479
+      },
+      "mode": "coach",
+      "minutes": 240,
+      "priceEur": [
+        12,
+        13
+      ],
+      "both": true,
+      "operator": "JETT",
+      "book": "https://jett.com.jo/en",
+      "note": "One JETT bus a day, 06:30 from Abdali, arriving at the Petra Visitor Centre about 10:30. Return leaves Petra at 17:00. 10 JOD on JETT's live schedule.",
+      "sources": [
+        "https://jett.com.jo/en/live-schedule",
+        "https://blog.wego.com/how-to-get-to-petra/",
+        "https://www.rome2rio.com/s/Amman/Petra"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Amman",
+        "code": "AMM",
+        "country": "JO",
+        "lat": 31.954,
+        "lon": 35.911
+      },
+      "to": {
+        "name": "Aqaba",
+        "code": "AQJ",
+        "country": "JO",
+        "lat": 29.532,
+        "lon": 35.006
+      },
+      "mode": "coach",
+      "minutes": 240,
+      "priceEur": [
+        12,
+        24
+      ],
+      "both": true,
+      "operator": "JETT (regular and VIP)",
+      "book": "https://jett.com.jo/en",
+      "note": "About 5 regular JETT buses a day from Abdali (10 JOD, 4 h) plus more from 7th Circle. VIP coaches leave 7th Circle at 08:30 and 16:30 for 20 JOD.",
+      "sources": [
+        "https://jett.com.jo/en/live-schedule",
+        "https://www.busbud.com/en-gb/bus-amman-aqaba/r/sv9tc1-sv2bh2",
+        "https://www.rome2rio.com/s/Amman/Aqaba"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Petra (Wadi Musa)",
+        "code": null,
+        "country": "JO",
+        "lat": 30.322,
+        "lon": 35.479
+      },
+      "to": {
+        "name": "Wadi Rum",
+        "code": null,
+        "country": "JO",
+        "lat": 29.576,
+        "lon": 35.42
+      },
+      "mode": "van",
+      "minutes": 120,
+      "priceEur": [
+        9.8,
+        12
+      ],
+      "both": true,
+      "operator": "local shared minibus",
+      "book": "https://12go.asia/en/travel/wadi-musa/wadi-rum",
+      "note": "One shared minibus a day from Wadi Musa bus station at about 06:00, leaving when full, to Rum village. 8 to 10 JOD cash. Reserve a seat through your Petra hotel.",
+      "sources": [
+        "https://www.alongdustyroads.com/posts/how-to-get-from-petra-to-wadi-rum",
+        "https://travelcostcalculator.org/unesco/wadi-rum-protected-area"
+      ],
+      "confidence": "medium"
+    },
+    {
+      "from": {
+        "name": "Aqaba",
+        "code": "AQJ",
+        "country": "JO",
+        "lat": 29.532,
+        "lon": 35.006
+      },
+      "to": {
+        "name": "Wadi Rum",
+        "code": null,
+        "country": "JO",
+        "lat": 29.576,
+        "lon": 35.42
+      },
+      "mode": "van",
+      "minutes": 75,
+      "priceEur": [
+        3.7,
+        6.1
+      ],
+      "both": true,
+      "operator": "local shared minibus",
+      "book": "https://12go.asia/en/travel/aqaba/wadi-rum",
+      "note": "Shared minibuses with no fixed timetable, mostly in the morning, leave when full from near Aqaba police station. About 3 to 5 JOD. A taxi costs about 25 to 30 JOD.",
+      "sources": [
+        "https://www.alongdustyroads.com/posts/how-to-get-from-aqaba-to-wadi-rum",
+        "https://travelcostcalculator.org/unesco/wadi-rum-protected-area",
+        "https://paliparan.com/2024/11/11/jordan-bus-travel/"
+      ],
+      "confidence": "medium"
+    },
+    {
+      "from": {
+        "name": "Cairo",
+        "code": "CAI",
+        "country": "EG",
+        "lat": 30.044,
+        "lon": 31.236
+      },
+      "to": {
+        "name": "Luxor",
+        "code": "LXR",
+        "country": "EG",
+        "lat": 25.687,
+        "lon": 32.64
+      },
+      "mode": "train",
+      "minutes": 600,
+      "priceEur": [
+        47,
+        65
+      ],
+      "both": true,
+      "operator": "ENR (VIP and Express trains)",
+      "book": "https://12go.asia/en/travel/cairo/luxor",
+      "note": "Daytime seated trains, about 9.5 to 11 h. Foreigner fares are in USD: $55 in 2nd class, $75 in 1st. Buy at station foreigner desks or online through 12Go.",
+      "sources": [
+        "https://www.seat61.com/Egypt.htm"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Luxor",
+        "code": "LXR",
+        "country": "EG",
+        "lat": 25.687,
+        "lon": 32.64
+      },
+      "to": {
+        "name": "Aswan",
+        "code": "ASW",
+        "country": "EG",
+        "lat": 24.089,
+        "lon": 32.9
+      },
+      "mode": "train",
+      "minutes": 210,
+      "priceEur": [
+        27,
+        34
+      ],
+      "both": true,
+      "operator": "ENR",
+      "book": "https://12go.asia/en/travel/luxor/aswan",
+      "note": "Many trains a day, about 3.5 h. Foreigner fares in USD: VIP and Express $35 to $40, older Russian-built AC3 coaches $31.",
+      "sources": [
+        "https://www.seat61.com/Egypt.htm",
+        "https://www.rome2rio.com/s/Luxor/Aswan"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Cairo",
+        "code": "CAI",
+        "country": "EG",
+        "lat": 30.044,
+        "lon": 31.236
+      },
+      "to": {
+        "name": "Alexandria",
+        "code": null,
+        "country": "EG",
+        "lat": 31.2,
+        "lon": 29.919
+      },
+      "mode": "train",
+      "minutes": 150,
+      "priceEur": [
+        30,
+        43
+      ],
+      "both": true,
+      "operator": "ENR (Talgo, VIP and Express trains)",
+      "book": "https://12go.asia/en/travel/cairo/alexandria",
+      "note": "Frequent trains all day. Talgo takes about 2.5 h at $40 to $50 for foreigners, VIP and Express $35 to $40, slower trains up to 4 h.",
+      "sources": [
+        "https://www.seat61.com/Egypt.htm",
+        "https://paliparan.com/2025/09/18/egyptian-railways-foreigner-tickets/"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Hurghada",
+        "code": "HRG",
+        "country": "EG",
+        "lat": 27.258,
+        "lon": 33.812
+      },
+      "to": {
+        "name": "Luxor",
+        "code": "LXR",
+        "country": "EG",
+        "lat": 25.687,
+        "lon": 32.64
+      },
+      "mode": "coach",
+      "minutes": 240,
+      "priceEur": [
+        3.2,
+        6.9
+      ],
+      "both": true,
+      "operator": "Go Bus, Super Jet, Upper Egypt Travel",
+      "book": "https://go-bus.com",
+      "note": "Several buses a day, scheduled at about 4 h but riders often report 5 to 6 h. Go Bus about 180 to 250 EGP.",
+      "sources": [
+        "https://www.rome2rio.com/s/Hurghada/Luxor",
+        "https://unchartedlens.com/routes/egypt/hurghada-airport-to-luxor/",
+        "https://www.busbud.com/en-gb/bus-company/go-bus-ar"
+      ],
+      "confidence": "medium"
+    },
+    {
+      "from": {
+        "name": "Cairo",
+        "code": "CAI",
+        "country": "EG",
+        "lat": 30.044,
+        "lon": 31.236
+      },
+      "to": {
+        "name": "Hurghada",
+        "code": "HRG",
+        "country": "EG",
+        "lat": 27.258,
+        "lon": 33.812
+      },
+      "mode": "coach",
+      "minutes": 420,
+      "priceEur": [
+        6.3,
+        14
+      ],
+      "both": true,
+      "operator": "Go Bus, Super Jet, White Bus",
+      "book": "https://go-bus.com",
+      "note": "Many departures day and night, about 6.5 to 8 h. Economy seats about 350 to 500 EGP, Elite and VIP seats 550 to 800 EGP.",
+      "sources": [
+        "https://www.rome2rio.com/s/Cairo/Hurghada",
+        "https://unchartedlens.com/routes/egypt/el-gouna-to-cairo-airport/",
+        "https://www.busbud.com/en-gb/bus-company/go-bus-ar"
+      ],
+      "confidence": "medium"
+    },
+    {
+      "from": {
+        "name": "Nairobi",
+        "code": "NBO",
+        "country": "KE",
+        "lat": -1.283,
+        "lon": 36.817
+      },
+      "to": {
+        "name": "Mombasa",
+        "code": "MBA",
+        "country": "KE",
+        "lat": -4.043,
+        "lon": 39.668
+      },
+      "mode": "train",
+      "minutes": 330,
+      "priceEur": [
+        10,
+        30
+      ],
+      "both": true,
+      "operator": "Kenya Railways (Madaraka Express SGR)",
+      "book": "https://metickets.krc.co.ke",
+      "note": "Three trains a day: 08:00 Inter-County (6 h), 15:00 Express (5 h) and 22:00 night. Economy KES 1,500, first KES 4,500. Stations are outside both city centres.",
+      "sources": [
+        "https://www.seat61.com/Kenya.htm",
+        "https://paybillke.com/sgr/fares"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Nairobi",
+        "code": "NBO",
+        "country": "KE",
+        "lat": -1.283,
+        "lon": 36.817
+      },
+      "to": {
+        "name": "Arusha",
+        "code": "ARK",
+        "country": "TZ",
+        "lat": -3.387,
+        "lon": 36.683
+      },
+      "mode": "van",
+      "minutes": 390,
+      "priceEur": [
+        22,
+        30
+      ],
+      "both": true,
+      "operator": "Impala, Riverside and other shuttles",
+      "book": "https://www.riverside-shuttle.com",
+      "note": "Shuttle minibuses around 08:00 and 14:00, about 6 to 7 h including the Namanga one stop border post. Tahmeed coaches take about 5 h for USD 40.",
+      "sources": [
+        "https://www.seat61.com/Kenya.htm",
+        "https://www.checkmybus.com/nairobi/arusha",
+        "https://outofyourcomfortzone.net/?p=34478"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Arusha",
+        "code": "ARK",
+        "country": "TZ",
+        "lat": -3.387,
+        "lon": 36.683
+      },
+      "to": {
+        "name": "Moshi",
+        "code": null,
+        "country": "TZ",
+        "lat": -3.35,
+        "lon": 37.34
+      },
+      "mode": "van",
+      "minutes": 105,
+      "priceEur": [
+        1.7,
+        13
+      ],
+      "both": true,
+      "operator": "local buses and dala dalas, Impala and Riverside shuttles",
+      "book": "https://www.busbud.com/en/bus-arusha-moshi/r/kz6hfe-kz6scw",
+      "note": "Local buses and dala dalas run all day for about USD 2. Tourist shuttles cost about USD 10 to 15. The trip takes 1.5 to 2 h.",
+      "sources": [
+        "https://www.rome2rio.com/s/Arusha/Moshi",
+        "https://www.busbud.com/en/bus-arusha-moshi/r/kz6hfe-kz6scw",
+        "https://www.arushashuttle.com/Services/arusha-to-nairobi/"
+      ],
+      "confidence": "medium"
+    },
+    {
+      "from": {
+        "name": "Dar es Salaam",
+        "code": "DAR",
+        "country": "TZ",
+        "lat": -6.792,
+        "lon": 39.208
+      },
+      "to": {
+        "name": "Zanzibar (Stone Town)",
+        "code": "ZNZ",
+        "country": "TZ",
+        "lat": -6.162,
+        "lon": 39.188
+      },
+      "mode": "ferry",
+      "minutes": 120,
+      "priceEur": [
+        30,
+        52
+      ],
+      "both": true,
+      "operator": "Azam Marine (Kilimanjaro fast ferries)",
+      "book": "https://azammarine.com/",
+      "note": "Several sailings a day from the Sokoine Drive terminal. Non-residents pay USD 35 economy to USD 60 VIP, residents TZS 40,000. Zanzibar travel insurance is compulsory.",
+      "sources": [
+        "https://azammarine.com/rates/",
+        "https://www.seat61.com/Tanzania.htm"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Dar es Salaam",
+        "code": "DAR",
+        "country": "TZ",
+        "lat": -6.792,
+        "lon": 39.208
+      },
+      "to": {
+        "name": "Arusha",
+        "code": "ARK",
+        "country": "TZ",
+        "lat": -3.387,
+        "lon": 36.683
+      },
+      "mode": "coach",
+      "minutes": 600,
+      "priceEur": [
+        15,
+        29
+      ],
+      "both": true,
+      "operator": "Kilimanjaro Express, Dar Express, BM, Abood and others",
+      "book": "https://www.checkmybus.com/arusha/dar-es-salaam",
+      "note": "Day buses leave from about 05:00 and night buses in the evening, about 10 to 11 h. Fares vary by operator and class.",
+      "sources": [
+        "https://www.checkmybus.com/arusha/dar-es-salaam",
+        "https://www.rome2rio.com/s/Dar-es-Salaam/Arusha"
+      ],
+      "confidence": "medium"
+    },
+    {
+      "from": {
+        "name": "Nairobi",
+        "code": "NBO",
+        "country": "KE",
+        "lat": -1.283,
+        "lon": 36.817
+      },
+      "to": {
+        "name": "Moshi",
+        "code": null,
+        "country": "TZ",
+        "lat": -3.35,
+        "lon": 37.34
+      },
+      "mode": "van",
+      "minutes": 480,
+      "priceEur": [
+        24,
+        27
+      ],
+      "both": true,
+      "operator": "Impala Shuttle, Tahmeed Coach",
+      "book": "https://www.checkmybus.com/nairobi/moshi",
+      "note": "Impala shuttle 08:00 from Nairobi, about 8 h via Arusha and the Namanga border. Tahmeed coaches take about 6 h.",
+      "sources": [
+        "https://www.checkmybus.com/nairobi/moshi"
+      ],
+      "confidence": "medium"
+    },
+    {
+      "from": {
+        "name": "Marrakech",
+        "code": "RAK",
+        "country": "MA",
+        "lat": 31.63,
+        "lon": -7.981
+      },
+      "to": {
+        "name": "Ouarzazate",
+        "code": "OZZ",
+        "country": "MA",
+        "lat": 30.933,
+        "lon": -6.937
+      },
+      "mode": "coach",
+      "minutes": 255,
+      "priceEur": [
+        10,
+        11
+      ],
+      "both": true,
+      "operator": "CTM, Supratours",
+      "book": "https://www.ctm.ma",
+      "note": "About 8 buses a day, 4 by CTM (115 MAD) and 4 by Supratours (110 MAD), 4 h to 4 h 45 over the Tizi n'Tichka pass.",
+      "sources": [
+        "https://booking.ctm.ma/journeys?oCity=5686&dCity=5688&fareClasses=BONUS_SCHEME_GROUP.ADULT,1",
+        "https://www.supratours.ma/"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Fes",
+        "code": "FEZ",
+        "country": "MA",
+        "lat": 34.033,
+        "lon": -5
+      },
+      "to": {
+        "name": "Merzouga",
+        "code": null,
+        "country": "MA",
+        "lat": 31.099,
+        "lon": -4.012
+      },
+      "mode": "coach",
+      "minutes": 570,
+      "priceEur": [
+        21,
+        21
+      ],
+      "both": true,
+      "operator": "Supratours",
+      "book": "https://www.supratours.ma",
+      "note": "One overnight Supratours bus, 20:30 from Fes, arriving Merzouga 06:00, 220 MAD. Return leaves Merzouga 19:00. CTM runs Fes to Rissani overnight instead.",
+      "sources": [
+        "https://www.supratours.ma/",
+        "https://www.rome2rio.com/s/Fes/Merzouga"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Merzouga",
+        "code": null,
+        "country": "MA",
+        "lat": 31.099,
+        "lon": -4.012
+      },
+      "to": {
+        "name": "Marrakech",
+        "code": "RAK",
+        "country": "MA",
+        "lat": 31.63,
+        "lon": -7.981
+      },
+      "mode": "coach",
+      "minutes": 750,
+      "priceEur": [
+        28,
+        28
+      ],
+      "both": false,
+      "operator": "Supratours",
+      "book": "https://www.supratours.ma",
+      "note": "Daily bus 07:30 to 20:00 via Ouarzazate, 300 MAD. No direct bus the other way: Supratours sells a train to Meknes plus night bus, about 15.5 h, 450 MAD.",
+      "sources": [
+        "https://www.supratours.ma/",
+        "https://malika-in-morocco.com/?p=6213"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Marrakech",
+        "code": "RAK",
+        "country": "MA",
+        "lat": 31.63,
+        "lon": -7.981
+      },
+      "to": {
+        "name": "Agadir",
+        "code": "AGA",
+        "country": "MA",
+        "lat": 30.428,
+        "lon": -9.598
+      },
+      "mode": "coach",
+      "minutes": 210,
+      "priceEur": [
+        13,
+        14
+      ],
+      "both": true,
+      "operator": "CTM, Supratours",
+      "book": "https://www.ctm.ma",
+      "note": "About 20 buses a day between CTM and Supratours, 3 h to 3 h 45 on the motorway. CTM 135 to 140 MAD, Supratours 135 to 150 MAD.",
+      "sources": [
+        "https://booking.ctm.ma/journeys?oCity=5686&dCity=5589&fareClasses=BONUS_SCHEME_GROUP.ADULT,1",
+        "https://www.supratours.ma/",
+        "https://www.seat61.com/train-travel-in-morocco.htm"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Tangier",
+        "code": "TNG",
+        "country": "MA",
+        "lat": 35.76,
+        "lon": -5.834
+      },
+      "to": {
+        "name": "Chefchaouen",
+        "code": null,
+        "country": "MA",
+        "lat": 35.171,
+        "lon": -5.27
+      },
+      "mode": "coach",
+      "minutes": 150,
+      "priceEur": [
+        5.6,
+        7.9
+      ],
+      "both": true,
+      "operator": "CTM, Supratours",
+      "book": "https://www.ctm.ma",
+      "note": "CTM runs about 5 buses a day (85 MAD) and Supratours 2 (60 MAD), 2 h 15 to 2 h 35.",
+      "sources": [
+        "https://booking.ctm.ma/journeys?oCity=5682&dCity=5612&fareClasses=BONUS_SCHEME_GROUP.ADULT,1",
+        "https://www.supratours.ma/"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Casablanca",
+        "code": "CMN",
+        "country": "MA",
+        "lat": 33.573,
+        "lon": -7.59
+      },
+      "to": {
+        "name": "Rabat",
+        "code": "RBA",
+        "country": "MA",
+        "lat": 34.02,
+        "lon": -6.836
+      },
+      "mode": "train",
+      "minutes": 60,
+      "priceEur": [
+        3.7,
+        7.5
+      ],
+      "both": true,
+      "operator": "ONCF (Al Boraq, Al Atlas and shuttle trains)",
+      "book": "https://www.oncf-voyages.ma",
+      "note": "At least hourly from Casa Voyageurs. Al Boraq to Rabat Agdal 50 min (60 to 80 MAD), other trains to Rabat Ville about 1 h (40 to 50 MAD), 2nd class.",
+      "sources": [
+        "https://www.supratours.ma/",
+        "https://www.rome2rio.com/s/Casablanca/Rabat"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Rabat",
+        "code": "RBA",
+        "country": "MA",
+        "lat": 34.02,
+        "lon": -6.836
+      },
+      "to": {
+        "name": "Fes",
+        "code": "FEZ",
+        "country": "MA",
+        "lat": 34.033,
+        "lon": -5
+      },
+      "mode": "train",
+      "minutes": 175,
+      "priceEur": [
+        7.9,
+        12
+      ],
+      "both": true,
+      "operator": "ONCF (Al Atlas)",
+      "book": "https://www.oncf-voyages.ma",
+      "note": "Direct trains about hourly from Rabat Ville, about 2 h 55. 2nd class 85 to 125 MAD, 1st class about 175 MAD.",
+      "sources": [
+        "https://www.supratours.ma/",
+        "https://www.rome2rio.com/s/Rabat/Fes"
+      ],
+      "confidence": "high"
+    }
+  ]
+}

@@ -68,6 +68,7 @@ import type { KiwiItinerary } from "./kiwi";
 import { walkQuery, walkWindow, type WalkLiveLine } from "./chat-widgets";
 import { parseSearchQuery, skeletonFromTrip, type SearchQuery, type TripLeg, type TripResult } from "./trip-result";
 import { runSearch, SearchInputError, type SearchDone } from "./search";
+import { landmarkOf } from "./landmarks";
 
 const CITIES = citiesJson as unknown as Record<string, City>;
 const COUNTRIES = countriesJson as unknown as Record<string, CountryInfo>;
@@ -271,6 +272,9 @@ function findCity(name: string): [string, City] | null {
   const q = fold(raw);
   if (!q) return null;
   if (COUNTRY_NAMES.has(q)) return null;
+  // A landmark whose base is a city (Bali is Denpasar, the Uyuni salt flats Uyuni); one based in a town is findPlace's.
+  const lm = landmarkOf(raw);
+  if (lm) return lm.code && CITIES[lm.code] ? [lm.code, CITIES[lm.code]] : null;
   const exact = CITY_LIST.filter(([, c]) => fold(c.name) === q).sort(byPop);
   if (exact.length) return exact[0];
   // A code only when written as one (upper case): "LIS" is Lisbon, "Goa" is the city in India.
@@ -838,6 +842,7 @@ const withoutClientFields = ({ output }: { output: unknown }): { type: "json"; v
 /** What the model writes for one search: plain words and days, turned into a SearchQuery by the tool. */
 type SearchIn = {
   to?: string;
+  mustInclude?: string[];
   origin?: string;
   out?: string;
   back?: string;
@@ -1706,8 +1711,9 @@ export function atlasTools(ctx: AgentContext) {
       inputSchema: jsonSchema<SearchIn>({
         type: "object",
         properties: {
-          to: { type: "string", description: "'anywhere' (default), a city or town (Lisbon, Torun), a country (Portugal), or a region (Southeast Asia, Balkans, East Asia, South America)" },
+          to: { type: "string", description: "'anywhere' (default), a city or town (Lisbon, Torun), a country (Portugal), a few countries together ('Peru and Bolivia', 'Georgia, Armenia'), or a region (Southeast Asia, Balkans, East Asia, Central Asia, Caucasus, South America)" },
           origin: { type: "string", description: "a city to leave from when it is not where the traveller is ('from Cluj'); default their own airports" },
+          mustInclude: { type: "array", items: { type: "string" }, maxItems: 3, description: "places every trip must stay in, by name: cities, towns or landmarks ('Samarkand', 'Machu Picchu', 'Lake Titicaca', 'Uyuni salt flats'); with to the country, countries or region around them" },
           out: { type: "string", description: "exact day out, YYYY-MM-DD (or words such as '14 Nov')" },
           back: { type: "string", description: "exact day back, YYYY-MM-DD; leave out for one way or when only the nights are known" },
           windowFrom: { type: "string", description: "a flexible window's first day ('between 22 Oct and 30 Nov' is 2026-10-22)" },
@@ -1777,7 +1783,11 @@ export function atlasTools(ctx: AgentContext) {
             // since the gazetteer has villages called Asia and the like.
             const continent = region ? undefined : regionCountries(toRaw) ? toRaw.trim().toLowerCase() : undefined;
             const cc = countryCode(toRaw);
-            if (region) to = { kind: "region", key: region };
+            // A few countries together ("Peru and Bolivia", "Georgia, Armenia, Azerbaijan"): one search over all of them.
+            const parts = toRaw.split(/\s*(?:,|&|\+|\/|\band\b|\bor\b)\s*/i).map((x) => x.trim()).filter(Boolean);
+            const several = !region && !cc && parts.length >= 2 && parts.length <= 12 ? parts.map((x) => countryCode(x)) : [];
+            if (several.length && several.every(Boolean)) to = { kind: "region", key: `countries:${[...new Set(several as string[])].join(",").toLowerCase()}` };
+            else if (region) to = { kind: "region", key: region };
             else if (continent) to = { kind: "region", key: continent };
             else if (NOT_A_SEARCH_REGION.test(fold(toRaw).trim())) {
               yield { ...plain(`"${toRaw.slice(0, 40)}" is not a region the search takes; search Europe (or another of: europe, asia, africa, ${Object.keys(REGIONS).filter((k) => k !== "custom").join(", ")}), or one country at a time (for Scandinavia: Norway, Sweden or Denmark)`, "data"), count: 0, results: [] };
@@ -1835,21 +1845,39 @@ export function atlasTools(ctx: AgentContext) {
           }
           if (a.oneWay) q.oneWay = true;
           if (a.shape && ["any", "return", "two", "loop", "long"].includes(a.shape)) q.shape = a.shape;
+          // Places the trip must stay in (Samarkand, Machu Picchu): each must be a place we know, said here, not deep in the search.
+          const mustIn = (Array.isArray(a.mustInclude) ? a.mustInclude : typeof a.mustInclude === "string" ? String(a.mustInclude).split(/\s*(?:,|\band\b)\s*/i) : []).map((x) => String(x ?? "").trim()).filter(Boolean);
+          if (mustIn.length) {
+            const unknown = mustIn.filter((x) => !findPlace(x));
+            if (unknown.length) {
+              yield { ...unknownPlace("place to include", unknown[0]), count: 0, results: [] };
+              return;
+            }
+            if (mustIn.length > 3) corrections.push(`only three places can be required; kept ${mustIn.slice(0, 3).join(", ")}`);
+            q.must = [...new Set(mustIn)].slice(0, 3);
+          }
           // The Advanced drawer: a wild loop, a long stay, a group.
           if (a.wild && typeof a.wild === "object" && String(a.wild.region ?? "").trim()) {
             const nights = Math.min(90, Math.max(5, Math.round(Number(a.wild.nights) || 14)));
             // A region key, or a country: then the loop is region custom and the country is the destination.
             const words = String(a.wild.region);
             const key = regionKeyOf(words);
-            const cc = key ? undefined : countryCode(words.split(",")[0].trim());
-            if (!key && !cc) {
+            // Several countries ("Peru and Bolivia"): a loop through just those, as to would take them.
+            const wildParts = words.split(/\s*(?:,|&|\+|\/|\band\b|\bor\b)\s*/i).map((x) => x.trim()).filter(Boolean);
+            const wildCodes = !key && wildParts.length >= 2 && wildParts.length <= 12 ? wildParts.map((x) => countryCode(x)) : [];
+            const cc = key || wildCodes.length ? undefined : countryCode(words.split(",")[0].trim());
+            if (wildCodes.length && wildCodes.every(Boolean)) {
+              q.to = { kind: "region", key: `countries:${[...new Set(wildCodes as string[])].join(",").toLowerCase()}` };
+              q.shape = "loop";
+              q.nights = [nights, nights];
+            } else if (!key && !cc) {
               yield { ...plain(`the region "${words.slice(0, 40)}" is not one of ${Object.keys(REGIONS).filter((k) => k !== "custom").join(", ")} and not a country; pick one`, "data"), count: 0, results: [] };
               return;
             }
             // The one search's wild loop takes a region key only; a country is a loop kept to that country.
             if (key) q.advanced = { ...q.advanced, wild: { region: key, nights } };
-            else {
-              q.to = { kind: "country", name: COUNTRIES[cc!]?.name ?? words, code: cc };
+            else if (cc) {
+              q.to = { kind: "country", name: COUNTRIES[cc]?.name ?? words, code: cc };
               q.shape = "loop";
               q.nights = [nights, nights];
             }
@@ -3768,7 +3796,7 @@ The rule that matters most: when something is unsaid, assume the sensible defaul
 The app is one search: one bar (from, to, when, nights), one list of trips ranked cheapest first, and an Advanced drawer (two cities, a loop, a wild loop through a far region, a long stay, a group). The search tool runs that same search, and its results show in the chat as the app's own trip cards with a "Show all in Search" button. So:
 - "Where can I go", "the cheapest", "cheapest 3 to 5 nights between 22 Oct and 30 Nov including the 26th", "from X to Y", "Lisbon in November", "a weekend somewhere warm", "a loop", "two cities", "3 cities in 6 days": build ONE query from the conversation and call search ONCE. to is anywhere (default), a city or town, a country or a region; the dates are out and back when exact, else windowFrom and windowTo with includeDay for a day that must be inside the trip ("including the 26th"), else month, else nothing (anytime, the cheapest dates); minNights and maxNights from what they said ("3 to 5 nights"); shape two or loop when they want more than one place; the filters only when said. Say the assumption you made in one line before the call.
 - Then refine that same query instead of starting again: "make it direct" is the same query with direct true; "cheaper" is a wider window or maxPrice; "what about November" is month; "two cities" or "a loop" is the shape; "not Germany" goes in exclude; "only places I have not been" is newCountries. Call search again only with the changed query, once.
-- "Add Torun", "through Warsaw and Gdansk" (cities the trip must pass through) is the one thing search does not take: that is walk_trips with mustInclude (and fixedOut when their way out is fixed).
+- Places the trip must include ("add Torun", "through Tashkent, Samarkand and Bukhara", "Machu Picchu, Lake Titicaca and the Uyuni salt flats"): search with mustInclude (three at the most; landmarks are fine, the search stays in the town beside them) and to the country, the countries ("Peru and Bolivia") or the region around them; with more than three, put the three the traveller cares most about in mustInclude and the region in to. walk_trips is only for a way out that is already fixed (fixedOut) or a chain of hops they write out leg by leg with the modes.
 - A far region for two weeks or more ("3 weeks in Southeast Asia", backpacking) is search with wild (region and nights); a month or more somewhere is search with longStayMonths; several people from different cities is search with group (each with their own city and free dates). wild_trip, long_stay and group_trip stay for the details search does not give: the rent of each base, a wild loop's day plans (plan_days), one person's options.
 - Describe the best two or three results in your words: the route line, the dates, the nights in each place, the total, the hours, and why the winner wins (price first, then direct or fewer hours). Then say "Show all in Search" lists the rest; never list ten. When a result's source is graph, the price is from last night's price graph; say so.
 - The specialised tools stay for what search does not cover: make_itinerary (the days), hotels_near and hotel_deals, events (what is on while there), sights, eats_near, price_insight, best_months, way_home, ground_reach, place_facts, web_search.
@@ -3780,7 +3808,7 @@ Defaults when the traveller does not say:
 - Never ask whether to include their other airports (Bucharest, Sibiu) or whether the flights must leave from one of them: every search already used all of them. Ask only about something that would change the search.
 - "A train between two cities", "overland between them": a train or a coach between two places of the trip both count (the search's results say which, and the trip shape two cities or a loop finds them); say which one each leg is, never call a coach a miss.
 - The traveller already has their way out (they found, chose or booked a flight: "I found Brasov to Warsaw on the 24th") and asks how, when or where to come back: keep that flight exactly as they gave it, never search or re-plan the way out, and call way_home from the city they want to fly back from (their preferred city first: "I would prefer Gdansk" is from Gdansk) with a window of about a week starting two or three nights after they land (from_date, to_date). Show the direct options first when there are any (bestDirect, and the days with a direct in the calendar), then the cheapest overall and the cheapest door to door; name the day, the times, the airline, the price and the link, and the ground leg home from the landing airport. For the hop between their landing city and the city they fly back from (Warsaw to Gdansk), use ground_reach from the landing city or cheapest_way between the two, and say a leg's trainHint when it has one. Only when they want several stops planned around their own flight use walk_trips, with fixedOut set to their flight.
-- A chain of hops the traveller writes out with the cities named, or a loop through cities they name ("Brasov to Warsaw by plane, Warsaw to Gdansk by train, then another city and back to Brasov or Bucharest"): walk_trips ONCE. It searches the way they do it by hand with Skyscanner Explore: one 'anywhere' search from where they are, the cheapest next hops by plane, train or coach from each stop, the cheapest way home to any of their airports. Never price such legs one by one with reprice_route or cheapest_way, and never call walk_trips twice in a turn unless its note asks for a change. Cities they name go in mustInclude (Warsaw, Gdansk), the first city they fly to too; a way home they name (Brasov, Sibiu, Otopeni) is their airports already. origin is only a start away from where they are ("loop from Cluj"); "fly to Warsaw then train to Gdansk" or "Brasov-Warsaw plane" while in Brasov has no origin. Places they dislike go in avoid: "not Germany" is DE, "countries like Germany" or "I don't like countries like Germany" is like:DE (a group word works too: dach, benelux, nordics, baltics, balkans, iberia). "Unique", "not touristy", "hidden gems", "smaller places" is style 'unique'. N days is N-1 to N nights (minNights, maxNights); "2 days a city" is nightsPerStop 2. With no dates, leave from and to out and say the assumed window from its corrected line. Then explain the best loop in their terms: its route line, the cheapest edge out of each stop and where a train or coach beat a flight, the nights per stop, the total and the hours, a booking link per flight; name the second loop in one line. To plan its days, call make_itinerary with the loop's stops (places with nights, in order) and its start day. reprice_route stays for one named leg the traveller asks to check.
+- A chain of hops the traveller writes out leg by leg with the modes ("Brasov to Warsaw by plane, Warsaw to Gdansk by train, then another city and back to Brasov or Bucharest"): walk_trips ONCE. A loop through places they only name ("Tashkent, Samarkand and Bukhara") is search with mustInclude, above. It searches the way they do it by hand with Skyscanner Explore: one 'anywhere' search from where they are, the cheapest next hops by plane, train or coach from each stop, the cheapest way home to any of their airports. Never price such legs one by one with reprice_route or cheapest_way, and never call walk_trips twice in a turn unless its note asks for a change. Cities they name go in mustInclude (Warsaw, Gdansk), the first city they fly to too; a way home they name (Brasov, Sibiu, Otopeni) is their airports already. origin is only a start away from where they are ("loop from Cluj"); "fly to Warsaw then train to Gdansk" or "Brasov-Warsaw plane" while in Brasov has no origin. Places they dislike go in avoid: "not Germany" is DE, "countries like Germany" or "I don't like countries like Germany" is like:DE (a group word works too: dach, benelux, nordics, baltics, balkans, iberia). "Unique", "not touristy", "hidden gems", "smaller places" is style 'unique'. N days is N-1 to N nights (minNights, maxNights); "2 days a city" is nightsPerStop 2. With no dates, leave from and to out and say the assumed window from its corrected line. Then explain the best loop in their terms: its route line, the cheapest edge out of each stop and where a train or coach beat a flight, the nights per stop, the total and the hours, a booking link per flight; name the second loop in one line. To plan its days, call make_itinerary with the loop's stops (places with nights, in order) and its start day. reprice_route stays for one named leg the traveller asks to check.
 - How to get from one place to another as a journey ("how do I get from Brasov to Vienna", by train or by plane, every way of travelling, a one-way transfer): cheapest_way; a trip there and back to compare dates and prices is search with to set. cheapest_way already checks nearby airports, trains to a bigger airport, hubs on two tickets and open-jaw, so never rebuild that by hand with reprice_route calls. Say what was considered (its considered list) in one line, name the cheapest and the fastest, and the tradeoff between them. When the traveller says "search harder", "look harder", "exhaust", "every option", call it again with harder: true (twice the searches). An option's kind "direct" means the nearest airports, not a nonstop flight: say nonstop only when its nonstop field is true. When placed says an end could not be placed, do not write "from X" or "to X" for it; say the place was not found and ask for the nearest city or airport.
 - What is on where they are going, events or experiences while they are in a city ("any events in Warsaw on those days", "what can we do there"): events_worth_travelling_for with city (the cities of their trip, at most 3) and the dates they are there; it reads the city's feed, the curated events and makes at most one web search per city itself, so do not add web_search for the same question. Name the dated items with their links and say the web ones need checking. Add sights for the standing things to do.
 - Something to fly to, festivals, carnivals, marathons, concerts, "worth flying for": events_worth_travelling_for without city, with the window they gave (default the next three months; a single month means that month), kinds only from festival, sport, culture, season, music, food (or a word of an event's name); a city name never goes in kinds. Say which events are within reach: the ones priced from their airports, cheapest first, with the dates and the fare; the unpriced ones in one line.

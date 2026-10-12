@@ -33,7 +33,9 @@ import { driveMinutes, haversineKm, nearestGateways } from "./geo";
 import { reachFrom } from "./ground";
 import { rememberedFare, type RememberedFare } from "./insights";
 import { kiwiDate, kiwiThrottled, searchFlight, THROTTLED_MESSAGE, type KiwiItinerary, type KiwiLeg } from "./kiwi";
+import { landmarkOf } from "./landmarks";
 import { InFlight, TtlLru } from "./memo";
+import { OVERLAND, overlandTown, overlandTownNamed } from "./overland";
 import type { Airport, City } from "./types";
 
 const CITIES = citiesJson as unknown as Record<string, City>;
@@ -231,6 +233,16 @@ export function resolvePlace(input: string): Place | null {
   if (byCode && s === s.toUpperCase()) return byCode;
   const k = fold(s);
   if (!k) return byCode;
+  // A landmark (Machu Picchu, the Uyuni salt flats, Bali): the city or town a traveller stays in to see it.
+  const lm = landmarkOf(s);
+  if (lm?.code && CITIES[lm.code]) return { label: CITIES[lm.code].name, lat: CITIES[lm.code].lat, lon: CITIES[lm.code].lon, country: CITIES[lm.code].country };
+  const lmTown = lm?.town ? overlandTownNamed(lm.town) : undefined;
+  if (lmTown) return { label: lmTown.name, lat: lmTown.lat, lon: lmTown.lon, country: lmTown.country };
+  // A base in the towns file (La Spezia for the Cinque Terre); its name is never a landmark, so this ends.
+  if (lm?.town) {
+    const base = resolvePlace(lm.town);
+    if (base) return base;
+  }
   const city = cityByName.get(k);
   if (city) {
     const c = CITIES[city];
@@ -242,6 +254,9 @@ export function resolvePlace(input: string): Place | null {
   let town: (typeof TOWNS)[number] | null = null;
   for (const t of TOWNS) if (fold(t[0]) === k && (!town || t[4] > town[4])) town = t;
   if (town) return { label: town[0], lat: town[1], lon: town[2], country: town[3] };
+  // A town only the overland links know (Ella, Kazbegi, Huacachina, Merzouga).
+  const ov = overlandTownNamed(s);
+  if (ov) return { label: ov.name, lat: ov.lat, lon: ov.lon, country: ov.country };
   return byCode;
 }
 
@@ -586,7 +601,7 @@ async function run(q: RouteQuery, resume: Stage | null, placedA: Place | null, p
     // reach the same airport (Madrid and Valencia both have VLC by train, and ten flights a day).
     if (dAB < GROUND_TRIP_KM) {
       considered.push(`${Math.round(dAB)} km apart: ground only, no flight searched`);
-      const g = groundOnly(A, B, oneWay) ?? roadOnly(A, B, oneWay);
+      const g = groundOnly(A, B, oneWay) ?? overlandOnly(A, B, oneWay) ?? roadOnly(A, B, oneWay);
       if (g) {
         emit(g);
         say(`By ground: ${g.title}, ${g.hours} h`);
@@ -744,6 +759,15 @@ async function run(q: RouteQuery, resume: Stage | null, placedA: Place | null, p
         considered.push(`ground graph: ${A.label} to ${B.label} in ${g.hours} h`);
         say(`By ground: ${g.title}, ${g.hours} h`);
       } else considered.push(`ground graph: no way within ${GROUND_ONLY_MIN / 60} h`);
+    }
+    // 4b. A sourced overland link (lib/overland.ts): the sleeper bus, train or ferry between the two, however long
+    // (Lima to Cusco is 22 h by coach), at its typical fare. Zero searches.
+    const ov = overlandOnly(A, B, oneWay);
+    if (ov) {
+      emit(ov);
+      sources.add("ground");
+      considered.push(`overland link: ${ov.title}, ${ov.hours} h, about ${ov.legs[0].price} euro`);
+      say(`Overland: ${ov.title}, ${ov.hours} h`);
     }
 
     hubs = await pickHubs(A, B, aAcc, exclude);
@@ -1010,6 +1034,40 @@ async function pickHubs(A: Place, B: Place, aAcc: Access[], exclude: string[]): 
     push(code);
   }
   return out.slice(0, MAX_HUBS);
+}
+
+/** Where an overland link's end is: a city of cities.json or an overland town. */
+function overlandPoint(code: string): { lat: number; lon: number; name: string } | null {
+  const c = CITIES[code];
+  if (c) return { lat: c.lat, lon: c.lon, name: c.name };
+  const t = overlandTown(code);
+  return t ? { lat: t.lat, lon: t.lon, name: t.name } : null;
+}
+
+/**
+ * A sourced overland link between the two (public/data/overland*.json: Lima to Cusco by coach, Cusco to Aguas
+ * Calientes by train), each end within 25 km of the place: the cheapest, at the middle of its fare range, marked
+ * estimated, with its operator and booking page. Null when no link joins them.
+ */
+function overlandOnly(A: Place, B: Place, oneWay: boolean): RouteOption | null {
+  let best: { link: (typeof OVERLAND)[number]; a: number; b: number } | null = null;
+  for (const link of OVERLAND) {
+    const pa = overlandPoint(link.from);
+    const pb = pa ? overlandPoint(link.to) : null;
+    if (!pa || !pb) continue;
+    const a = haversineKm(pa.lat, pa.lon, A.lat, A.lon);
+    if (a > 25) continue;
+    const b = haversineKm(pb.lat, pb.lon, B.lat, B.lon);
+    if (b > 25) continue;
+    if (!best || link.price < best.link.price) best = { link, a, b };
+  }
+  if (!best) return null;
+  const l = best.link;
+  const kind: RouteLeg["kind"] = l.mode === "train" ? "train" : l.mode === "ferry" ? "ferry" : "coach";
+  const leg: RouteLeg = { kind, from: A.label, fromName: A.label, to: B.label, toName: B.label, minutes: l.minutes, price: l.price, estimated: true, ...(l.operator ? { carrier: l.operator } : {}), ...(l.book ? { url: l.book } : {}), note: `typical fare ${l.low} to ${l.high} euro${l.overnight ? ", overnight" : ""}; ${l.note}`.slice(0, 300) };
+  const hours = r1(l.minutes / 60);
+  const back = oneWay ? undefined : [{ ...leg, from: B.label, fromName: B.label, to: A.label, toName: A.label, note: "the same way back, if it runs both ways; check the operator" }];
+  return finish({ kind: "ground-only", legs: [leg], back, backTotal: back ? l.price : undefined, total: l.price * (oneWay ? 1 : 2), hours, stops: 0, title: `${modeWord[kind]} from ${A.label} to ${B.label}`, why: `No flight needed: about ${hours} h by ${kind}${l.operator ? ` (${l.operator})` : ""}, ${l.low} to ${l.high} euro each way, a typical fare from the operators' and travellers' pages; check before you go` });
 }
 
 /**

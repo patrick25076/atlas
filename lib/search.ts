@@ -33,8 +33,9 @@ import airportsJson from "@/public/data/airports.json";
 import citiesJson from "@/public/data/cities.json";
 import countriesJson from "@/public/data/countries.json";
 import { countryAllowed } from "./been";
-import { countryLabel, resolveGateway } from "./board";
-import { cheapestTripsIn, everywhereIn, homeAirportsFor, loadFlightGraph, type FlightGraph, type TripsQuery } from "./flight-graph";
+import { airportCity, countryLabel, hubDegree, resolveGateway } from "./board";
+import { homeFares } from "./tp-map";
+import { cheapestTripsIn, everywhereIn, homeAirportsFor, loadFlightGraph, withExtraEdges, type FlightGraph, type RawEdge, type TripsQuery } from "./flight-graph";
 import { step } from "./run-log";
 import { SHARED_TTL_MS, sharedGet, sharedPut } from "./shared-cache";
 import { findDeals, isCityTarget, REGION_COUNTRIES, regionCountries } from "./finder";
@@ -67,6 +68,8 @@ import {
 } from "./trip-result";
 import type { Airport, City, CountryInfo, Deal } from "./types";
 import { findCityCode, REGIONS, resolveCountries, type Region } from "./wild";
+import { landmarkOf } from "./landmarks";
+import { overlandTownNamed } from "./overland";
 import { wildByWalk } from "./wild-walk";
 
 const CITIES = citiesJson as unknown as Record<string, City>;
@@ -95,6 +98,22 @@ const MEMO_TTL_MS = SHARED_TTL_MS;
 const DEFAULT_NIGHTS: [number, number] = [3, 7];
 /** The widest window the flight graph is asked about at once (its route refuses more: CPU on a serverless instance). */
 const GRAPH_WINDOW_DAYS = 35;
+/**
+ * Fewer price-map trips than this and the one brain fills the map live before it answers (densify below): the nightly
+ * map and the Aviasales cache are thin where few people fly from (San Francisco to Mexico, Santiago to Asuncion), and
+ * a person would simply ask: where can I fly from home in this window, and how do I get home from there.
+ */
+const DENSIFY_BELOW = 6;
+/**
+ * Its live questions at the most (half the search's budget, the rest is the live check's), and the cities they aim at.
+ * Kiwi answers a question with its 15 cheapest flights, so one question to eleven hubs is mostly the cheapest pair on
+ * fifteen days: densify asks all the hubs first, then one hub at a time for the ones that answer missed.
+ */
+const DENSIFY_MAX = 8;
+const DENSIFY_HUBS = 8;
+const DENSIFY_AIRPORTS = 14;
+/** Kiwi answers a window of this many days at the most in one question. */
+const DENSIFY_WINDOW_DAYS = 45;
 /** Places a graph trip may have at the most (the graph route's own cap). */
 const GRAPH_MAX_PLACES = 5;
 /** Euros an hour of travel is worth, per trade-off: nothing on price (hours only break ties), the graph's two rates otherwise. */
@@ -149,6 +168,9 @@ function cityFor(name: string, code: string | undefined, near: { lat: number; lo
     const c = CITY_OF_AIRPORT.get(code);
     if (c) return c;
   }
+  // A landmark (Bali, the Uyuni salt flats): its city; one whose base is a town (Machu Picchu) is a place, not a city.
+  const lm = landmarkOf(name);
+  if (lm) return lm.code && CITIES[lm.code] ? lm.code : null;
   const same = CITIES_BY_NAME.get(fold(name)) ?? [];
   if (same.length > 1) return [...same].sort((a, b) => haversineKm(near.lat, near.lon, CITIES[a].lat, CITIES[a].lon) - haversineKm(near.lat, near.lon, CITIES[b].lat, CITIES[b].lon))[0];
   return same[0] ?? findCityCode(name);
@@ -321,6 +343,8 @@ type Plan = {
     | { kind: "place"; name: string; city: string | null; country: string | null; lat?: number; lon?: number }
     | { kind: "country"; name: string; code: string }
     | { kind: "region"; key: string; label: string; countries: string[]; wild: boolean };
+  /** Places every trip must stay in (SearchQuery.must, resolved): a city by its code, a town or landmark by its point. */
+  must: { code?: string; lat: number; lon: number; name: string; country?: string; km?: number }[];
   notes: string[];
 };
 
@@ -392,7 +416,14 @@ function planOf(q: SearchQuery): Plan {
     if (!code) throw new SearchInputError(`${t.name} is not a country we know`);
     target = { kind: "country", name: countryName(code), code };
   } else if (t.kind === "region") {
-    if (Object.hasOwn(REGIONS, t.key) && t.key !== "custom") {
+    const several = /^countries:(.+)$/i.exec(t.key);
+    if (several) {
+      // A few countries together (Peru and Bolivia, Georgia and Armenia): a region of just those.
+      const codes = [...new Set(several[1].split(",").map((c) => c.trim().toUpperCase()))].filter((c) => /^[A-Z]{2}$/.test(c) && (COUNTRIES[c] || countryLabel(c) !== c));
+      if (codes.length < 2) throw new SearchInputError(`${t.key} needs two countries or more, as ISO codes (countries:pe,bo)`);
+      const names = codes.map(countryName);
+      target = { kind: "region", key: `countries:${codes.join(",").toLowerCase()}`, label: `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`, countries: codes, wild: false };
+    } else if (Object.hasOwn(REGIONS, t.key) && t.key !== "custom") {
       const r = REGIONS[t.key as Region];
       target = { kind: "region", key: t.key, label: r.label, countries: r.countries.map(([cc]) => cc), wild: true };
     } else {
@@ -423,6 +454,18 @@ function planOf(q: SearchQuery): Plan {
     target = { kind: "region", key, label: r.label, countries: r.countries.map(([cc]) => cc), wild: true };
     notes.push(`To was Anywhere, so the long stay looked at ${r.label}, the cheap region to live in nearest you; pick a region or a country in To for another`);
   }
+  // Places every trip must stay in: a city (or a landmark's city, Bali), else a town or a landmark's town by its point.
+  const must: Plan["must"] = [];
+  for (const name of q.must ?? []) {
+    const city = cityFor(name, undefined, q.from);
+    if (city) {
+      must.push({ code: city, lat: CITIES[city].lat, lon: CITIES[city].lon, name: CITIES[city].name, country: CITIES[city].country });
+      continue;
+    }
+    const pl = resolvePlace(name);
+    if (!pl || pl.unknown) throw new SearchInputError(`${name} is not a place we know; name a town or a city to include`);
+    must.push({ lat: pl.lat, lon: pl.lon, name: pl.label, ...(pl.country ? { country: pl.country } : {}), km: mustKm(pl.label) });
+  }
   const exclude = (q.exclude ?? []).map((c) => c.toUpperCase());
   const avoidCodes = [...new Set(prefs.avoid.flatMap((a) => AVOID_GROUPS[a]?.codes ?? countryGroup(a)?.codes ?? [a]))].filter((c) => /^[A-Z]{2}$/.test(c));
   const groundMax = prefs.groundOk ? 330 : 0;
@@ -448,6 +491,7 @@ function planOf(q: SearchQuery): Plan {
     groundMax,
     rate: HOUR_EURO[prefs.tradeoff] ?? 0,
     target,
+    must,
     notes,
   };
 }
@@ -490,13 +534,40 @@ function allowedCountries(p: Plan): string[] | null {
   return null;
 }
 
+/** The traveller named a place in their own country (Cusco from Lima, a must there): stops at home are then fine. */
+function homeNamed(p: Plan): boolean {
+  const t = p.target;
+  return (t.kind === "place" && t.country === p.home) || (t.kind === "country" && t.code === p.home) || p.must.some((m) => m.country === p.home);
+}
+
+/**
+ * How near a stop must be to count as a town: 20 km for a town the stops reach (an overland town, a landmark's: Machu
+ * Picchu is Aguas Calientes, not Ollantaytambo 30 km off), 60 km for one they never reach (Hallstatt is a stay in Salzburg).
+ */
+function mustKm(name: string): number {
+  return landmarkOf(name) || overlandTownNamed(name) ? 20 : 60;
+}
+
+/** Every must place has a stop: the city itself, or any stop within its radius of the town or landmark (as the graph counts it). */
+function fitsMust(p: Plan, r: TripResult): boolean {
+  return p.must.every((m) => r.stops.some((s) => (!!m.code && s.code === m.code) || (!(s.lat === 0 && s.lon === 0) && haversineKm(s.lat, s.lon, m.lat, m.lon) <= (m.km ?? 20))));
+}
+
+/** The musts the graph aims at: the query's own, and a place target (Machu Picchu is a stay near Aguas Calientes). */
+function graphMusts(p: Plan): Plan["must"] {
+  const t = p.target;
+  const out = [...p.must];
+  if (t.kind === "place" && t.lat != null && t.lon != null && !out.some((m) => (t.city && m.code === t.city) || haversineKm(m.lat, m.lon, t.lat!, t.lon!) <= 20)) out.push({ ...(t.city ? { code: t.city } : { km: mustKm(t.name) }), lat: t.lat, lon: t.lon, name: t.name });
+  return out;
+}
+
 /** True when a result goes where the query asked and never sleeps where it must not. */
 function fitsTarget(p: Plan, r: TripResult): boolean {
   const t = p.target;
   // Been: never a night in a country already seen (a group's meeting city is the group's own choice).
   if (r.kind !== "group" && r.stops.some((s) => s.country && !countryAllowed(s.country, p.exclude))) return false;
   // A getaway leaves the home country, unless the traveller named a place or the country itself.
-  const named = (t.kind === "place" && t.country === p.home) || (t.kind === "country" && t.code === p.home);
+  const named = homeNamed(p);
   if (!named && r.kind !== "group" && r.stops.some((s) => s.country === p.home)) return false;
   if (t.kind === "anywhere") return true;
   if (t.kind === "place") {
@@ -599,7 +670,7 @@ export async function runSearch(q: SearchQuery, emit: (line: SearchLine) => void
 function memoKey(q: SearchQuery): string {
   const { filters: _f, prefs, ...rest } = q;
   void _f;
-  return JSON.stringify({ v: 1, ...rest, prefs: cleanPrefs(prefs ?? {}) });
+  return JSON.stringify({ v: 3, ...rest, prefs: cleanPrefs(prefs ?? {}) });
 }
 
 async function execute(p: Plan, emit: (line: SearchLine) => void, nobodyLeft: () => boolean): Promise<Answer> {
@@ -614,6 +685,9 @@ async function execute(p: Plan, emit: (line: SearchLine) => void, nobodyLeft: ()
   let abandoned = false;
   const startCount = kiwiStats().today;
   const spent = () => Math.max(0, kiwiStats().today - startCount);
+  // What densify spent and the fares it saw ("from>to>day"), so the live check neither re-asks nor double-counts them.
+  let densifySpent = 0;
+  const liveNow = new Map<string, RawEdge>();
   step("plan", `Plan: ${p.target.kind === "anywhere" ? "anywhere" : p.target.kind}, ${p.out ? `${p.out} to ${p.back ?? "one way"}` : `${p.from} to ${p.to}`}${p.include ? ` including ${p.include}` : ""}, ${p.nights[0]} to ${p.nights[1]} nights, ${p.npp[0]} to ${p.npp[1]} a place, shape ${p.shape}, budget ${p.budget} live searches`, {
     data: { target: p.target, from: p.from, to: p.to, out: p.out, back: p.back, include: p.include, nights: p.nights, nightsPerPlace: p.npp, shape: p.shape, oneWay: p.oneWay, budget: p.budget, hourEuro: p.rate, airports: p.airports, exclude: p.exclude, notes: p.notes },
   });
@@ -623,7 +697,7 @@ async function execute(p: Plan, emit: (line: SearchLine) => void, nobodyLeft: ()
     const fresh: TripResult[] = [];
     for (const raw of list) {
       const r = badgeEvents(placeTrip(withDoorLegs(raw, p), p.q.from));
-      if (!r.out || !fitsTarget(p, r) || !fitsShape(p.shape, r)) continue;
+      if (!r.out || !fitsTarget(p, r) || !fitsShape(p.shape, r) || !fitsMust(p, r)) continue;
       // A one-way over a window leaves within it (the graph is asked a few days either side of each week).
       if (p.oneWay && !p.out && (r.out < p.from || r.out > p.to)) continue;
       if (r.legs.some((l) => l.kind === "fly" && p.prefs.maxFlightHours && (l.minutes ?? 0) > p.prefs.maxFlightHours * 60)) continue;
@@ -656,14 +730,45 @@ async function execute(p: Plan, emit: (line: SearchLine) => void, nobodyLeft: ()
   if (!p.q.advanced?.group && !p.q.advanced?.longStay) {
     say("Reading last night's flight graph");
     try {
-      const g = await loadFlightGraph();
+      const g0 = await loadFlightGraph();
+      // The traveller's own home cities: their ways out and back from Travelpayouts' cache, for the months of the
+      // window (the nightly map knows a city's 80 cheapest places a month, which leaves a far home with no way back).
+      const th = Date.now();
+      const homes = [...new Set(p.airports.map((a) => airportCity(a)))];
+      const months: string[] = [];
+      for (let m = p.from.slice(0, 7); m <= p.to.slice(0, 7) && months.length < 3; m = addDays(`${m}-28`, 7).slice(0, 7)) months.push(`${m}-01`);
+      const extra = await homeFares(homes, months).catch(() => ({ edges: [], month: [] }));
+      const g = withExtraEdges(g0, extra, `home:${homes.join(",")}:${months.join(",")}`);
+      if (extra.edges.length) step("home", `Home fares: ${extra.edges.length} cached fares out of and into ${homes.join(", ")} for ${months.map((m) => m.slice(0, 7)).join(", ")} added to the map (${g.edges.length - g0.edges.length} new)`, { ms: Date.now() - th });
       if (!g.edges.length) notes.push("the flight graph is still filling tonight; live engines answered instead");
       else {
         // Added quietly, so the {graph: true} line goes out before the graph's results.
         const tg = Date.now();
-        const fresh = add(graphTrips(g, p, notes), true);
+        const n0 = notes.length;
+        let fresh = add(graphTrips(g, p, notes), true);
+        step("graph", `Price graph (Dijkstra on euros over ${g.edges.length.toLocaleString("en-GB")} flights): ${fresh.length} trips`, { ms: Date.now() - tg, data: { trips: rank(fresh, p.rate).slice(0, 8).map(tripLine) } });
+        // Thin: ask Kiwi live for the ways there, back and around, add them to the map and search it again.
+        if (fresh.length < DENSIFY_BELOW && oneBrainOn(p) && p.budget >= 2 && !kiwiThrottled() && !nobodyLeft()) {
+          const td = Date.now();
+          const before = spent();
+          say(fresh.length ? `Only ${fresh.length} trip${fresh.length === 1 ? "" : "s"} on the map; asking live where the flights go` : "Nothing on the map yet; asking live where the flights go");
+          const d = await densify(p, Math.min(DENSIFY_MAX, Math.max(2, Math.floor(p.budget / 2))), notes);
+          densifySpent = spent() - before;
+          let more: TripResult[] = [];
+          if (d.edges.length) {
+            for (const e of d.edges) liveNow.set(`${e.f}>${e.t}>${e.d}`, e);
+            const g2 = withExtraEdges(g, { edges: d.edges, month: d.edges.map(() => false) }, `live:${d.asked.join(";")}`, "memory");
+            more = add(graphTrips(g2, p, notes), true);
+            fresh = [...new Map([...fresh, ...more].map((t) => [t.id, t])).values()];
+          }
+          step("densify", `Filled the map live: ${d.asked.length} question${d.asked.length === 1 ? "" : "s"}, ${d.edges.length} fares; ${more.length} more trip${more.length === 1 ? "" : "s"}`, {
+            ms: Date.now() - td,
+            data: { asked: d.asked, failed: d.failed, fares: d.edges.length, spentAbout: densifySpent, trips: rank(more, p.rate).slice(0, 8).map(tripLine) },
+          });
+        }
+        // A run that found no closed trip says so; with trips found by another run (or the filled map) it is not news.
+        if (fresh.length) for (let i = notes.length - 1; i >= n0; i--) if (/no closed trip in the graph/.test(notes[i])) notes.splice(i, 1);
         graphCount = fresh.length;
-        step("graph", `Price graph (Dijkstra on euros over ${g.edges.length.toLocaleString("en-GB")} flights): ${graphCount} trips`, { ms: Date.now() - tg, data: { trips: rank(fresh, p.rate).slice(0, 8).map(tripLine) } });
         if (graphCount > 0) {
           graphAnswered = true;
           engines.push("graph");
@@ -684,14 +789,15 @@ async function execute(p: Plan, emit: (line: SearchLine) => void, nobodyLeft: ()
   // estimate (an Aviasales fare, a nightly price) and the trip is ranked again; a flight not found that day is said so.
   // Every price a live search sees lands in the fare memory, so the next search's map knows it.
   let verifySpent = 0;
-  if (graphAnswered && p.budget > 0 && !kiwiThrottled() && !nobodyLeft()) {
+  if (graphAnswered && p.budget - densifySpent > 0 && !kiwiThrottled() && !nobodyLeft()) {
     const tv = Date.now();
     const before = spent();
     // Every trip the price map made: its cheapest trips, and its one-way and exact-date answers.
     const cands = rank([...pool.values()].filter((t) => t.engine === "graph" || t.engine === "everywhere"), p.rate).slice(0, VERIFY_TRIPS);
     const hops = new Map<string, { from: string; to: string; date: string }>();
-    for (const t of cands) for (const l of t.legs) if (l.kind === "fly" && l.date && /^[A-Z]{3}$/.test(l.from) && /^[A-Z]{3}$/.test(l.to)) hops.set(`${l.from}>${l.to}>${l.date}`, { from: l.from, to: l.to, date: l.date });
-    const list = [...hops.entries()].slice(0, Math.min(VERIFY_MAX_SEARCHES, p.budget));
+    // A flight the map was just filled with live (densify) is not asked again.
+    for (const t of cands) for (const l of t.legs) if (l.kind === "fly" && l.date && /^[A-Z]{3}$/.test(l.from) && /^[A-Z]{3}$/.test(l.to) && liveNow.get(`${l.from}>${l.to}>${l.date}`)?.p !== l.price) hops.set(`${l.from}>${l.to}>${l.date}`, { from: l.from, to: l.to, date: l.date });
+    const list = [...hops.entries()].slice(0, Math.min(VERIFY_MAX_SEARCHES, p.budget - densifySpent));
     if (list.length) say(`Checking the best ${cands.length} trips live: ${list.length} flight${list.length === 1 ? "" : "s"}`);
     const live = new Map<string, KiwiItinerary | null>();
     await Promise.all(
@@ -717,6 +823,10 @@ async function execute(p: Plan, emit: (line: SearchLine) => void, nobodyLeft: ()
         if (l.kind !== "fly" || !l.date) return l;
         flights++;
         const k = `${l.from}>${l.to}>${l.date}`;
+        if (liveNow.get(k)?.p === l.price) {
+          checked++;
+          return { ...l, estimated: false, note: "checked live just now" };
+        }
         if (!live.has(k)) return l;
         const it = live.get(k);
         if (!it) {
@@ -765,7 +875,7 @@ async function execute(p: Plan, emit: (line: SearchLine) => void, nobodyLeft: ()
   // One brain (docs/plans/one-brain.md, step 3): the price map's search and its live check answer alone; only long
   // stays and groups (not trips the map can make) keep their engines, and when the map found nothing the classic
   // engines still run, so nobody is left with an empty list.
-  const oneBrain = p.q.engine === "one" || (p.q.engine !== "classic" && process.env.ATLAS_ONE_BRAIN?.trim() === "1");
+  const oneBrain = oneBrainOn(p);
   const allTasks = abandoned ? [] : liveTasks(p, { graphCount, graphCountries });
   const tasks = oneBrain && graphAnswered ? allTasks.filter((t) => t.engine === "longstay" || t.engine === "group") : allTasks;
   if (oneBrain) step("brain", graphAnswered ? `One brain: the price map and its live check answered; ${allTasks.length - tasks.length} other engine${allTasks.length - tasks.length === 1 ? "" : "s"} not run` : "One brain: the price map found nothing, so the classic engines run");
@@ -880,7 +990,8 @@ function graphTrips(g: FlightGraph, p: Plan, notes: string[]): TripResult[] {
   }
   if (daysBetween(from, to) < minN) return out;
   const npp = p.npp;
-  const fill = Math.max(1, Math.ceil(maxN / npp[0]));
+  const musts = graphMusts(p);
+  const fill = Math.max(1, Math.ceil(maxN / npp[0]), musts.length);
   const places = (n: number) => Math.max(1, Math.min(wild ? 8 : GRAPH_MAX_PLACES, n));
   // Each run asks for its own number of places, so cheap returns never fill the slots of a
   // two-city or loop answer: [fewest, most].
@@ -896,7 +1007,9 @@ function graphTrips(g: FlightGraph, p: Plan, notes: string[]): TripResult[] {
     // A place takes npp nights; one place alone may take the whole trip (a return of five nights).
     const nightsPerPlace: [number, number] = maxPlaces === 1 ? [minN, maxN] : [npp[0], Math.max(npp[1], Math.ceil(minN / maxPlaces))];
     if (maxPlaces * nightsPerPlace[1] < minN) continue;
-    const q: TripsQuery = { origin, homeCountry: p.home, from, to, minNights: minN, maxNights: maxN, nightsPerPlace, maxPlaces, minPlaces: Math.min(minPlaces, maxPlaces), top: GRAPH_TOP, tradeoff: p.prefs.tradeoff, exclude: p.exclude, avoid, groundMaxMin: p.groundMax };
+    // More musts than places: this run cannot hold them (a return to one place with two cities to see).
+    if (musts.length > maxPlaces && !musts.every((m, i) => i === 0 || haversineKm(m.lat, m.lon, musts[0].lat, musts[0].lon) <= 20)) continue;
+    const q: TripsQuery = { origin, homeCountry: p.home, from, to, minNights: minN, maxNights: maxN, nightsPerPlace, maxPlaces, minPlaces: Math.min(minPlaces, maxPlaces), top: GRAPH_TOP, tradeoff: p.prefs.tradeoff, exclude: p.exclude, avoid, groundMaxMin: p.groundMax, ...(musts.length ? { must: musts } : {}), ...(homeNamed(p) ? { allowHome: true } : {}) };
     const r = cheapestTripsIn(g, q);
     if (r.note) notes.push(`graph: ${r.note}`);
     for (const t of r.trips) {
@@ -907,6 +1020,172 @@ function graphTrips(g: FlightGraph, p: Plan, notes: string[]): TripResult[] {
     }
   }
   return out;
+}
+
+/** The one brain answers this search (docs/plans/one-brain.md): asked for, or the default where ATLAS_ONE_BRAIN=1. */
+function oneBrainOn(p: Plan): boolean {
+  return p.q.engine === "one" || (p.q.engine !== "classic" && process.env.ATLAS_ONE_BRAIN?.trim() === "1");
+}
+
+/**
+ * The cities a live question aims at for this target, biggest first: the place's own airports; for a country or a
+ * region the biggest city of each country first, then the next ones (a comma list of airports, which Kiwi takes; a
+ * list of country names it does not). Null for anywhere.
+ */
+function targetHubs(p: Plan): { names: string[]; airports: string[]; cities: { name: string; airports: string[]; must?: true }[] } | null {
+  const t = p.target;
+  const own = (k: string) => (CITIES[k].airports.length ? CITIES[k].airports : [k]);
+  // The must places come first: a city's own airports, or the biggest airport city within 250 km of a town.
+  const mustCities: string[] = [];
+  for (const m of p.must) {
+    const k =
+      m.code && CITIES[m.code]?.airports.length
+        ? m.code
+        : Object.keys(CITIES)
+            .filter((c) => CITIES[c].airports.length && hubDegree(c) >= 3 && haversineKm(CITIES[c].lat, CITIES[c].lon, m.lat, m.lon) <= 250)
+            .sort((a, b) => hubDegree(b) - hubDegree(a))[0];
+    if (k && !mustCities.includes(k)) mustCities.push(k);
+  }
+  const hub = (k: string) => ({ name: CITIES[k].name, airports: own(k).slice(0, 4), ...(mustCities.includes(k) ? { must: true as const } : {}) });
+  if (t.kind === "anywhere") return mustCities.length ? { names: mustCities.map((k) => CITIES[k].name), airports: [...new Set(mustCities.flatMap(own))].slice(0, DENSIFY_AIRPORTS), cities: mustCities.map(hub) } : null;
+  if (t.kind === "place") {
+    let k = t.city && CITIES[t.city]?.airports.length ? t.city : null;
+    if (!k && t.lat != null && t.lon != null) {
+      const near = Object.keys(CITIES)
+        .filter((c) => CITIES[c].airports.length && hubDegree(c) >= 3 && haversineKm(CITIES[c].lat, CITIES[c].lon, t.lat!, t.lon!) <= 250)
+        .sort((a, b) => hubDegree(b) - hubDegree(a));
+      k = near[0] ?? null;
+    }
+    const all = [...new Set([...(k ? [k] : []), ...mustCities])];
+    return all.length ? { names: all.map((c) => CITIES[c].name), airports: [...new Set(all.flatMap(own))].slice(0, DENSIFY_AIRPORTS), cities: all.map(hub) } : null;
+  }
+  const allowed = new Set(t.kind === "country" ? [t.code] : t.countries);
+  const ranked = Object.keys(CITIES)
+    .filter((k) => allowed.has(CITIES[k].country) && CITIES[k].airports.length && hubDegree(k) >= 3 && countryAllowed(CITIES[k].country, p.exclude))
+    .sort((a, b) => hubDegree(b) - hubDegree(a));
+  const picked: string[] = [...mustCities];
+  const countries = new Set<string>(mustCities.map((k) => CITIES[k].country));
+  for (const k of ranked) {
+    if (picked.length >= DENSIFY_HUBS) break;
+    if (countries.has(CITIES[k].country)) continue;
+    countries.add(CITIES[k].country);
+    picked.push(k);
+  }
+  for (const k of ranked) if (picked.length < DENSIFY_HUBS && !picked.includes(k)) picked.push(k);
+  if (!picked.length) return null;
+  // A region: nearest first, the one-hub questions go to the countries a traveller from here would most likely fly to.
+  // A country: biggest first (Cusco and Arequipa before the jungle towns that happen to lie nearer).
+  const o = p.origin;
+  const near = t.kind === "country" || mustCities.length ? picked : [...picked].sort((a, b) => haversineKm(o.lat, o.lon, CITIES[a].lat, CITIES[a].lon) - haversineKm(o.lat, o.lon, CITIES[b].lat, CITIES[b].lon));
+  return { names: picked.map((k) => CITIES[k].name), airports: [...new Set(picked.flatMap(own))].slice(0, DENSIFY_AIRPORTS), cities: near.map(hub) };
+}
+
+/** Kiwi's one-way itineraries as map edges, the cheapest of each flight and day (as the nightly import stores them). */
+function rawEdgesOf(its: KiwiItinerary[]): RawEdge[] {
+  const w = new Date().toISOString();
+  const seen = new Set<string>();
+  const out: RawEdge[] = [];
+  for (const it of [...its].sort((a, b) => a.price - b.price)) {
+    const o = it.outbound;
+    if (!o || it.inbound || !Number.isFinite(it.price) || it.price <= 0) continue;
+    const d = o.departureTime.slice(0, 10);
+    const k = `${o.from}|${o.to}|${d}`;
+    if (seen.has(k)) continue;
+    seen.add(k);
+    out.push({
+      f: o.from,
+      t: o.to,
+      d,
+      h: o.departureTime.slice(11, 16),
+      a: o.arrivalTime.slice(0, 10),
+      p: Math.round(it.price),
+      m: Math.round(o.durationSeconds / 60),
+      s: o.stops,
+      c: [...new Set(o.segments.map((x) => x.carrierName || x.carrier))].join(", "),
+      u: it.bookingUrl,
+      w,
+    });
+  }
+  return out;
+}
+
+/**
+ * Fill a thin map live, the way a person would ask: the flights from home to the target's cities in the window and
+ * the flights from there home at its end, all the cities at once first; then, one city at a time, the cities that
+ * first answer did not reach (Kiwi answers 15 flights a question, mostly the cheapest pair); then (a country or a
+ * region, a trip of more than one place) the flights between its cities. To anywhere, the way home is asked from the
+ * places the first answer reached. At most `max` questions.
+ */
+async function densify(p: Plan, max: number, notes: string[]): Promise<{ edges: RawEdge[]; asked: string[]; failed: string[] }> {
+  const asked: string[] = [];
+  const failed: string[] = [];
+  const edges: RawEdge[] = [];
+  const homes = p.airports.join(",");
+  const today = todayIso();
+  const minN = Math.max(1, p.nights[0]);
+  const span = (a: string, b: string): [string, string] | null => {
+    let from = maxDay(a, today);
+    const to = minDay(b, addDays(from, DENSIFY_WINDOW_DAYS));
+    if (to < from) return null;
+    if (daysBetween(from, to) > DENSIFY_WINDOW_DAYS) from = addDays(to, -DENSIFY_WINDOW_DAYS);
+    return [from, to];
+  };
+  // The window the price map searches (graphTrips looks at its first GRAPH_WINDOW_DAYS): fares past it would not be used.
+  const end = minDay(p.to, addDays(maxDay(p.from, today), GRAPH_WINDOW_DAYS));
+  const outSpan = p.out ? span(addDays(p.out, -1), addDays(p.out, 1)) : span(p.from, p.oneWay ? end : addDays(end, -minN));
+  const backSpan = p.oneWay ? null : p.back ? span(addDays(p.back, -1), addDays(p.back, 1)) : span(addDays(p.from, minN), end);
+  let left = max;
+  const ask = async (label: string, flyFrom: string, flyTo: string, w: [string, string]): Promise<RawEdge[]> => {
+    left--;
+    const i = asked.push(`${label}: ${flyFrom} to ${flyTo} ${w[0]}..${w[1]}`) - 1;
+    try {
+      const r = await searchFlight({ flyFrom, flyTo, departureDate: kiwiDate(w[0]), departureDateTo: kiwiDate(w[1]) });
+      const got = rawEdgesOf(r.itineraries.filter((it) => it.outbound.from !== it.outbound.to));
+      asked[i] += ` (${got.length})`;
+      edges.push(...got);
+      return got;
+    } catch (err) {
+      failed.push(`${label}: ${err instanceof Error ? err.message.slice(0, 80) : "failed"}`);
+      return [];
+    }
+  };
+  const hubs = targetHubs(p);
+  if (hubs) {
+    const all = hubs.airports.join(",");
+    // Round 1: every city at once, out and home.
+    const round1: Promise<RawEdge[]>[] = [];
+    if (outSpan && left > 0) round1.push(ask("out", homes, all, outSpan));
+    if (backSpan && left > 0) round1.push(ask("home", all, homes, backSpan));
+    await Promise.all(round1);
+    // Round 2: the must cities, out and home each, always (the dates have to line up with the hop between them); then
+    // the cities round 1 did not reach, nearest first.
+    const reachedOut = new Set(edges.filter((e) => p.airports.includes(e.f)).map((e) => airportCity(e.t)));
+    const reachedHome = new Set(edges.filter((e) => p.airports.includes(e.t)).map((e) => airportCity(e.f)));
+    const round2: Promise<RawEdge[]>[] = [];
+    const reserve = p.target.kind !== "place" && p.shape !== "return" && hubs.airports.length > 1 ? 1 : 0;
+    for (const c of [...hubs.cities.filter((x) => x.must), ...hubs.cities.filter((x) => !x.must)]) {
+      const code = airportCity(c.airports[0]);
+      if (outSpan && (c.must || !reachedOut.has(code)) && left > reserve) round2.push(ask(`out ${c.name}`, homes, c.airports.join(","), outSpan));
+      if (backSpan && (c.must || !reachedHome.has(code)) && left > reserve) round2.push(ask(`home ${c.name}`, c.airports.join(","), homes, backSpan));
+    }
+    await Promise.all(round2);
+    // Round 3: between the cities, for a trip of more than one place (between the must cities when there are two).
+    const inner = span(p.from, end);
+    const mustAirports = [...new Set(hubs.cities.filter((x) => x.must).flatMap((x) => x.airports))].join(",");
+    const around = hubs.cities.filter((x) => x.must).length >= 2 ? mustAirports : all;
+    if (reserve && inner && left > 0) await ask("around", around, around, inner);
+  } else if (outSpan && left > 0) {
+    // Anywhere: where the flights from home go, then home from the places that answer reached.
+    const out = await ask("out", homes, "anywhere", outSpan);
+    const reached = [...new Set(out.map((e) => e.t))].filter((a) => !p.airports.includes(a));
+    if (backSpan && reached.length && left > 0) await ask("home", reached.slice(0, DENSIFY_AIRPORTS).join(","), homes, backSpan);
+    // Then home from each of the cheapest places one at a time, so each has dates to choose from.
+    const jobs: Promise<RawEdge[]>[] = [];
+    for (const code of reached.slice(0, 3)) if (backSpan && left > 0) jobs.push(ask(`home ${code}`, code, homes, backSpan));
+    await Promise.all(jobs);
+  }
+  if (failed.length && !edges.length) notes.push(`the live fill of the price map failed (${failed[0]})`);
+  return { edges, asked, failed };
 }
 
 /** The nights of a wild trip when the query is one (Advanced: Wild, or a far region for 7 nights or more). */
