@@ -3,11 +3,15 @@ import { logSearch } from "@/lib/db";
 import { walkTrips, wantsUnique, type WalkEvent, type WalkResult } from "@/lib/graph-walk";
 import { InFlight, keepAlive, TtlLru } from "@/lib/memo";
 import { bad, iataList, intIn, iso2, isoDay, latLon, oneOf } from "@/lib/params";
-import { parseCities, parseCountries, parseNightsRange } from "@/lib/wild";
+import { parseCities, parseCountries, parseNightsRange, REGIONS } from "@/lib/wild";
 
 // GET /api/walk?g=GHV,SBZ,OTP&home=RO&lat=45.657&lon=25.601&label=Brasov&from=2026-10-20&to=2026-10-30
 //     &minNights=5&maxNights=6[&nightsPerStop=2|2-3][&maxStops=3][&beam=2][&budget=12][&ground=330]
-//     [&tradeoff=balanced][&exclude=HU][&mustInclude=Gdansk][&avoid=DE,Berlin][&prefer=PL][&countries=PL,CZ][&style=street+food]
+//     [&tradeoff=balanced][&exclude=HU][&mustInclude=Gdansk][&avoid=DE,Berlin][&prefer=PL][&countries=PL,CZ][&region=sea][&style=street+food]
+// maxStops defaults to ceil(maxNights / the fewest nights a stop), at most 16; budget defaults to about two searches a
+// stop plus the way in and home (never under 12, at most 40). ground=0 turns trains and coaches off. region (a
+// lib/wild.ts REGIONS key) or countries make the walk targeted: the way in and every hop search the region's
+// biggest hubs instead of "anywhere", so a far region (Southeast Asia from Brasov) is reachable.
 // style=unique (or "hidden gems", "off the beaten path") weights hidden gems and smaller cities up and the 25 biggest
 // hubs down ("not unique" or "no hidden gems" does not); avoid also takes a group ("dach", "germanic", "nordics",
 // "benelux countries", "baltic states", "the balkans", "iberian peninsula", "british isles") or "like:DE",
@@ -18,8 +22,9 @@ import { parseCities, parseCountries, parseNightsRange } from "@/lib/wild";
 // expanded, {"edge":..} for every edge found (the fan-out the globe draws; the edge that led
 // to an expanded state comes again with chosen: true), {"loop":..} when a loop closes,
 // {"progress":".."} as it works, and {"done":{..WalkResult}} last. At most `budget` live
-// Kiwi searches (default 12, at most 30; 0 answers from the fare memory, the boards and the
-// ground graph alone). The engine stops issuing searches after 90 s, so the done line always
+// Kiwi searches (default about two a stop plus the way in and home, never under 12, at most 40;
+// 0 answers from the fare memory, the boards and the ground graph alone). nightsPerStop is exact:
+// "2-3" is 2 or 3 nights a stop and "2" is exactly 2; left out, 2 with a day of slack (2 or 3). The engine stops issuing searches after 90 s, so the done line always
 // arrives inside maxDuration. An answer is kept for an hour per normalised question and
 // served as one {"done"} line; two visitors asking the same thing share one walk (the second
 // gets the done line only). A partial walk (the breaker refused or tripped, the deadline or the
@@ -28,7 +33,7 @@ import { parseCities, parseCountries, parseNightsRange } from "@/lib/wild";
 export const maxDuration = 120;
 
 const MEMO_TTL_MS = 60 * 60_000;
-const MAX_BUDGET = 30;
+const MAX_BUDGET = 40;
 const MAX_DAYS_OUT = 366;
 const TRADEOFFS = ["price", "balanced", "comfort"] as const;
 /** What a label or a style may look like: letters in any script, digits, spaces and a little punctuation. */
@@ -62,15 +67,20 @@ export async function GET(request: Request) {
   const nightsPerStop = npsRaw ? parseNightsRange(npsRaw) : null;
   if (npsRaw && !nightsPerStop) return bad("nightsPerStop must be a number of nights (2) or a range (2-3)");
   if (nightsPerStop && (nightsPerStop[1] > 14 || nightsPerStop[0] > maxNights)) return bad("nightsPerStop must be at most 14 and fit in maxNights");
-  const maxStops = intIn(p.get("maxStops"), 1, 6, 3);
+  // Left out, stops and budget scale with the nights in the engine (see the header); given, they are clamped here.
+  const maxStops = p.get("maxStops") ? intIn(p.get("maxStops"), 1, 16, 3) : undefined;
   const beam = intIn(p.get("beam"), 1, 5, 3);
-  const budget = intIn(p.get("budget"), 0, MAX_BUDGET, 12);
-  const maxGroundMin = intIn(p.get("ground"), 30, 720, 330);
+  const budget = p.get("budget") ? intIn(p.get("budget"), 0, MAX_BUDGET, 12) : undefined;
+  // 0 is flights only; anything else is at least half an hour of ground.
+  const groundRaw = intIn(p.get("ground"), 0, 720, 330);
+  const maxGroundMin = groundRaw === 0 ? 0 : Math.max(30, groundRaw);
+  const region = (p.get("region") ?? "").trim().toLowerCase();
+  if (region && !Object.hasOwn(REGIONS, region)) return bad(`region must be one of ${Object.keys(REGIONS).join(", ")}`);
   const tradeoff = oneOf(p.get("tradeoff"), TRADEOFFS, "balanced");
   const exclude = parseExclude(p.get("exclude"));
   const must = parseCities(p.get("mustInclude"));
   if (must.unknown.length) return bad(`unknown city to pass through: ${must.unknown.join(", ")} (a city name such as Gdansk or a code such as GDN)`);
-  if (must.codes.length > maxStops) return bad(`${must.codes.length} cities to pass through do not fit in ${maxStops} stops`);
+  if (maxStops != null && must.codes.length > maxStops) return bad(`${must.codes.length} cities to pass through do not fit in ${maxStops} stops`);
   // avoid takes countries and cities mixed; the engine resolves each and answers a plain note for one it cannot read.
   const avoid = (p.get("avoid") ?? "").split(",").map((s) => s.trim()).filter(Boolean).slice(0, 20);
   const prefer = parseCountries(p.get("prefer"));
@@ -81,7 +91,7 @@ export async function GET(request: Request) {
   if (style && !TEXT.test(style)) return bad("style must be a few plain words");
 
   // The normalised question: what the engine will actually use, lists sorted, the point to three decimals, the label left out (it only names things).
-  const key = JSON.stringify({ g: gateways, home, lat: point.lat.toFixed(3), lon: point.lon.toFixed(3), from, to, minNights, maxNights, nps: nightsPerStop ?? [2, 2], maxStops, beam, budget, ground: maxGroundMin, tradeoff, exclude: [...exclude].sort(), must: must.codes, avoid: [...avoid].map((s) => s.toLowerCase()).sort(), prefer: [...prefer.codes].sort(), countries: [...countries.codes].sort(), style: style.toLowerCase() });
+  const key = JSON.stringify({ g: gateways, home, lat: point.lat.toFixed(3), lon: point.lon.toFixed(3), from, to, minNights, maxNights, nps: nightsPerStop ?? [2, 2], maxStops, beam, budget, ground: maxGroundMin, tradeoff, exclude: [...exclude].sort(), must: must.codes, avoid: [...avoid].map((s) => s.toLowerCase()).sort(), prefer: [...prefer.codes].sort(), countries: [...countries.codes].sort(), region, style: style.toLowerCase() });
 
   const encoder = new TextEncoder();
   const stream = new ReadableStream<Uint8Array>({
@@ -120,7 +130,7 @@ export async function GET(request: Request) {
         };
         // The signal is the first caller's: a second caller sharing the walk must not cut it short by leaving.
         const { promise, mine } = inflight.run(key, () =>
-          walkTrips({ origin: { lat: point.lat, lon: point.lon, label }, gateways, home, from, to, minNights, maxNights, nightsPerStop: nightsPerStop ?? undefined, maxStops, beam, budget, maxGroundMin, tradeoff, exclude, mustInclude: must.codes, avoid, prefer: prefer.codes, allowedCountries: countries.codes, style: style || undefined, signal: gone.signal, onEvent }),
+          walkTrips({ origin: { lat: point.lat, lon: point.lon, label }, gateways, home, from, to, minNights, maxNights, nightsPerStop: nightsPerStop ?? undefined, maxStops, beam, budget, maxGroundMin, tradeoff, exclude, mustInclude: must.codes, avoid, prefer: prefer.codes, allowedCountries: countries.codes, region: region || undefined, style: style || undefined, signal: gone.signal, onEvent }),
         );
         if (!mine) say({ progress: "The same walk is running for someone else; waiting for it." });
         const result = await promise;
@@ -128,7 +138,7 @@ export async function GET(request: Request) {
         // for an hour: the next ask gets a fresh try (and the fare memory keeps what this one did find).
         if (mine && !result.partial && !(result.failed > 0 && result.failed >= result.searched)) memo.set(key, result);
         // The usage log, never awaited and never personal: codes and numbers, no label or coordinates.
-        if (mine) void logSearch("walk", { g: gateways, home, from, to, minNights, maxNights, nps: nightsPerStop ?? [2, 2], maxStops, beam, budget, ground: maxGroundMin, tradeoff, excluded: exclude.length, must: must.codes.length, avoid: avoid.length, countries: countries.codes.length, unique: wantsUnique(style), searched: result.searched, failed: result.failed, fromMemory: result.fromMemory, expanded: result.expanded, loops: result.loops.length }, result.loops.length, Date.now() - t0).catch(() => null);
+        if (mine) void logSearch("walk", { g: gateways, home, from, to, minNights, maxNights, nps: nightsPerStop ?? [2, 2], maxStops, beam, budget, ground: maxGroundMin, tradeoff, excluded: exclude.length, must: must.codes.length, avoid: avoid.length, countries: countries.codes.length, region: region || undefined, unique: wantsUnique(style), searched: result.searched, failed: result.failed, fromMemory: result.fromMemory, expanded: result.expanded, loops: result.loops.length }, result.loops.length, Date.now() - t0).catch(() => null);
         say({ done: result });
       } catch (err) {
         say({ error: err instanceof Error ? err.message : "the walk failed" });

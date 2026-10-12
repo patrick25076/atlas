@@ -82,8 +82,20 @@ export const BANDS: { key: Band; label: string; test: (min: number) => boolean }
   { key: "long", label: "5h and more", test: (m) => m >= 300 },
 ];
 
+/**
+ * A deal's identity. Paired trips can share the way out (out to Krakow, then home from Krakow,
+ * or home from Katowice, or on to Vienna by air), so the way back, where it leaves from, the hop
+ * and the home airport are part of the key; the first three parts stay the old key.
+ */
 export function dealKey(d: Deal): string {
-  return `${d.gw}|${d.dst}|${d.out}`;
+  return [d.gw, d.dst, d.out, d.back || "", d.backFrom ?? "", d.hop?.to ?? "", d.backTo ?? ""].join("|").replace(/\|+$/, "");
+}
+
+/** True when a key names this deal: the full key, or an old three-part one (chat cards, shared links). */
+export function matchDealKey(d: Deal, key: string): boolean {
+  const k = dealKey(d);
+  if (k === key) return true;
+  return key.split("|").length === 3 && (k === key || k.startsWith(`${key}|`));
 }
 
 /** One home airport's board as the client sees it while it loads. */

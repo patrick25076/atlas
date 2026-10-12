@@ -104,15 +104,20 @@ export default function WalkCard({ walk, homeLabel, onSelect, onItinerary, onMor
   const maxN = q.maxNights != null ? Number(q.maxNights) : null;
   const nights = minN && maxN && minN !== maxN ? `${minN} to ${maxN} nights` : minN || maxN ? `${minN ?? maxN} nights` : "";
   const span = q.from && q.to ? dateRange(String(q.from), String(q.to)) : "";
+  // Nights a stop as asked ("2-3"), so the traveller sees the trip style at work.
+  const nps = q.nightsPerStop != null ? String(q.nightsPerStop).trim() : "";
+  const perStop = nps ? `${nps.replace("-", " to ")} night${nps === "1" ? "" : "s"} a stop` : "";
+  // A Wild build on the walk engine streams the same walk: the card says which builder is searching.
+  const wild = walk.source === "wild";
   const lines = walk.lines.slice(-4);
   return (
     <section className={`mapcard walkcard${walk.collapsed ? " collapsed" : ""}`} aria-label="Loops found the way you would search by hand">
       <header className="mapcardhead">
         <button className="mapcardtitle" onClick={() => onCollapse(!walk.collapsed)} title={walk.collapsed ? "Open the card" : "Fold the card"}>
-          <span className="kicker">Cheapest loops</span>
+          <span className="kicker">{wild ? "Wild loop, the walk searching" : "Cheapest loops"}</span>
           <b>From {label}</b>
           <small>
-            {[span, nights].filter(Boolean).join(" · ")}
+            {[span, nights, perStop].filter(Boolean).join(" · ")}
             {walk.loops.length ? ` · ${walk.loops.length} loop${walk.loops.length === 1 ? "" : "s"} from ${euro(cheapest)}` : ""}
           </small>
         </button>
@@ -128,7 +133,7 @@ export default function WalkCard({ walk, homeLabel, onSelect, onItinerary, onMor
         <div className="mapcardbody">
           {(loading || (lines.length > 0 && !walk.loops.length)) && (
             <div className="answer compact walklines" aria-live="polite">
-              {lines.length === 0 && <p className="muted">Asking where the cheap flights go from your airports…</p>}
+              {lines.length === 0 && <p className="muted">{wild ? "Asking for the cheapest way into the region from your airports…" : "Asking where the cheap flights go from your airports…"}</p>}
               {lines.map((l, i) => (
                 <p key={walk.lines.length - lines.length + i} className={i === lines.length - 1 ? "" : "muted"}>
                   {l}
@@ -156,9 +161,10 @@ export default function WalkCard({ walk, homeLabel, onSelect, onItinerary, onMor
                 <button className="chip on" disabled={!walk.loops.length || !onItinerary} onClick={() => onItinerary?.(walk.selected)} title={onItinerary ? "A day by day plan of the loop on the globe" : "Itineraries from a walk are not wired yet (skeletonFromWalk in lib/itinerary.ts)"}>
                   Make an itinerary
                 </button>
-                <button className="chip ghost" disabled={budget >= WALK_MORE_BUDGET} onClick={onMoreBudget} title={budget >= WALK_MORE_BUDGET ? "This walk already had the larger budget" : `Up to ${WALK_MORE_BUDGET} live searches instead of ${budget}`}>
+                {/* A Wild build has its own budget on the server: Build again in the Wild form, not more walk searches here. */}
+                {!wild && <button className="chip ghost" disabled={budget >= WALK_MORE_BUDGET} onClick={onMoreBudget} title={budget >= WALK_MORE_BUDGET ? "This walk already had the larger budget" : `Up to ${WALK_MORE_BUDGET} live searches instead of ${budget}`}>
                   Search again with more budget
-                </button>
+                </button>}
               </>
             )}
           </div>

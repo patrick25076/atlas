@@ -29,7 +29,9 @@ import { dealsFor } from "./deals-source";
 import { findDeals } from "./finder";
 import { findCombos, neighboursOf } from "./combos";
 import { BUDGET_MESSAGE, kiwiBudgetSpent, kiwiDate, kiwiStats, kiwiThrottled, nightsOf, searchFlight, THROTTLED_MESSAGE } from "./kiwi";
-import { buildWild, customKey, wildPath, REGIONS, STOPOVER_PROGRAMMES, type Budget, type Region, type Style, type Tradeoff, type WildTrip } from "./wild";
+import { buildWild, customKey, findCityCode, resolveCountries, wildPath, REGIONS, STOPOVER_PROGRAMMES, type Budget, type Region, type Style, type Tradeoff, type WildTrip } from "./wild";
+import { engineKeySuffix, wildByWalk } from "./wild-walk";
+import { cleanPrefs, DEFAULT_PREFS, prefsLine, sameAsDefault, type Prefs } from "./prefs";
 import { buildWildVariants, VARIANTS } from "./wild-variants";
 import { hotelDeals } from "./hotel-deals";
 import { purposeTrips } from "./purpose";
@@ -57,7 +59,7 @@ import { beenLine, cleanCodes, countryAllowed, excludedCountries, filterByCountr
 import { expandWeather, visaFor, type Airport, type City, type CityPlaces, type CountryInfo, type Deal, type VisaFile, type WeatherCompact } from "./types";
 import { generateItinerary, hasItineraryModel, ItineraryInputError, normaliseSkeleton, skeletonFromStops } from "./itinerary-server";
 import { itineraryKey, skeletonFromDeal, skeletonFromRoute, skeletonFromWild, type BudgetTier, type ItinDay, type Itinerary, type ItinPlace, type Pace, type Skeleton } from "./itinerary";
-import { walkTrips, type WalkEvent, type WalkLeg, type WalkLoop, type WalkResult } from "./graph-walk";
+import { countryGroup, walkTrips, type WalkEvent, type WalkLeg, type WalkLoop, type WalkResult } from "./graph-walk";
 import { walkQuery, walkWindow, type WalkLiveLine } from "./chat-widgets";
 
 const CITIES = citiesJson as unknown as Record<string, City>;
@@ -81,6 +83,13 @@ export type AgentContext = {
   been?: BeenPrefs;
   /** ISO2 countries no search may land or sleep in: the been list when "only new" is on, else empty. */
   exclude?: string[];
+  /**
+   * The traveller's trip style (lib/prefs.ts, kept in their browser and sent with every turn):
+   * nights a place, pace, the price/comfort tradeoff, taste, places to avoid, the longest flight,
+   * trains and coaches welcome. Every tool takes its defaults from it; what the traveller says
+   * in the message wins for that trip. Absent means the tools' own defaults (DEFAULT_PREFS).
+   */
+  prefs?: Prefs;
   /**
    * Called with the parameters a tool is about to hand an engine (cheapest_way, wild_trip,
    * long_stay, group_trip), just before the call: the harness reads the deadline and budget
@@ -129,6 +138,27 @@ export function rememberOutput(ctx: AgentContext, toolName: string, output: unkn
   } else if (kind === "wild") {
     if (raw && !Array.isArray(raw) && Array.isArray(raw.stops) && raw.stops.length) recent.set("wild", raw);
   }
+}
+
+/** True when the walk can read the word as a place to avoid: a group ("dach", "like:DE"), a country by code or
+ * name, or a city. A word it cannot read would refuse every walk ("unknown place to avoid"), so the chat never
+ * carries one: lib/prefs.ts keeps any two letters, and "XX" is no country. */
+function avoidable(s: string): boolean {
+  if (countryGroup(s)) return true;
+  if (/^[A-Za-z]{2}$/.test(s)) return !!COUNTRIES[s.toUpperCase()];
+  return !!findCityCode(s) || resolveCountries([s]).codes.length > 0;
+}
+/**
+ * The trip style a client sent with the turn: lib/prefs.ts cleanPrefs clamps every field (nights
+ * a place 1 to 14, the least first; each choice from its own list; the longest flight 1 to 40 h),
+ * then the avoid words the walk could not read are dropped. Undefined when no object was sent, so
+ * an old client (or the CLI without flags) keeps the tools on their own defaults. Exported for the
+ * CLI and the harness.
+ */
+export function chatPrefs(raw: unknown): Prefs | undefined {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+  const p = cleanPrefs(raw);
+  return { ...p, avoid: p.avoid.filter(avoidable) };
 }
 
 /** The `exclude` and `allow` inputs every searching tool takes: the same shape and the same
@@ -322,10 +352,20 @@ const ROUTE_DEADLINE_HARDER_MS = 150_000;
 /** Searches walk_trips may spend from the turn's budget: the owner's own case (beam 2, three stops) needs
  * about ten (one "anywhere" from home, one per expanded stop, the ways home); the engine stops at this. */
 const WALK_SEARCHES = 12;
+/** The most a long walk may spend: two searches a stop plus the way out and home, for up to 16 stops, capped. */
+const WALK_SEARCHES_MAX = 40;
+/** A ground hop's limit in minutes: the walk's default (Warsaw to Gdansk is 310), and "only trains between cities". */
+const WALK_GROUND_MIN = 330;
+const WALK_GROUND_PREFER_MIN = 480;
+/** The wishes "unique" adds to a wild trip: word for word what /api/wild, /api/plan and the Wild tab add (joined with
+ * ", "), because the wishes are hashed into the stored trip's key and any other wording keys the same trip twice. */
+export const UNIQUE_WISHES = "unique places and hidden gems over the big hubs";
 /** States followed at each depth of the walk in the chat: two, the owner's case (docs/plans/graph-walk.md). */
 const WALK_BEAM = 2;
 /** The walk's own limit (the engine's default); always cut to what is left of the turn. */
 const WALK_DEADLINE_MS = 90_000;
+/** A walk of many stops gets more time, but never past this (the turn has 270 s for everything). */
+const WALK_DEADLINE_MAX_MS = 150_000;
 /** The live lines (nodes, edges, loops) a chat walk sends the globe, and how often: a walk sees a few hundred edges,
  * past this only the chosen ones and the loops go on. */
 const WALK_LIVE_MAX = 600;
@@ -622,6 +662,29 @@ export function atlasTools(ctx: AgentContext) {
   };
   /** The origin point for "how far is that": the browser's location, else the first airport. */
   const originPoint = (): { lat: number; lon: number } | null => ctx.origin ?? resolveGateway(gateways[0]) ?? null;
+  // The trip style (lib/prefs.ts): the defaults of every tool below, so "2 to 3 nights a place"
+  // set once in the app reaches the walk, the wild loop and the rest without the model having to
+  // repeat it. An input the model writes (the traveller's words this time) always wins.
+  const prefs: Prefs = ctx.prefs ?? DEFAULT_PREFS;
+  /** True when the traveller changed the nights a place themselves. The single-place tools
+   * (find_getaways, group_trip) read those nights only then: a getaway is one place, and the
+   * default 2 to 3 nights a place would cut every week-long trip to three nights. Another
+   * change (the tradeoff, the avoid list) leaves their nights alone. */
+  const nightsStyled = !!ctx.prefs && (ctx.prefs.nightsPerPlace[0] !== DEFAULT_PREFS.nightsPerPlace[0] || ctx.prefs.nightsPerPlace[1] !== DEFAULT_PREFS.nightsPerPlace[1]);
+  const styleNights = (p: Prefs = prefs) => (p.nightsPerPlace[0] === p.nightsPerPlace[1] ? `${p.nightsPerPlace[0]}` : `${p.nightsPerPlace[0]} to ${p.nightsPerPlace[1]}`);
+  /** The style's avoid words as ISO2 codes (a group word is its countries; a city is none), for
+   * the tools that filter a list of places by country. */
+  const avoidCountries = (words: string[]): Set<string> => {
+    const out = new Set<string>();
+    for (const w of words) {
+      const g = countryGroup(w);
+      if (g) for (const cc of g.codes) out.add(cc);
+      else if (!findCityCode(w)) for (const cc of resolveCountries([w]).codes) out.add(cc);
+    }
+    return out;
+  };
+  /** The line an answer carries when it used the style's defaults, so the model can say so in a few words. */
+  const styleLine = (used: string[]) => (used.length ? { tripStyle: `from the traveller's trip style: ${used.join(", ")}` } : {});
   // The Been filter: countries the traveller has seen and does not want again as a destination
   // or an overnight stop (a layover through one is fine). The context carries the lasting
   // setting (ctx.exclude, the chip's list when "only new" is on). A tool's own `exclude` input
@@ -754,10 +817,10 @@ export function atlasTools(ctx: AgentContext) {
           from: { type: "string", description: "YYYY-MM-DD, start of the period" },
           to: { type: "string", description: "YYYY-MM-DD, end of the period (be home by)" },
           include: { type: "string", description: "YYYY-MM-DD the traveller must be away on, optional" },
-          minNights: { type: "number", description: "default 2" },
-          maxNights: { type: "number", description: "default 7" },
+          minNights: { type: "number", description: "default 2 (or the trip style's nights a place when the traveller changed it)" },
+          maxNights: { type: "number", description: "default 7 (or the trip style's nights a place when the traveller changed it)" },
           direct: { type: "boolean" },
-          maxHours: { type: "number", description: "max hours per flight leg; 0 or omitted for no limit" },
+          maxHours: { type: "number", description: "max hours per flight leg; 0 for no limit; omitted means the trip style's longest flight, if set" },
           where: { type: "string", description: "'anywhere' (default), a region (Europe, Asia) or country names, comma separated" },
           origins: { type: "array", items: { type: "string" }, description: "IATA codes or city names; default the traveller's airports" },
           returnTo: { type: "array", items: { type: "string" }, description: "other home airports the flight back may land at (open-jaw)" },
@@ -794,24 +857,36 @@ export function atlasTools(ctx: AgentContext) {
         // A comma list of countries is one search per country per target; four is the cap.
         const where = kept.slice(0, 4).join(",") || "anywhere";
         const corrected = corrections.length ? { corrected: corrections.join("; ") } : {};
+        // The trip style's defaults: its nights a place only when the traveller changed them (a getaway is one
+        // place, and the default 2 to 3 would cut every week away to three nights), its longest flight, and its
+        // avoid list as countries no deal may land in.
+        const fromStyle: string[] = [];
+        const minNights = a.minNights ?? (nightsStyled ? prefs.nightsPerPlace[0] : 2);
+        const maxNights = a.maxNights ?? (nightsStyled ? Math.max(minNights, prefs.nightsPerPlace[1]) : Math.max(minNights, 7));
+        if (nightsStyled && (a.minNights == null || a.maxNights == null)) fromStyle.push(`${styleNights()} nights`);
+        const maxHours = a.maxHours ?? prefs.maxFlightHours;
+        if (a.maxHours == null && prefs.maxFlightHours) fromStyle.push(`flights under ${prefs.maxFlightHours} h`);
+        const disliked = avoidCountries(prefs.avoid);
+        if (disliked.size) fromStyle.push(`avoiding ${prefs.avoid.join(", ")}`);
+        const liked = (d: Deal) => !disliked.has(d.country);
         // Known fares stand in when nothing live can be searched: the breaker, the budget, the
         // turn's cap, or a run in which every search was refused.
         const fallback = async (reason: string, searched = 0, turn = false) => {
           const known = await knownFares(gateways, origins, kept.length === 1 ? kept[0] : undefined, from, to, from.slice(0, 7), turn);
-          const deals = filterByCountry([...known.deals, ...known.fares.map(dealFromFare)], exclude).filter((d) => d.nights >= (a.minNights ?? 2) && d.nights <= (a.maxNights ?? 7) || !d.nights).slice(0, 10);
-          return { searched, source: known.source, found: deals.length, ...corrected, ...excludedSummary(exclude, dropped, a.exclude), note: `${reason}; ${known.note}`, deals: deals.map(compactDeal), raw: deals };
+          const deals = filterByCountry([...known.deals, ...known.fares.map(dealFromFare)], exclude).filter(liked).filter((d) => d.nights >= minNights && d.nights <= maxNights || !d.nights).slice(0, 10);
+          return { searched, source: known.source, found: deals.length, ...corrected, ...excludedSummary(exclude, dropped, a.exclude), ...styleLine(fromStyle), note: `${reason}; ${known.note}`, deals: deals.map(compactDeal), raw: deals };
         };
         if (liveOff()) return fallback(kiwiThrottled() ? "Kiwi is throttling this address for a few minutes" : "today's live search budget is spent");
         const over = exhausted();
         if (over) return fallback(over.error, 0, true);
-        const r = await findDeals({ origins, from, to, include: include ?? undefined, minNights: a.minNights ?? 2, maxNights: a.maxNights ?? 7, direct: a.direct, maxHours: a.maxHours, where, returnTo: codesOf(a.returnTo, []), tricks: a.tricks, exclude, ...(a.exhaustive ? { exhaustive: true, origin: ctx.origin } : {}) });
+        const r = await findDeals({ origins, from, to, include: include ?? undefined, minNights, maxNights, direct: a.direct, maxHours: maxHours || undefined, where, returnTo: codesOf(a.returnTo, []), tricks: a.tricks, exclude, ...(a.exhaustive ? { exhaustive: true, origin: ctx.origin } : {}) });
         spend(r.searched);
         const seen = new Set<string>();
-        const deals = filterByCountry(r.deals, exclude);
+        const deals = filterByCountry(r.deals, exclude).filter(liked);
         if (!deals.length && r.failed > 0 && r.failed >= r.searched) return fallback(`every live search was refused (${r.failed} of ${r.searched})`, r.searched);
         const top = deals.filter((d) => !seen.has(d.dstCity + (d.backTo ?? "")) && seen.add(d.dstCity + (d.backTo ?? ""))).slice(0, 14);
-        const note = r.note ?? (r.failed ? `${r.failed} of ${r.searched} searches failed (Kiwi refused); the list may be missing places` : !deals.length ? `no fare found for ${where} between ${from} and ${to} from ${origins.join(", ")} with ${a.minNights ?? 2} to ${a.maxNights ?? 7} nights${a.direct ? ", direct only" : ""}; widen the dates or the nights` : undefined);
-        return { searched: r.searched, source: "live" as Source, found: deals.length, openJaw: r.openJaw, ...corrected, ...excludedSummary(exclude, dropped, a.exclude), ...(note ? { note } : {}), deals: top.map(compactDeal), raw: top };
+        const note = r.note ?? (r.failed ? `${r.failed} of ${r.searched} searches failed (Kiwi refused); the list may be missing places` : !deals.length ? `no fare found for ${where} between ${from} and ${to} from ${origins.join(", ")} with ${minNights} to ${maxNights} nights${a.direct ? ", direct only" : ""}; widen the dates or the nights` : undefined);
+        return { searched: r.searched, source: "live" as Source, found: deals.length, openJaw: r.openJaw, ...corrected, ...excludedSummary(exclude, dropped, a.exclude), ...styleLine(fromStyle), ...(note ? { note } : {}), deals: top.map(compactDeal), raw: top };
       }),
       toModelOutput: withoutRaw,
     }),
@@ -992,7 +1067,7 @@ export function atlasTools(ctx: AgentContext) {
 
     cheapest_way: tool({
       description: "The cheapest way from one place to another (and the fastest): one engine that already checks the direct fare, the nearby airports of both sides, a train or coach to a bigger airport then a flight, a flight then ground, two tickets through a hub, open-jaw landings and the ground graph alone, from the fare memory first and then live. Use FIRST whenever the traveller asks how to get from A to B or the cheapest way somewhere. from defaults to where the traveller is. Returns the options ranked (kind, title, total, hours, stops, why, booking links), the cheapest and the fastest, and what was considered, so you can say it. About 12 Kiwi searches at most, under a minute; 24 with harder. Each option says nonstop (true only when no flight leg stops; kind 'direct' means the nearest airports, not a nonstop flight) and the answer says whether each end was placed (an unplaced end is a name nobody could put on the map, so never say 'from X' for it).",
-      inputSchema: jsonSchema<{ from?: string; to: string; depart?: string; flex?: number; nights?: number; oneWay?: boolean; maxHours?: number; harder?: boolean; exclude?: string[]; allow?: string[] }>({
+      inputSchema: jsonSchema<{ from?: string; to: string; depart?: string; flex?: number; nights?: number; oneWay?: boolean; maxHours?: number; harder?: boolean; tradeoff?: Tradeoff; exclude?: string[]; allow?: string[] }>({
         type: "object",
         properties: {
           from: { type: "string", description: "a city, an airport code, a place name or 'lat,lon'; default the traveller's place" },
@@ -1001,8 +1076,9 @@ export function atlasTools(ctx: AgentContext) {
           flex: { type: "number", description: "days either side, 0 to 3, default 2" },
           nights: { type: "number", description: "nights there for a return, default 4; set oneWay for no return" },
           oneWay: { type: "boolean" },
-          maxHours: { type: "number", description: "door to door; options longer than this are dropped" },
+          maxHours: { type: "number", description: "door to door; options longer than this are dropped; omitted means the trip style's longest flight, if set" },
           harder: { type: "boolean", description: "true when the traveller says 'search harder', 'look harder', 'exhaust', 'every option': twice the searches (24) and more time for the hubs" },
+          tradeoff: { type: "string", enum: ["price", "balanced", "comfort"], description: "which option to lead with: price the cheapest, comfort the fastest, balanced the better of the two by euro per hour; default the trip style's" },
           ...BEEN_PROPS,
         },
         required: ["to"],
@@ -1063,8 +1139,17 @@ export function atlasTools(ctx: AgentContext) {
         // The engine's clock: its usual limit (longer when asked to look harder), and never
         // past what is left of the turn, so the tool cannot outlast the turn it runs in.
         const deadlineMs = Math.max(10_000, Math.min(harder ? ROUTE_DEADLINE_HARDER_MS : ROUTE_DEADLINE_MS, turnLeftMs() - DEADLINE_MARGIN_MS));
-        const query = { from, to, depart, flex, nights: nights ?? undefined, oneWay: !!a.oneWay, maxHours: a.maxHours, exclude, budget: budgetNow, deadlineMs };
-        trace("cheapestWay", query);
+        // The trip style: its longest flight caps the options when the traveller gave no cap of their own. The
+        // engine's cap is door to door, so the style's flight hours get the three hours of airport time a trip
+        // has around its flying (an hour and a half each end, as the walk counts it); its tradeoff decides which
+        // option the answer leads with.
+        const fromStyle: string[] = [];
+        const maxHours = a.maxHours ?? (prefs.maxFlightHours ? prefs.maxFlightHours + 3 : undefined);
+        if (a.maxHours == null && prefs.maxFlightHours) fromStyle.push(`trips under ${prefs.maxFlightHours + 3} h door to door (flights under ${prefs.maxFlightHours} h)`);
+        const tradeoff: Tradeoff = a.tradeoff === "price" || a.tradeoff === "comfort" || a.tradeoff === "balanced" ? a.tradeoff : prefs.tradeoff;
+        if (!a.tradeoff && prefs.tradeoff !== "price") fromStyle.push(`the ${prefs.tradeoff} tradeoff`);
+        const query = { from, to, depart, flex, nights: nights ?? undefined, oneWay: !!a.oneWay, maxHours: maxHours || undefined, exclude, budget: budgetNow, deadlineMs };
+        trace("cheapestWay", { ...query, tradeoff });
         // The engine counts memo hits as searches and its whole answer is memoised for an
         // hour: what left the process now is the gate's own count, and that is what the turn
         // is charged and the answer calls live.
@@ -1112,6 +1197,9 @@ export function atlasTools(ctx: AgentContext) {
           : spentTurn
             ? `${TURN_NOTE}; live prices were not searched, ${r.options.length ? "the options shown are remembered fares and ground estimates" : "nothing stored between these places yet"}`
             : (r.note ?? (!r.options.length ? `no way found between ${fromLabel} and ${r.to.label} around ${depart}; try another date or a nearby city` : live ? (r.failed ? `${r.failed} of ${r.searched} live searches failed (Kiwi refused); some options may be missing` : undefined) : memoHit ? "the same question was answered within the hour, no new search was made" : "answered from the fare memory and the ground graph, no live search was needed"));
+        // The option to lead with, by the tradeoff: the cheapest, the fastest, or (balanced) the cheaper of the
+        // two once each hour is worth 11 euro, the rate lib/wild.ts gives a hop.
+        const lead = !raw.cheapest || !raw.fastest || raw.cheapest === raw.fastest ? "cheapest" : tradeoff === "comfort" ? "fastest" : tradeoff === "price" ? "cheapest" : raw.fastest.total + raw.fastest.hours * 11 < raw.cheapest.total + raw.cheapest.hours * 11 ? "fastest" : "cheapest";
         return {
           from: fromLabel,
           to: r.to.label,
@@ -1119,6 +1207,8 @@ export function atlasTools(ctx: AgentContext) {
           flex,
           nights,
           placed,
+          lead,
+          ...styleLine(fromStyle),
           searched: sentNow,
           source: (live ? "live" : memoHit ? "memo" : fromMemory ? "memory" : "data") as Source,
           ...corrected,
@@ -1137,8 +1227,8 @@ export function atlasTools(ctx: AgentContext) {
 
     walk_trips: tool({
       description:
-        "A loop of several cities, searched the way the traveller does it by hand with Skyscanner Explore: one 'anywhere' one-way search from where they are (the cheapest places to fly to), then from each stop the cheapest next hops by plane, train or coach, then the cheapest way home to any of their airports, a beam of the best few at each depth, the fare memory first. Use it ONCE for any trip with more than one city, a loop, 'go from X and come back from Y', 'plane then train', 'cheapest loop', 'N cities in N days', or a chain of hops the traveller wrote out; never price such legs one by one with reprice_route or cheapest_way. from/to is the window the whole trip lies in (YYYY-MM-DD or words such as '20 Oct'; default a week out); minNights/maxNights the trip's length (N days is N-1 to N nights); nightsPerStop the nights in each city (default 2, nightsPerStopMax for a range); maxStops (default 3); mustInclude the cities they named; avoid countries or cities they dislike ('not Germany' is DE, 'countries like Germany' is like:DE, or a group word: dach, benelux, nordics, baltics, balkans, iberia); prefer countries to favour; countries to keep to; style their words ('unique' for hidden gems, not touristy, smaller places); origin a city to start from when it is not where they are. Returns the loops ranked: the route as a line (Brasov, plane, Warsaw, train, Gdansk, plane, Bucharest), stops with nights, legs with kind, price, minutes and the booking link of each flight, the total, the hours and why lines, plus considered and searched. At most 12 Kiwi searches from the turn's budget, about a minute; with the budget spent it still walks the fare memory and the ground graph.",
-      inputSchema: jsonSchema<{ origin?: string; from?: string; to?: string; minNights?: number; maxNights?: number; nightsPerStop?: number; nightsPerStopMax?: number; maxStops?: number; beam?: number; tradeoff?: Tradeoff; mustInclude?: string[]; avoid?: string[]; prefer?: string[]; countries?: string[]; style?: string; exclude?: string[]; allow?: string[] }>({
+        "A loop of several cities, searched the way the traveller does it by hand with Skyscanner Explore: one 'anywhere' one-way search from where they are (the cheapest places to fly to), then from each stop the cheapest next hops by plane, train or coach, then the cheapest way home to any of their airports, a beam of the best few at each depth, the fare memory first. Use it ONCE for any trip with more than one city, a loop, 'go from X and come back from Y', 'plane then train', 'cheapest loop', 'N cities in N days', or a chain of hops the traveller wrote out; never price such legs one by one with reprice_route or cheapest_way. from/to is the window the whole trip lies in (YYYY-MM-DD or words such as '20 Oct'; default a week out); minNights/maxNights the trip's length (N days is N-1 to N nights); nightsPerStop the nights in each city (default the traveller's trip style, nights a place, 2 to 3 unless they changed it; nightsPerStopMax for a range); maxStops (default enough stops to fill the nights at that pace, up to 16); mustInclude the cities they named; avoid countries or cities they dislike ('not Germany' is DE, 'countries like Germany' is like:DE, or a group word: dach, benelux, nordics, baltics, balkans, iberia), added to the trip style's own avoid list ([] lifts that list for this search); prefer countries to favour; countries to keep to; style their words ('unique' for hidden gems, not touristy, smaller places; the trip style's taste 'unique' sets it too); tradeoff default the trip style's; ground 'prefer' for 'trains between cities' (ground hops up to 8 hours), 'none' for flights only; origin a city to start from when it is not where they are. Returns the loops ranked: the route as a line (Brasov, plane, Warsaw, train, Gdansk, plane, Bucharest), stops with nights, legs with kind, price, minutes and the booking link of each flight, the total, the hours and why lines, plus considered, searched and tripStyle (which defaults came from the trip style). About 2 Kiwi searches a stop plus the way out and home (12 at least, 40 at most) from the turn's budget, about a minute; with the budget spent it still walks the fare memory and the ground graph.",
+      inputSchema: jsonSchema<{ origin?: string; from?: string; to?: string; minNights?: number; maxNights?: number; nightsPerStop?: number; nightsPerStopMax?: number; maxStops?: number; beam?: number; tradeoff?: Tradeoff; mustInclude?: string[]; avoid?: string[]; prefer?: string[]; countries?: string[]; style?: string; ground?: "ok" | "prefer" | "none"; exclude?: string[]; allow?: string[] }>({
         type: "object",
         properties: {
           origin: { type: "string", description: "a city to start and end at; default where the traveller is" },
@@ -1146,9 +1236,9 @@ export function atlasTools(ctx: AgentContext) {
           to: { type: "string", description: "the last day the trip may end, YYYY-MM-DD; default the start plus the nights plus a week" },
           minNights: { type: "number", description: "the fewest nights away in all; default 5" },
           maxNights: { type: "number", description: "the most nights away in all; default 6" },
-          nightsPerStop: { type: "number", description: "nights in each city, default 2" },
+          nightsPerStop: { type: "number", description: "nights in each city; default the trip style's nights a place" },
           nightsPerStopMax: { type: "number", description: "with nightsPerStop, a range: 2 to 3 nights a city" },
-          maxStops: { type: "number", description: "the most cities, 1 to 6, default 3" },
+          maxStops: { type: "number", description: "the most cities, 1 to 16; default the nights divided by the fewest nights a stop" },
           beam: { type: "number", description: "how many of the cheapest states are followed at each depth, 1 to 5, default 2; more finds more but costs more searches" },
           tradeoff: { type: "string", enum: ["price", "balanced", "comfort"], description: "how much an hour of travel is worth against a euro; default balanced" },
           mustInclude: { type: "array", items: { type: "string" }, description: "cities every loop passes through, by name or code" },
@@ -1156,6 +1246,7 @@ export function atlasTools(ctx: AgentContext) {
           prefer: { type: "array", items: { type: "string" }, description: "countries to favour" },
           countries: { type: "array", items: { type: "string" }, description: "keep the stops to these countries" },
           style: { type: "string", description: "the traveller's words for the kind of places; 'unique' for hidden gems, not touristy, smaller cities" },
+          ground: { type: "string", enum: ["ok", "prefer", "none"], description: "trains and coaches between places: ok (up to 5.5 h, the default), prefer ('only trains between cities': up to 8 h), none (flights only); default from the trip style" },
           ...BEEN_PROPS,
         },
       }),
@@ -1218,14 +1309,22 @@ export function atlasTools(ctx: AgentContext) {
           const win = walkWindow({ from: f, to: t, minNights: a.minNights, maxNights: a.maxNights }, ctx.today);
           corrections.push(...win.notes);
           const int = (v: unknown, lo: number, hi: number, dflt: number) => (Number.isFinite(Number(v)) && v != null && String(v).trim() !== "" ? Math.min(hi, Math.max(lo, Math.round(Number(v)))) : dflt);
-          // nightsPerStop may come as a number or as "2-3" written by the model.
+          // nightsPerStop may come as a number or as "2-3" written by the model; with neither it nor
+          // nightsPerStopMax given, the trip style's nights a place are the stay in each city.
+          const fromStyle: string[] = [];
           const npsRaw = String(a.nightsPerStop ?? "").match(/^\s*(\d{1,2})\s*(?:-|to)\s*(\d{1,2})\s*$/);
-          const nMin = npsRaw ? int(npsRaw[1], 1, 14, 2) : int(a.nightsPerStop, 1, 14, 2);
-          const nMax = npsRaw ? int(npsRaw[2], nMin, 14, nMin) : int(a.nightsPerStopMax, nMin, 14, nMin);
+          const npsGiven = npsRaw != null || (a.nightsPerStop != null && String(a.nightsPerStop).trim() !== "" && Number.isFinite(Number(a.nightsPerStop)));
+          if (!npsGiven) fromStyle.push(`${styleNights()} nights a place`);
+          const nMin = npsRaw ? int(npsRaw[1], 1, 14, 2) : npsGiven ? int(a.nightsPerStop, 1, 14, 2) : prefs.nightsPerPlace[0];
+          const nMax = npsRaw ? int(npsRaw[2], nMin, 14, nMin) : npsGiven ? int(a.nightsPerStopMax, nMin, 14, nMin) : Math.max(nMin, prefs.nightsPerPlace[1]);
           const nightsPerStop: number | [number, number] = nMax > nMin ? [nMin, nMax] : nMin;
-          const maxStops = int(a.maxStops, 1, 6, 3);
+          // Enough stops to fill the longest stay at the shortest pace (14 nights at 2 to 3 a place is 7), as the
+          // engine scales them, up to 16; the search budget grows with them below.
+          const maxStops = int(a.maxStops, 1, 16, Math.min(16, Math.max(1, Math.ceil(win.maxNights / nMin))));
           const beam = int(a.beam, 1, 5, WALK_BEAM);
-          const tradeoff: Tradeoff = (["price", "balanced", "comfort"] as Tradeoff[]).includes(a.tradeoff as Tradeoff) ? a.tradeoff! : "balanced";
+          const tradeoffGiven = (["price", "balanced", "comfort"] as Tradeoff[]).includes(a.tradeoff as Tradeoff);
+          const tradeoff: Tradeoff = tradeoffGiven ? a.tradeoff! : prefs.tradeoff;
+          if (!tradeoffGiven && prefs.tradeoff !== "price") fromStyle.push(`the ${prefs.tradeoff} tradeoff`);
           const words = (v: unknown, max = 20): string[] => (Array.isArray(v) ? v : typeof v === "string" ? v.split(",") : []).map((x) => String(x ?? "").trim()).filter(Boolean).slice(0, max);
           // The start itself is no stop to pass through (the model sometimes lists it): a city within 40 km of it goes.
           const mustInclude = words(a.mustInclude, 6).filter((m) => {
@@ -1241,21 +1340,39 @@ export function atlasTools(ctx: AgentContext) {
             yield { ...plain(`${atHome.join(" and ")} ${atHome.length === 1 ? "is" : "are"} in ${country}, the home country, and a loop never stops there; to start from ${atHome[0]}, pass it as origin, or name cities abroad`), loops: [] };
             return;
           }
-          const avoid = words(a.avoid);
+          // The traveller's dislikes this time, added to the style's own list; an explicit [] lifts the style's list
+          // for this search ("Germany is fine this time"), the way exclude [] lifts the Been filter.
+          const avoidLifted = Array.isArray(a.avoid) && !a.avoid.length;
+          const avoid = avoidLifted ? [] : [...new Set([...words(a.avoid), ...prefs.avoid])];
+          if (!avoidLifted && prefs.avoid.length) fromStyle.push(`avoiding ${prefs.avoid.join(", ")}`);
           const prefer = words(a.prefer);
           const countries = words(a.countries, 30);
-          const style = typeof a.style === "string" ? a.style.trim().slice(0, 120) : "";
+          const styleGiven = typeof a.style === "string" ? a.style.trim().slice(0, 120) : "";
+          const style = styleGiven || (prefs.taste === "unique" ? "unique" : "");
+          if (!styleGiven && style) fromStyle.push("unique places");
+          // Trains and coaches between places: the walk's ground hop limit in minutes. 'prefer' lets the longer
+          // overland days in (8 h), 'none' is flights only; with nothing said, the style decides.
+          const groundWord = a.ground === "prefer" || a.ground === "none" || a.ground === "ok" ? a.ground : prefs.groundOk ? "ok" : "none";
+          if (!a.ground && !prefs.groundOk) fromStyle.push("no trains or coaches");
+          const maxGroundMin = groundWord === "prefer" ? WALK_GROUND_PREFER_MIN : groundWord === "none" ? 0 : WALK_GROUND_MIN;
+          // The style's longest single flight: the walk skips a flight edge past it.
+          const maxFlightHours = prefs.maxFlightHours;
+          if (maxFlightHours) fromStyle.push(`flights under ${maxFlightHours} h`);
           const exclude = excludeOf(a.exclude, a.allow);
-          // The budget: twelve searches from the turn at most. With the turn's budget spent, or live prices
-          // off, the walk still runs at budget 0: the fare memory, the boards and the ground graph alone.
+          // The budget: about two searches a stop plus the way out and the way home, at least twelve and at most
+          // forty, never more than the turn has left. With the turn's budget spent, or live prices off, the walk
+          // still runs at budget 0: the fare memory, the boards and the ground graph alone.
           const offBefore = liveOff();
           const spentTurn = !offBefore && budget.used >= budget.max;
-          const budgetNow = offBefore || spentTurn ? 0 : Math.min(WALK_SEARCHES, searchesLeft());
-          // The engine's clock never reaches past what is left of the turn (it floors it at ten seconds).
-          const deadlineMs = Math.max(10_000, Math.min(WALK_DEADLINE_MS, turnLeftMs() - DEADLINE_MARGIN_MS));
-          const query = { origin: { lat: start.lat, lon: start.lon, label: start.label }, gateways: start.gateways, home: start.home, from: win.from, to: win.to, minNights: win.minNights, maxNights: win.maxNights, nightsPerStop, maxStops, beam, budget: budgetNow, deadlineMs, tradeoff, exclude, mustInclude, avoid, prefer, allowedCountries: countries, ...(style ? { style } : {}) };
+          const walkSearches = Math.max(WALK_SEARCHES, Math.min(WALK_SEARCHES_MAX, 2 * maxStops + 2));
+          const budgetNow = offBefore || spentTurn ? 0 : Math.min(walkSearches, searchesLeft());
+          // The engine's clock grows ten seconds a stop past three (more stops, more searches), at most WALK_DEADLINE_MAX_MS,
+          // and never reaches past what is left of the turn (it floors it at ten seconds).
+          const walkMs = Math.min(WALK_DEADLINE_MAX_MS, WALK_DEADLINE_MS + Math.max(0, maxStops - 3) * 10_000);
+          const deadlineMs = Math.max(10_000, Math.min(walkMs, turnLeftMs() - DEADLINE_MARGIN_MS));
+          const query = { origin: { lat: start.lat, lon: start.lon, label: start.label }, gateways: start.gateways, home: start.home, from: win.from, to: win.to, minNights: win.minNights, maxNights: win.maxNights, nightsPerStop, maxStops, beam, budget: budgetNow, deadlineMs, maxGroundMin, ...(maxFlightHours ? { maxFlightHours } : {}), tradeoff, exclude, mustInclude, avoid, prefer, allowedCountries: countries, ...(style ? { style } : {}) };
           trace("walkTrips", query);
-          const params = walkQuery({ gateways: start.gateways, home: start.home, lat: start.lat, lon: start.lon, label: start.label, from: win.from, to: win.to, minNights: win.minNights, maxNights: win.maxNights, nightsPerStop, maxStops, beam, budget: budgetNow, tradeoff, exclude, mustInclude, avoid, prefer, countries, style });
+          const params = walkQuery({ gateways: start.gateways, home: start.home, lat: start.lat, lon: start.lon, label: start.label, from: win.from, to: win.to, minNights: win.minNights, maxNights: win.maxNights, nightsPerStop, maxStops, beam, budget: budgetNow, ...(maxGroundMin !== WALK_GROUND_MIN ? { ground: maxGroundMin } : {}), tradeoff, exclude, mustInclude, avoid, prefer, countries, style });
 
           // The walk runs on its own; its progress lines wake this generator, which yields them as they come.
           const lines: string[] = [];
@@ -1364,6 +1481,7 @@ export function atlasTools(ctx: AgentContext) {
             window: `${win.from} to ${win.to}`,
             nights: win.minNights === win.maxNights ? `${win.minNights}` : `${win.minNights} to ${win.maxNights}`,
             nightsPerStop: Array.isArray(nightsPerStop) ? `${nightsPerStop[0]} to ${nightsPerStop[1]}` : `${nightsPerStop}`,
+            ...styleLine(fromStyle),
             searched: sentNow,
             source,
             count: loops.length,
@@ -1418,8 +1536,8 @@ export function atlasTools(ctx: AgentContext) {
     }),
 
     wild_trip: tool({
-      description: "A long multi-country loop (5 to 90 nights) into a far region (or region 'custom' with a countries list anywhere): fly out (via a cheaper hub when that wins), chain cheap one-way flights and border hops through the region, fly home (any of the traveller's airports, plus the last leg to their door), with living costs per stop, visas, a stopover night in a hub when it costs about the same, and a model's verdict. Long trips get longer stays (60 nights is 5 to 7 bases of 8 to 12 nights). Regions: " + Object.entries(REGIONS).map(([k, v]) => `${k} (${v.label})`).join(", ") + ". Style: experiences, beaches, food, cities, slow. Budget: backpacker, mid, comfort. Tradeoff: price, balanced, comfort. variants=3 builds the balanced, cheapest and comfortable versions and ranks them. noHubs skips the positioning hub. Either month (YYYY-MM) or an explicit departure window from/to (a window works with variants too; one wider than ten days is clipped to its first ten). Optional custom country list, countries to favour, max stops, nights per stop (or a range with nightsPerStopMax), cities the chain must pass through, a cap on hours per flight, airports to start from, and the traveller's own wishes in words. Cost: about sixty Kiwi searches per variant that is not already built (one to two minutes each), so variants=3 is about 180 when none is stored, more than one turn's budget of " + TURN_SEARCH_BUDGET + "; the tool builds only as many variants as the budget left allows (stored ones are free), and a trip built in the last day is served at no cost. Default to one variant; say so before calling. Excluded (been) countries never become a stop or the optional hub night; flying through a hub there to position is fine.",
-      inputSchema: jsonSchema<{ region: Region; nights?: number; style?: Style; budget?: Budget; month?: string; from?: string; to?: string; countries?: string[]; prefer?: string[]; maxStops?: number; nightsPerStop?: number; nightsPerStopMax?: number; mustInclude?: string[]; maxFlightHours?: number; startFrom?: string[]; wishes?: string; stopover?: boolean; tradeoff?: Tradeoff; noHubs?: boolean; variants?: number; exclude?: string[]; allow?: string[] }>({
+      description: "A long multi-country loop (5 to 90 nights) into a far region (or region 'custom' with a countries list anywhere): fly out, hop through the region by the cheapest flights, trains and coaches, fly home (any of the traveller's airports, plus the last leg to their door), with living costs per stop, visas and a model's verdict. By default it is built by the graph walk (engine 'walk': a targeted search into the region, then the cheapest next hops from each stop, Dijkstra over the train and coach graph, the cheapest way home) and each stop stays the traveller's trip style nights a place (2 to 3 unless they changed it), with the style's tradeoff, longest flight, taste and avoid list; nightsPerStop and nightsPerStopMax in the input override them for this trip only. engine 'classic' is the older greedy chain by country (a hub night on the way home), at the same nights a place; variants above 1 always use it. Regions: " + Object.entries(REGIONS).map(([k, v]) => `${k} (${v.label})`).join(", ") + ". Style: experiences, beaches, food, cities, slow. Budget: backpacker, mid, comfort. Tradeoff: price, balanced, comfort. variants=3 builds the balanced, cheapest and comfortable versions and ranks them. noHubs skips the positioning hub. Either month (YYYY-MM) or an explicit departure window from/to (a window works with variants too; one wider than ten days is clipped to its first ten). Optional custom country list, countries to favour, max stops, nights per stop (or a range with nightsPerStopMax), cities the chain must pass through, a cap on hours per flight, airports to start from, and the traveller's own wishes in words. Cost: about sixty Kiwi searches per variant that is not already built (one to two minutes each), so variants=3 is about 180 when none is stored, more than one turn's budget of " + TURN_SEARCH_BUDGET + "; the tool builds only as many variants as the budget left allows (stored ones are free), and a trip built in the last day is served at no cost. Default to one variant; say so before calling. The walk engine spends about 2 searches a stop plus the way in and home (40 at most). Excluded (been) countries never become a stop or the optional hub night; flying through a hub there to position is fine. The answer's tripStyle says which defaults came from the trip style.",
+      inputSchema: jsonSchema<{ region: Region; nights?: number; style?: Style; budget?: Budget; month?: string; from?: string; to?: string; countries?: string[]; prefer?: string[]; maxStops?: number; nightsPerStop?: number; nightsPerStopMax?: number; mustInclude?: string[]; maxFlightHours?: number; startFrom?: string[]; wishes?: string; stopover?: boolean; tradeoff?: Tradeoff; noHubs?: boolean; variants?: number; engine?: "walk" | "classic"; avoid?: string[]; exclude?: string[]; allow?: string[] }>({
         type: "object",
         properties: {
           region: { type: "string", enum: Object.keys(REGIONS), description: "a far region, or 'custom' with countries. Whenever countries is given the trip is keyed as region 'custom' whatever region is named here (the engine, /api/wild and the Wild tab do the same), so the key the tool returns says custom" },
@@ -1431,8 +1549,8 @@ export function atlasTools(ctx: AgentContext) {
           to: { type: "string", description: "YYYY-MM-DD, latest departure" },
           countries: { type: "array", items: { type: "string" }, description: "countries to restrict to, names or ISO2 codes, up to 8 (required with region 'custom')" },
           prefer: { type: "array", items: { type: "string" }, description: "countries to favour, names or ISO2 codes" },
-          maxStops: { type: "number", description: "1 to 8" },
-          nightsPerStop: { type: "number" },
+          maxStops: { type: "number", description: "1 to 16 with the walk engine, 1 to 8 with classic; default enough stops for the nights" },
+          nightsPerStop: { type: "number", description: "nights in each place; default the trip style's nights a place (only when the traveller says otherwise for this trip)" },
           nightsPerStopMax: { type: "number", description: "with nightsPerStop, the top of the range a stop may run (the cheapest day wins)" },
           mustInclude: { type: "array", items: { type: "string" }, description: "cities the chain must pass through, names or codes, up to 8" },
           maxFlightHours: { type: "number", description: "the longest any flight may take, 1 to 40 hours door to door" },
@@ -1441,7 +1559,9 @@ export function atlasTools(ctx: AgentContext) {
           stopover: { type: "boolean", description: "allow a hub night on the way home, default true" },
           tradeoff: { type: "string", enum: ["price", "balanced", "comfort"] },
           noHubs: { type: "boolean", description: "fly only from the traveller's own airports" },
-          variants: { type: "number", description: "1 (default), 2 or 3 ranked variants (balanced, price first, comfort first); 2 at most past 28 nights" },
+          variants: { type: "number", description: "1 (default), 2 or 3 ranked variants (balanced, price first, comfort first) built by the classic engine; 2 at most past 28 nights" },
+          engine: { type: "string", enum: ["walk", "classic"], description: "walk (default): the graph walk, the cheapest hops by plane, train or coach; classic: the older greedy chain by country, only when the traveller asks for it" },
+          avoid: { type: "array", items: { type: "string" }, description: "countries or cities never to stop in (ISO2, names, like:DE or a group word), added to the trip style's avoid list; [] lifts that list for this trip" },
           ...BEEN_PROPS,
         },
         required: ["region"],
@@ -1486,8 +1606,62 @@ export function atlasTools(ctx: AgentContext) {
         const startFrom = strList(a.startFrom, 3, 3).map((x) => x.toUpperCase()).filter((x) => /^[A-Z]{3}$/.test(x));
         const maxFlightHours = Number.isFinite(a.maxFlightHours) && a.maxFlightHours! > 0 ? Math.min(40, Math.max(1, Math.round(a.maxFlightHours!))) : undefined;
         const wishes = typeof a.wishes === "string" && a.wishes.trim() ? a.wishes.trim().slice(0, 300) : undefined;
-        const nightsPerStopMax = Number.isFinite(a.nightsPerStopMax) && a.nightsPerStop && a.nightsPerStopMax! > a.nightsPerStop ? Math.round(a.nightsPerStopMax!) : undefined;
-        const extras = { ...(mustInclude.length ? { mustInclude } : {}), ...(startFrom.length ? { startFrom } : {}), ...(maxFlightHours ? { maxFlightHours } : {}), ...(wishes ? { wishes } : {}), ...(nightsPerStopMax ? { nightsPerStopMax } : {}) };
+        // The engine: the graph walk unless the traveller asked for the classic chain; ranked variants are the
+        // classic engine's (the walk ranks its own loops and returns the others as alternatives).
+        const engine: "walk" | "classic" = a.engine === "classic" || (a.variants ?? 1) > 1 ? "classic" : "walk";
+        // The trip style's defaults (lib/prefs.ts), each only where the input leaves it out, and each named in
+        // the answer's tripStyle line so the model can say what it assumed.
+        const fromStyle: string[] = [];
+        const npsGiven = Number.isFinite(a.nightsPerStop) && a.nightsPerStop! > 0;
+        const npsTop = npsGiven && Number.isFinite(a.nightsPerStopMax) && a.nightsPerStopMax! > a.nightsPerStop! ? Math.round(a.nightsPerStopMax!) : undefined;
+        // The style's nights a place fill the trip only when its stops can: 16 stops at the most a place (the walk's
+        // cap; the classic chain's is 16 at three nights or less) must reach the nights, else the engine's own
+        // longer stays are kept and the answer says why. Both engines take them, the way the Wild tab sends them
+        // (its classic toggle sends nightsPerStop=2-3 too), so the chat and the tab key the same trip.
+        const styleFits = prefs.nightsPerPlace[1] * 16 >= nights;
+        const nightsPerStop = npsGiven ? Math.round(a.nightsPerStop!) : styleFits ? prefs.nightsPerPlace[0] : undefined;
+        const nightsPerStopMax = npsGiven ? npsTop : styleFits && prefs.nightsPerPlace[1] > prefs.nightsPerPlace[0] ? prefs.nightsPerPlace[1] : undefined;
+        if (!npsGiven) fromStyle.push(styleFits ? `${styleNights()} nights a place` : `not the ${styleNights()} nights a place (${nights} nights do not fit in 16 stops), the engine's longer stays instead`);
+        // The style's tradeoff is said only when it is not the default (money first), the same
+        // rule customKey uses, so the chat and the Wild tab still key the same stored trip.
+        const tradeoff: Tradeoff | undefined = a.tradeoff ?? (prefs.tradeoff !== "price" ? prefs.tradeoff : undefined);
+        if (!a.tradeoff && tradeoff) fromStyle.push(`the ${tradeoff} tradeoff`);
+        const flightCap = maxFlightHours ?? prefs.maxFlightHours;
+        if (!maxFlightHours && flightCap) fromStyle.push(`flights under ${flightCap} h`);
+        // Avoid: the traveller's words this time added to the style's list ([] lifts the style's list). The walk
+        // reads the words (groups, like:DE, cities); the classic chain takes them as countries it never stops in.
+        const avoidLifted = Array.isArray(a.avoid) && !a.avoid.length;
+        const avoid = avoidLifted ? [] : [...new Set([...strList(a.avoid, 12, 40), ...prefs.avoid])];
+        if (!avoidLifted && prefs.avoid.length) fromStyle.push(`avoiding ${prefs.avoid.join(", ")}`);
+        // Taste: "unique" rides in the wishes, which the walk reads as its style and the judge reads too.
+        // The words, the test and the join are /api/wild's own (UNIQUE_WISHES, ", "), so the wishes hash in the stored
+        // trip's key matches the Wild tab's and a loop built in either place answers the other.
+        const unique = prefs.taste === "unique" && !/unique|hidden gem|off the beaten/i.test(wishes ?? "");
+        if (unique) fromStyle.push("unique places");
+        const wishesNow = unique ? [wishes, UNIQUE_WISHES].filter(Boolean).join(", ").slice(0, 300) : wishes;
+        const engineExclude = engine === "classic" && avoid.length ? cleanCodes([...exclude, ...avoidCountries(avoid)]) : exclude;
+        const extras = { ...(mustInclude.length ? { mustInclude } : {}), ...(startFrom.length ? { startFrom } : {}), ...(flightCap ? { maxFlightHours: flightCap } : {}), ...(wishesNow ? { wishes: wishesNow } : {}), ...(nightsPerStopMax ? { nightsPerStopMax } : {}) };
+        // Trains and coaches off in the style: both engines take no ground hops between places.
+        const groundOff = !prefs.groundOk;
+        if (groundOff) fromStyle.push("no trains or coaches");
+        // The walk's search budget is its own (about two a stop, forty at most); it is handed over only when the turn
+        // has less than that left. Such a walk is served but never stored, so the stored trip under the key is always
+        // a full one and the key stays the one /api/wild and plan_days read (no budget token in it).
+        // The walk's own budget for these nights is lib/graph-walk.ts autoBudget: two a stop plus two, twelve at least,
+        // forty at most, for as many stops as the nights (plus the one of slack wildByWalk allows) hold at the fewest
+        // nights a stop. The turn's leftover is handed over only when it is below that, so a short turn never lets the
+        // walk spend more than it would on its own, and a build with its full budget is always stored.
+        const walkStops = nightsPerStop ? Math.min(16, a.maxStops && a.maxStops > 0 ? Math.round(a.maxStops) : 16, Math.ceil((nights + 1) / nightsPerStop)) : 16;
+        const walkAuto = Math.min(WALK_SEARCHES_MAX, Math.max(WALK_SEARCHES, 2 * walkStops + 2));
+        const walkBudget = engine === "walk" && searchesLeft() < walkAuto ? searchesLeft() : undefined;
+        /** The stored trip's key suffix for the engine (lib/wild-walk.ts engineKeySuffix, the scheme /api/wild and
+         * /api/plan use): the walk's trips never answer for a classic chain and the other way round; classic keeps
+         * the keys it always had, so the trips stored before still answer; the walk's avoid words and a ground limit
+         * each get their token. */
+        // Ranked variants are stored by lib/wild-variants.ts under customKey alone (no suffix), so their keys take none:
+        // a "-g0" here would point plan_days at files that never exist and rebuild on every ask.
+        const variantsAsked = (a.variants ?? 1) > 1;
+        const engineTag = variantsAsked ? "" : engineKeySuffix({ engine, avoid: engine === "walk" ? avoid : [], ...(groundOff ? { ground: 0 } : {}) });
         const summarise = (trip: WildTrip) => ({
           title: trip.title,
           dates: `${trip.outDate} to ${trip.backDate}`,
@@ -1501,18 +1675,18 @@ export function atlasTools(ctx: AgentContext) {
         // trip was written under, window and been list included (lib/wild.ts customKey takes
         // from, to and exclude), which is also what lib/wild-variants.ts keys each ranked
         // version on. A build with countries excluded never answers for a plain one.
-        const keyOf = (tradeoff?: Tradeoff, noHubs?: boolean) => ({ region: a.region, nights, style, budget, month, custom: customKey(countries, prefer, a.maxStops, a.nightsPerStop, tradeoff, noHubs, from, to, exclude.length ? exclude : undefined, extras) });
+        const keyOf = (tradeoff?: Tradeoff, noHubs?: boolean) => ({ region: a.region, nights, style, budget, month, custom: customKey(countries, prefer, a.maxStops, nightsPerStop, tradeoff, noHubs, from, to, engineExclude.length ? engineExclude : undefined, extras) + engineTag });
         /** The key of the undated copy of the same loop (no month, no window), when that is
          * what answers: its month is the literal "next" so plan_days reads the file it was
          * stored under (wildPath writes "next" for no month) whatever month the app has
          * selected, and never the dated path, where no such trip exists. */
-        const undatedKeyOf = (tradeoff?: Tradeoff, noHubs?: boolean) => ({ region: a.region, nights, style, budget, month: "next", custom: customKey(countries, prefer, a.maxStops, a.nightsPerStop, tradeoff, noHubs, undefined, undefined, exclude.length ? exclude : undefined, extras) });
+        const undatedKeyOf = (tradeoff?: Tradeoff, noHubs?: boolean) => ({ region: a.region, nights, style, budget, month: "next", custom: customKey(countries, prefer, a.maxStops, nightsPerStop, tradeoff, noHubs, undefined, undefined, engineExclude.length ? engineExclude : undefined, extras) + engineTag });
         const gw = mainGateway(gateways);
         // The engine's deadline sits a little before the race fires: past it the chain stops
         // growing and the way home is searched from the stops found, so a time-capped turn
         // gets a whole (shorter) loop back instead of only a stored copy or a note.
         const deadline = Date.now() + WILD_BUILD_MS - DEADLINE_MARGIN_MS;
-        const params = { gateways, home: ctx.home, region: a.region, month, from, to, nights, style, budget, origin: ctx.origin, stopover: a.stopover, countries, prefer, maxStops: a.maxStops, nightsPerStop: a.nightsPerStop, exclude, deadline, ...extras };
+        const params = { gateways, home: ctx.home, region: a.region, month, from, to, nights, style, budget, origin: ctx.origin, stopover: a.stopover, countries, prefer, maxStops: a.maxStops, nightsPerStop, exclude: engineExclude, deadline, ...(groundOff ? { maxGroundMin: 0 } : {}), ...extras };
         /** The loop came back after its deadline: it was closed early, and the answer says so. */
         const cutShort = (trip: WildTrip): { partial?: true; note?: string } => (Date.now() > deadline && Date.parse(trip.generatedAt) > deadline ? { partial: true, note: `the build reached its time cap, so the loop was closed from the stops found by then and may be shorter than asked; ask again in two minutes for a fuller one` } : {});
         /** A refusal the engine states in a plain sentence (a must city on the been list, too
@@ -1541,8 +1715,8 @@ export function atlasTools(ctx: AgentContext) {
         const keyOfCopy = (dated: boolean, tradeoff?: Tradeoff, noHubs?: boolean) => (dated ? keyOf(tradeoff, noHubs) : undatedKeyOf(tradeoff, noHubs));
         const partial = async (reason: string, tradeoff?: Tradeoff, noHubs?: boolean, searched = 0) => {
           const got = await storedAnyAge(tradeoff, noHubs);
-          if (got) return { ...summarise(got.trip), ...corrected, ...excludedSummary(exclude, [], a.exclude), searched, source: "stored" as Source, ...(got.dated ? {} : { undated: true }), note: `${reason}; this is the ${got.dated ? "same" : "undated"} loop built ${Math.round(got.ageHours)} hours ago, from the store${got.dated ? "" : " (built for no particular dates, so its days are not the ones asked)"}${liveOff() ? `; ${RATE_NOTE}` : ""}`, key: keyOfCopy(got.dated, tradeoff, noHubs), raw: got.trip };
-          return { ...corrected, ...excludedSummary(exclude, [], a.exclude), searched, source: "none" as Source, note: `${reason}; no version of this loop is stored yet${liveOff() ? `. ${RATE_NOTE}; offer to build it in a few minutes` : ". Offer to ask again in two minutes: the build goes on in the background and is stored when done"}`, key: keyOf(tradeoff, noHubs) };
+          if (got) return { ...summarise(got.trip), ...corrected, ...excludedSummary(exclude, [], a.exclude), ...styleLine(fromStyle), engine, searched, source: "stored" as Source, ...(got.dated ? {} : { undated: true }), note: `${reason}; this is the ${got.dated ? "same" : "undated"} loop built ${Math.round(got.ageHours)} hours ago, from the store${got.dated ? "" : " (built for no particular dates, so its days are not the ones asked)"}${liveOff() ? `; ${RATE_NOTE}` : ""}`, key: keyOfCopy(got.dated, tradeoff, noHubs), raw: got.trip };
+          return { ...corrected, ...excludedSummary(exclude, [], a.exclude), ...styleLine(fromStyle), engine, searched, source: "none" as Source, note: `${reason}; no version of this loop is stored yet${liveOff() ? `. ${RATE_NOTE}; offer to build it in a few minutes` : ". Offer to ask again in two minutes: the build goes on in the background and is stored when done"}`, key: keyOf(tradeoff, noHubs) };
         };
         if ((a.variants ?? 1) > 1) {
           // The engine builds and ranks the versions (dated windows included, each stored under
@@ -1609,27 +1783,32 @@ export function atlasTools(ctx: AgentContext) {
           const cut = ranked.map((t) => ({ variant: t.variant, ...cutShort(t) })).find((c) => c.partial);
           const fewer = ranked.length < wanted ? `${ranked.length} of ${wanted} versions could be built` : "";
           const cutNote = cut?.note ? `${cut.variant}: ${cut.note}` : "";
-          return { ...corrected, ...excludedSummary(exclude, [], a.exclude), searched: spent, source: (spent ? "live" : "stored") as Source, ...(cut?.partial ? { partial: true } : {}), ...(fewer || cutNote ? { note: [fewer, cutNote].filter(Boolean).join("; ") } : {}), ranked: ranked.map((t) => ({ rank: t.rank, variant: t.variant, score: t.score, key: variantKey(t.variant), ...summarise(t) })), key: variantKey(ranked[0].variant), raw: ranked[0] };
+          return { ...corrected, ...excludedSummary(exclude, [], a.exclude), ...styleLine(fromStyle), engine, searched: spent, source: (spent ? "live" : "stored") as Source, ...(cut?.partial ? { partial: true } : {}), ...(fewer || cutNote ? { note: [fewer, cutNote].filter(Boolean).join("; ") } : {}), ranked: ranked.map((t) => ({ rank: t.rank, variant: t.variant, score: t.score, key: variantKey(t.variant), ...summarise(t) })), key: variantKey(ranked[0].variant), raw: ranked[0] };
         }
-        const key = keyOf(a.tradeoff, a.noHubs);
-        const path = pathOf(a.tradeoff, a.noHubs);
+        const key = keyOf(tradeoff, a.noHubs);
+        const path = pathOf(tradeoff, a.noHubs);
         const stored = await readJson<WildTrip>(path).catch(() => null);
         let trip = stored && stored.ageHours < 24 ? stored.body : null;
         let spent = 0;
         if (!trip) {
           // The budget is checked only once a build is really needed: a stored trip is free.
-          if (liveOff()) return partial(kiwiThrottled() ? "Kiwi is throttling this address for a few minutes, so the loop could not be built" : "today's live search budget is spent, so the loop could not be built", a.tradeoff, a.noHubs);
+          if (liveOff()) return partial(kiwiThrottled() ? "Kiwi is throttling this address for a few minutes, so the loop could not be built" : "today's live search budget is spent, so the loop could not be built", tradeoff, a.noHubs);
           const over = exhausted();
-          if (over) return partial(over.error, a.tradeoff, a.noHubs);
+          if (over) return partial(over.error, tradeoff, a.noHubs);
           // The build is capped in time: the engine closes the loop at its deadline, and a
           // build still running at the race goes on in the background and is stored with its
-          // verdict, so the next ask is served from the store.
-          trace("buildWild", { ...params, tradeoff: a.tradeoff, noHubs: a.noHubs });
-          const building = buildWild({ ...params, tradeoff: a.tradeoff, noHubs: a.noHubs }).then(async (built) => {
+          // verdict, so the next ask is served from the store. The walk engine (lib/wild-walk.ts)
+          // takes the avoid words (and the searches the turn has left, when that is short) on top
+          // of the wild parameters; it judges the loop itself, the classic chain is judged here.
+          const walkExtra = { ...(avoid.length ? { avoid } : {}), ...(walkBudget != null ? { searchBudget: walkBudget } : {}) };
+          trace(engine === "walk" ? "wildByWalk" : "buildWild", { ...params, tradeoff, noHubs: a.noHubs, ...(engine === "walk" ? walkExtra : {}) });
+          const run = engine === "walk" ? wildByWalk({ ...params, tradeoff, noHubs: a.noHubs, ...walkExtra }) : buildWild({ ...params, tradeoff, noHubs: a.noHubs });
+          const building = run.then(async (built) => {
             if (!built) return null;
-            const judge = await judgeTrip(built).catch(() => null);
+            const judge = built.judge ?? (await judgeTrip(built).catch(() => null));
             const full: WildTrip = { ...built, judge: judge ?? undefined };
-            await writeJson(path, full).catch(() => null);
+            // A walk on a short budget is this turn's answer only; the store keeps full builds.
+            if (walkBudget == null) await writeJson(path, full).catch(() => null);
             return full;
           });
           // undefined means the clock won, null means the engine found no way in.
@@ -1637,19 +1816,19 @@ export function atlasTools(ctx: AgentContext) {
           try {
             built = await Promise.race([building, sleep(WILD_BUILD_MS).then(() => undefined)]);
           } catch (err) {
-            return refusal(err, a.tradeoff, a.noHubs);
+            return refusal(err, tradeoff, a.noHubs);
           }
           if (built === undefined) {
             void building.catch(() => null);
-            return partial(`the build did not finish in ${Math.round(WILD_BUILD_MS / 1000)} seconds`, a.tradeoff, a.noHubs);
+            return partial(`the build did not finish in ${Math.round(WILD_BUILD_MS / 1000)} seconds`, tradeoff, a.noHubs);
           }
-          if (!built) return partial(liveOff() ? "every live search was refused" : "no way into that region on those dates from here; try another month or region", a.tradeoff, a.noHubs);
+          if (!built) return partial(liveOff() ? "every live search was refused" : "no way into that region on those dates from here; try another month or region", tradeoff, a.noHubs);
           spent = built.searched ?? 0;
           spend(spent);
           trip = built;
         }
         const cut = spent ? cutShort(trip) : {};
-        return { ...summarise(trip), ...corrected, ...excludedSummary(exclude, [], a.exclude), searched: spent, source: (spent ? "live" : "stored") as Source, ...(cut.partial ? { partial: true, note: cut.note } : spent ? {} : { note: `served from the store (built ${Math.round(stored?.ageHours ?? 0)} hours ago, no search spent)` }), key, raw: trip };
+        return { ...summarise(trip), ...corrected, ...excludedSummary(exclude, [], a.exclude), ...styleLine(fromStyle), engine, searched: spent, source: (spent ? "live" : "stored") as Source, ...(cut.partial ? { partial: true, note: cut.note } : spent ? {} : { note: `served from the store (built ${Math.round(stored?.ageHours ?? 0)} hours ago, no search spent)` }), key, raw: trip };
       }),
       toModelOutput: withoutRaw,
     }),
@@ -1771,8 +1950,8 @@ export function atlasTools(ctx: AgentContext) {
               required: ["name", "origins", "available"],
             },
           },
-          minNights: { type: "number", description: "default 2" },
-          maxNights: { type: "number", description: "default 4 for a weekend" },
+          minNights: { type: "number", description: "default 2 (or the trip style's nights a place when the traveller changed it)" },
+          maxNights: { type: "number", description: "default 4 for a weekend (or the trip style's nights a place when the traveller changed it)" },
           where: { type: "string", description: "a city, a country or a region to meet in, or a comma list of country names ('Portugal, Spain'); omit for anywhere" },
           direct: { type: "boolean" },
           budgetPerPerson: { type: "number", description: "euros a person at most; options where anyone pays more are dropped and the answer says how many" },
@@ -1812,8 +1991,9 @@ export function atlasTools(ctx: AgentContext) {
         const bad = members.find((m) => !m.available.length);
         if (bad) return { error: `${bad.name} has no dates (YYYY-MM-DD from and to)${corrections.length ? `; ${corrections.join("; ")}` : ""}` };
         const corrected = corrections.length ? { corrected: corrections.join("; ") } : {};
-        const minNights = Math.max(1, Math.round(a.minNights ?? 2));
-        const maxNights = Math.max(minNights, Math.round(a.maxNights ?? 4));
+        // The trip style's nights a place, only when the traveller changed them (a group meets in one place).
+        const minNights = Math.max(1, Math.round(a.minNights ?? (nightsStyled ? prefs.nightsPerPlace[0] : 2)));
+        const maxNights = Math.max(minNights, Math.round(a.maxNights ?? (nightsStyled ? prefs.nightsPerPlace[1] : 4)));
         // The engine prices every target for every airport group for three windows, so the
         // country list is capped: four, or two once the group flies from more than two places.
         const groups = new Set(members.map((m) => [...m.origins].sort().join(","))).size;
@@ -2179,7 +2359,8 @@ export function atlasTools(ctx: AgentContext) {
           if (err instanceof ItineraryInputError) return plain(`${err.message}; name the nearest city instead`);
           throw err;
         }
-        const pace: Pace = (["slow", "balanced", "packed"] as Pace[]).includes(a.pace as Pace) ? a.pace! : "balanced";
+        // The trip style's pace when the traveller said none for this plan.
+        const pace: Pace = (["slow", "balanced", "packed"] as Pace[]).includes(a.pace as Pace) ? a.pace! : prefs.pace;
         const tier: BudgetTier = (["backpacker", "mid", "comfort"] as BudgetTier[]).includes(a.budget as BudgetTier) ? a.budget! : "mid";
         const wishes = typeof a.wishes === "string" && a.wishes.trim() ? a.wishes.trim().slice(0, 300) : undefined;
         // The engine's own clock ends a few seconds before ours, so it closes the days it has;
@@ -2446,7 +2627,22 @@ export function chatContext(c: Record<string, unknown> | undefined): AgentContex
   const rawBeen = raw.been && typeof raw.been === "object" ? (raw.been as Partial<BeenPrefs>) : undefined;
   const beenCodes = rawBeen ? cleanCodes(rawBeen.countries) : [];
   const been: BeenPrefs | undefined = beenCodes.length ? { countries: beenCodes, newOnly: rawBeen?.newOnly === true } : undefined;
-  return { origin, gateways, home, month, today, budget: { used: 0, max: TURN_SEARCH_BUDGET }, been, exclude: excludedCountries(been), recent: new Map() };
+  // The trip style, clamped field by field (chatPrefs); like the Been list it lives in the
+  // traveller's browser and rides along with each turn.
+  const prefs = chatPrefs(raw.prefs);
+  return { origin, gateways, home, month, today, budget: { used: 0, max: TURN_SEARCH_BUDGET }, been, exclude: excludedCountries(been), ...(prefs ? { prefs } : {}), recent: new Map() };
+}
+
+/**
+ * The trip style paragraph of the system prompt: the traveller's own settings in one sentence
+ * (lib/prefs.ts prefsLine) and the rule that they are every tool's defaults, so the model
+ * passes them on and only a word in the message changes them, for that trip only.
+ */
+function prefsRule(prefs: Prefs | undefined): string {
+  const p = prefs ?? DEFAULT_PREFS;
+  const nights = p.nightsPerPlace[0] === p.nightsPerPlace[1] ? `${p.nightsPerPlace[0]}` : `${p.nightsPerPlace[0]} to ${p.nightsPerPlace[1]}`;
+  const set = prefs && !sameAsDefault(prefs) ? "They set it themselves in the app." : "These are the app's defaults; the traveller has not changed them.";
+  return `${prefsLine(p)} ${set} These are the defaults of every tool: walk_trips and wild_trip stay ${nights} nights in each place (nightsPerStop), use the ${p.tradeoff} tradeoff${p.taste === "unique" ? ", the style unique (hidden gems, smaller places)" : ""}${p.avoid.length ? `, and avoid ${p.avoid.join(", ")}` : ""}${p.maxFlightHours ? `; no flight longer than ${p.maxFlightHours} hours` : ""}${p.groundOk ? "" : "; no trains or coaches between places"}. The tools apply them on their own when you leave those inputs out, so leave them out unless the message says otherwise. A message that says otherwise wins for that trip only ("3 to 4 nights in each this time" is nightsPerStop 3, nightsPerStopMax 4 for this search; the next trip goes back to the style). When the traveller asks to change their style for good, say it is the Trip style button (or /style in the command line) in one line.`;
 }
 
 /** The system prompt for one turn: who the traveller is, the rules, the defaults, the tools' etiquette. */
@@ -2469,6 +2665,8 @@ export function chatSystem(ctx: AgentContext): string {
   return `You are Atlas, a travel agent in a chat, and you act before you ask. Today is ${today} (${monthLong(today)}). The traveller is in ${origin?.label ?? "an unknown place"}, home country ${COUNTRIES[home]?.name ?? home} (passport ${home}). Their airports: ${airports.join("; ") || "unknown"}. The airports searched nightly: ${mainAirports}.${month ? ` They have the month ${month} selected in the app.` : ""}
 
 ${beenRule}
+
+${prefsRule(ctx.prefs)}
 
 The rule that matters most: when something is unsaid, assume the sensible default, state the assumption in one line, search, show results, and only then ask at most ONE question, always through the ask tool (a widget), never as prose. Never ask two things. Never answer about prices without a tool result from this turn. Never say "no deals in the data" without a live search.
 

@@ -10,6 +10,22 @@ export type FinderQuery = { origins: string[]; from: string; to: string; include
 export type FinderState = { status: "idle" | "loading" | "ok" | "error"; query?: FinderQuery; deals: Deal[]; lines: string[]; note?: string; searched?: number };
 
 const WHERE = ["anywhere", "Europe", "Asia", "Africa", "North America", "South America"];
+const regionNames = (() => {
+  try {
+    return new Intl.DisplayNames(["en"], { type: "region" });
+  } catch {
+    return null;
+  }
+})();
+/** "Romania" for RO; the code itself when the browser has no names. */
+const countryName = (cc: string | undefined) => {
+  if (!cc) return "your country";
+  try {
+    return regionNames?.of(cc) ?? cc;
+  } catch {
+    return cc;
+  }
+};
 // Date inputs speak the visitor's calendar: local date parts, never the UTC day.
 const iso = localIso;
 
@@ -30,6 +46,8 @@ export default function FinderForm({ gateways, defaults, state, onSearch, onClea
   const [country, setCountry] = useState("");
   const [exhaustive, setExhaustive] = useState(false);
   const chosen = origins.length ? origins : defaults;
+  // The way home may land at any airport of the country the first chosen airport is in.
+  const homeCountry = countryName(gateways.find((g) => g.airport.iata === chosen[0])?.airport.country ?? gateways[0]?.airport.country);
   const toggle = (list: string[], set: (v: string[]) => void, code: string, fallback: string[]) => {
     const base = list.length ? list : fallback;
     set(base.includes(code) ? base.filter((x) => x !== code) : [...base, code]);
@@ -39,7 +57,7 @@ export default function FinderForm({ gateways, defaults, state, onSearch, onClea
     return (
       <div className="chips">
         <button className="chip ghost" onClick={() => setOpen(true)}>
-          Custom search: a period, a date to include, your airports, open-jaw
+          Custom search: a period, a date to include, one city or two, home to any airport near you
         </button>
       </div>
     );
@@ -103,7 +121,7 @@ export default function FinderForm({ gateways, defaults, state, onSearch, onClea
         ))}
       </div>
       <div className="form wrap">
-        <input className="search" style={{ flex: "1 1 160px" }} placeholder="or a country: Italy, Morocco, Japan…" value={country} onChange={(e) => setCountry(e.target.value)} />
+        <input className="search" style={{ flex: "1 1 160px" }} placeholder="or a country or a city: Italy, Milan, Japan…" value={country} onChange={(e) => setCountry(e.target.value)} />
         <button className={`chip${direct ? " on" : ""}`} onClick={() => setDirect(!direct)}>
           Direct
         </button>
@@ -116,10 +134,11 @@ export default function FinderForm({ gateways, defaults, state, onSearch, onClea
           ))}
         </select>
       </div>
-      <h2>Flying home may land at</h2>
+      <h2>Flying home</h2>
+      <div className="status muted">Home may land at any airport in {homeCountry} within about six hours of you by train, coach or road; that trip is added when it is not one of yours. These also count as yours:</div>
       <div className="chips">
         {gateways.map((g) => (
-          <button key={g.airport.iata} className={`chip ghost${returnTo.includes(g.airport.iata) || chosen.includes(g.airport.iata) ? " on" : ""}`} disabled={chosen.includes(g.airport.iata)} onClick={() => toggle(returnTo, setReturnTo, g.airport.iata, [])} title={chosen.includes(g.airport.iata) ? "already a departure airport" : "allow the return to land here (open-jaw, two tickets)"}>
+          <button key={g.airport.iata} className={`chip ghost${returnTo.includes(g.airport.iata) || chosen.includes(g.airport.iata) ? " on" : ""}`} disabled={chosen.includes(g.airport.iata)} onClick={() => toggle(returnTo, setReturnTo, g.airport.iata, [])} title={chosen.includes(g.airport.iata) ? "already a departure airport" : "count this airport as yours (no ground leg home)"}>
             {g.airport.iata}
           </button>
         ))}
@@ -128,11 +147,11 @@ export default function FinderForm({ gateways, defaults, state, onSearch, onClea
         <button className={`chip ghost${tricks ? " on" : ""}`} onClick={() => setTricks(!tricks)} title="One-way tickets that continue past the city you want, cheaper than flying there. Cabin bag only; airlines forbid it.">
           Hidden-city tricks
         </button>
-        <button className={`chip ghost${exhaustive ? " on" : ""}`} onClick={() => setExhaustive(!exhaustive)} title="Airports reachable by train or coach join your origins, and every origin airport is searched on its own">
+        <button className={`chip ghost${exhaustive ? " on" : ""}`} onClick={() => setExhaustive(!exhaustive)} title="More countries out and home, airports reachable by train or coach join your origins, and every origin airport is searched on its own">
           Exhaustive
         </button>
       </div>
-      {exhaustive && <div className="status muted">Exhaustive: airports within three hours by train or coach join your origins, and each origin airport gets its own search of the same question (a shared search only shows the cheapest origin); about five extra live searches.</div>}
+      {exhaustive && <div className="status muted">Exhaustive: 18 countries out instead of 12, the way home from 15 countries and 6 cities instead of 10 and 4, a second city by air from 4 places instead of 3, airports within three hours by train or coach join your origins, and each origin airport gets its own search (a shared search only shows the cheapest origin).</div>}
       <div className="chips">
         <button
           className="chip on"
@@ -148,7 +167,9 @@ export default function FinderForm({ gateways, defaults, state, onSearch, onClea
           Close
         </button>
       </div>
-      <div className="status muted">{exhaustive ? "About twenty-five live searches on Kiwi.com, up to a minute; more with another airport for the way home." : "About twenty live searches on Kiwi.com, half a minute; forty with another airport for the way home."}</div>
+      <div className="status muted">
+        How it searches: one-way tickets out, the cheapest way home to an airport in {homeCountry} you can reach, and for two cities either a train or coach between them when it is short or a one-way flight on from the first. {exhaustive ? "About 49 live searches on Kiwi.com at most, up to a minute." : "About 31 live searches on Kiwi.com, half a minute to a minute."} A city typed above searches return tickets to it instead.
+      </div>
     </div>
   );
 }

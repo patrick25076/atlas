@@ -3395,3 +3395,375 @@ textarea.search.wishes {
   color: var(--mint);
 }
 
+
+/* ---------- Trip style: the pill, its editor, the note on the forms (2026-10-12) ---------- */
+.stylepill .v {
+  color: var(--ink);
+}
+.stylepill .setdot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--mint);
+  box-shadow: 0 0 8px var(--mint);
+}
+.helpbtn {
+  width: 40px;
+  padding: 0;
+  justify-content: center;
+  font-weight: 700;
+  color: var(--ink-2);
+  flex: 0 0 auto;
+}
+.helpbtn:hover {
+  color: var(--ink);
+}
+.prefspop {
+  width: 360px;
+}
+.prefs {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 4px 4px 2px;
+}
+.prefs section {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.prefs h3 {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+.prefs p.status {
+  margin: 0;
+  font-size: 12.5px;
+}
+.prefs .search {
+  margin-bottom: 0;
+}
+.prefs .list {
+  display: flex;
+  flex-direction: column;
+  max-height: 200px;
+  overflow: auto;
+}
+.prefs .flag {
+  font-size: 16px;
+  line-height: 1;
+  margin-right: 7px;
+}
+.prefs .chip .x {
+  color: var(--ink-3);
+  margin-left: 2px;
+}
+.prefs .chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.prefsrow,
+.nightsrange {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 13.5px;
+}
+.stepper {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.04);
+  overflow: hidden;
+}
+.stepper button {
+  width: 32px;
+  height: 32px;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  font-size: 17px;
+  line-height: 1;
+  cursor: pointer;
+}
+.stepper button:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.08);
+}
+.stepper button:disabled {
+  color: var(--ink-3);
+  cursor: default;
+}
+.stepper b {
+  min-width: 22px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+.prefs .switch {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 4px;
+  padding: 3px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.03);
+}
+.prefs .switch button {
+  padding: 8px 6px;
+  border-radius: 9px;
+  border: 0;
+  background: transparent;
+  color: var(--ink-2);
+  font: inherit;
+  font-size: 13.5px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.prefs .switch button:hover {
+  color: var(--ink);
+}
+.prefs .switch button.on {
+  background: var(--mint);
+  color: var(--mint-ink);
+  font-weight: 650;
+}
+.prefs .switch button:focus-visible,
+.prefs .stepper button:focus-visible,
+.prefs .opt:focus-visible,
+.prefs .chip:focus-visible,
+.prefs .toggle input:focus-visible {
+  outline: 2px solid rgba(111, 240, 196, 0.6);
+  outline-offset: 1px;
+}
+.prefs .toggle {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-size: 13.5px;
+  cursor: pointer;
+}
+.prefs .toggle input {
+  width: 17px;
+  height: 17px;
+  accent-color: var(--mint);
+}
+.prefs .foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.prefs .foot .status {
+  font-size: 12.5px;
+}
+.prefs .chip:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.prefsnote {
+  font-size: 13px;
+}
+.prefsnote .linkbtn {
+  font-size: 13px;
+}
+.chips.nightsrow {
+  align-items: center;
+}
+.nightsrange .muted {
+  font-size: 12.5px;
+}
+.chip.small {
+  padding: 5px 10px;
+  font-size: 12.5px;
+}
+
+/* ---------- How Atlas works: the guide ---------- */
+.guidewrap {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 72px 16px 24px;
+  background: rgba(3, 5, 10, 0.55);
+  pointer-events: auto;
+  animation: fadein 0.16s ease-out;
+}
+.guide {
+  width: min(720px, 100%);
+  max-height: calc(100vh - 96px);
+  display: flex;
+  flex-direction: column;
+  border-radius: var(--radius);
+  border: 1px solid var(--line);
+  background: var(--glass-2);
+  backdrop-filter: blur(24px) saturate(140%);
+  -webkit-backdrop-filter: blur(24px) saturate(140%);
+  box-shadow: var(--shadow);
+  outline: none;
+  overflow: hidden;
+}
+.guide header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 18px 8px 22px;
+}
+.guide header h2 {
+  margin: 0;
+  font-size: 20px;
+  letter-spacing: -0.01em;
+}
+.guidenav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 4px 22px 12px;
+  border-bottom: 1px solid var(--line);
+}
+.guidenav a {
+  font-size: 12.5px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  color: var(--ink-2);
+  text-decoration: none;
+}
+.guidenav a:hover {
+  color: var(--ink);
+  border-color: var(--line-2);
+}
+.guidebody {
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding: 6px 22px 22px;
+}
+.guidebody section {
+  padding: 14px 0 12px;
+  border-bottom: 1px solid var(--line);
+  scroll-margin-top: 8px;
+}
+.guidebody section:last-child {
+  border-bottom: 0;
+}
+.guidebody h3 {
+  margin: 0 0 6px;
+  font-size: 15.5px;
+}
+.guidebody p {
+  margin: 0 0 8px;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--ink-2);
+}
+.guidetry {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 13.5px;
+}
+.guidetry .k {
+  font-size: 11.5px;
+  font-weight: 650;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--mint);
+}
+.guidetry .mono,
+.guidetry .linkbtn.mono {
+  font-family: var(--mono);
+  font-size: 13px;
+}
+.guidetry .linkbtn {
+  align-self: auto;
+  text-align: left;
+}
+
+/* The top bar holds one more pill and the "?": the tagline yields first on narrower desktops. */
+@media (max-width: 1400px) {
+  .brand small {
+    display: none;
+  }
+}
+@media (min-width: 721px) and (max-width: 1240px) {
+  .stylepill .k {
+    display: none;
+  }
+}
+@media (max-width: 720px) {
+  .guidewrap {
+    padding: 0;
+  }
+  .guide {
+    width: 100%;
+    max-height: none;
+    height: 100%;
+    border-radius: 0;
+  }
+  .guide header {
+    padding: 12px 12px 6px 16px;
+  }
+  .guidenav {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    padding: 4px 16px 10px;
+  }
+  .guidenav a {
+    flex: 0 0 auto;
+  }
+  .guidebody {
+    padding: 4px 16px 24px;
+  }
+  .helpbtn {
+    width: 36px;
+    height: 36px;
+  }
+  /* On a phone the pill reads "2 to 3 nights" only; the dot still says when it is not the default. */
+  .stylepill .k {
+    display: none;
+  }
+  .prefspop {
+    width: auto;
+  }
+  .prefs .switch button {
+    padding: 9px 4px;
+  }
+}
+/* The editor and the guide are read, not glanced at: a near-opaque glass, so the map under them never fights the text. */
+.prefspop,
+.guide {
+  background: rgba(12, 16, 28, 0.97);
+}
+/* A scroll container in a flex column shrinks to nothing unless told not to: the header and the section chips keep their height. */
+.guide header,
+.guidenav {
+  flex: 0 0 auto;
+}
+.guidenav {
+  scrollbar-width: none;
+}
+.guidenav::-webkit-scrollbar {
+  display: none;
+}
+@media (max-width: 720px) {
+  /* On a phone the command line is a row of its own under the pills: the editor opens below it, not over it. */
+  .pillwrap .popover.prefspop {
+    top: 100px;
+    max-height: calc(100vh - 112px);
+  }
+}
+/* Up to a wide laptop the trip style pill reads "2 to 3 nights" alone, so the command line keeps its room. */
+@media (min-width: 721px) and (max-width: 1366px) {
+  .stylepill .k {
+    display: none;
+  }
+}

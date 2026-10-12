@@ -407,6 +407,80 @@ twelve more searches, past the test's limit of ten).
 - **walkWindow** writes its notes from the window it really searched; an end in the past is
   dropped, not swapped.
 
+## The trip style in the chat, the command line and the terminal (added 2026-10-12)
+
+The owner: "I want the wild trips and stuff to be like 2-3 days per location max, can I make
+these settings, does it work with Dijkstra and all". Before, a 21-night Wild loop stayed 3 to
+6 nights a stop, the walk 2, and nothing carried the traveller's taste from one builder to
+the next. Now one setting does (lib/prefs.ts, the prefs stream: `Prefs`, `DEFAULT_PREFS` 2 to
+3 nights a place, kept in the browser, the `atlas:prefs` event), and the chat honours it:
+
+- **The context carries it.** ChatPanel sends `context.prefs` with every turn: the shell's,
+  else the one saved in this browser (`loadPrefs`), kept current by `atlas:prefs`. The route
+  believes it field by field (`chatPrefs` in lib/agent-tools.ts over `cleanPrefs`: nights 1 to
+  14 with the least first, each choice from its list, the longest flight 1 to 40 h, avoid
+  words the walk cannot read dropped, since one would refuse every walk). No object sent is
+  no style: the tools fall back to `DEFAULT_PREFS`. The panel shows the style in one line above
+  the input with a Change button (`atlas:open-prefs`, which the top bar opens).
+- **The prompt states it** (`prefsLine`) and says the rule: the style is every tool's default,
+  the tools apply it on their own when the input leaves it out, and a message that says
+  otherwise wins for that trip only ("3 to 4 nights in each this time" is nightsPerStop 3,
+  nightsPerStopMax 4 for that search). To change it for good: the Trip style button or /style.
+- **The tools take their defaults from it**, each answer saying which in `tripStyle`:
+  `walk_trips` (nights a place, tradeoff, `style: "unique"` for that taste, the avoid list
+  added to the message's own, `[]` lifting it once; `ground: ok | prefer | none` with the
+  style's "no trains or coaches" as none; the longest flight), and its stops scale with the
+  nights (`ceil(maxNights / least nights a place)`, up to 16) and its budget with the stops
+  (2 a stop plus 2, at least 12, at most 40, never past the turn), its clock ten seconds a
+  stop past three (150 s at most). `wild_trip` builds with the graph walk by default
+  (`wildByWalk`, lib/wild-walk.ts, the wild stream: a targeted search into the region, the
+  cheapest next hops, trains and coaches from the Dijkstra over the ground graph) at the
+  style's nights a place, tradeoff, longest flight, taste (as wishes) and avoid words;
+  `engine: "classic"` is the old chain (at the same nights a place, as the Wild tab's
+  classic toggle sends them, so the two key the same trip) and variants above 1 are always
+  classic. A style that cannot fill the nights in 16 stops (60 nights at 3) leaves the
+  engine's longer stays and says so. The stored key gets `engineKeySuffix` (`-walk`, the
+  avoided countries, `-g0` for flights only), the scheme /api/wild uses, except ranked
+  variants, which lib/wild-variants.ts stores under `customKey` alone. The leftover of the turn
+  is handed to the walk only when it is below the walk's own budget for the nights (2 a stop
+  plus 2, the stops being the nights plus one at the fewest nights a place); such a short walk
+  is served but not stored. Taste unique adds the wishes `unique places and hidden gems over
+  the big hubs` (`UNIQUE_WISHES`), joined with ", ", word for word what /api/wild adds, so the
+  wishes hash in the key matches the Wild tab's. `cheapest_way` caps the trip at the longest
+  flight plus three hours door to door and says which option to `lead` with by the tradeoff;
+  `make_itinerary` plans at the style's pace; `find_getaways` (which also drops deals in an
+  avoided country) and `group_trip` take its nights only when the traveller changed the
+  nights a place themselves (a changed tradeoff or avoid list leaves them alone), a getaway
+  being one place.
+- **The command line reads the same words** (`readTripStyle` in lib/command.ts, before the
+  dates and the stay): `2-3 nights per place`, `2 to 3 days each`, `max 3 nights a city`, the
+  owner's `2-3 days per location max`, `slow pace` (3 to 4) and `packed` (1 to 2) when no
+  nights are typed, `only trains between cities` (ground hops to 8 h), `flights only`,
+  `unique`. The walk command gains `pace` and `ground`, the wild command `nightsPerStop`,
+  `style`, `pace` and `ground`; `ground` is minutes (480 for trains between places, 0 for
+  flights only) because the shell copies the walk command's fields into /api/walk as they are.
+  The style words are taken out of the line only for loops, wild lines, nights a place, a pace
+  or trains (`Brasov to Vienna by train only` is a route; `cheap flights only to Spain in
+  november` stays getaways). `/style` (`/prefs`, `/settings`, "trip style") is the kind
+  `prefs` and `/help` ("help", "how does this work") the kind `help`, only for the words the
+  command bar opens by itself, because the shell's runCommand has no case for either kind yet;
+  "what can you do" and "open my trip style" are questions for the chat. `walkCommandQuery`
+  takes the style as its last argument.
+- **The terminal** takes the style as flags over the same defaults (`--nights-per-place 2-3
+  --taste unique --tradeoff price --avoid dach --pace --max-flight-hours --no-ground`), `atlas
+  style` prints it, `atlas wild sea 14 nights` builds with the walk (`--engine classic` for the
+  old chain) and checks its cost (about 2 a stop plus 4) against the cap.
+
+Tested 2026-10-12 with no Kiwi search: the harness's command section (21 new lines),
+dispatch (the style filling a walk query, the line winning) and the new prefs section (the
+clamps, the prompt, the defaults reaching walk_trips, wild_trip on both engines,
+cheapest_way, group_trip and find_getaways, all through the trace or a spent budget). The
+route itself was posted in-process with `CHAT_TURN_SEARCHES=0` and `context.prefs` 2 to 3:
+"two weeks in the Balkans, cheapest" called wild_trip (the walk engine, the key
+`n2-3...-walk`, `tripStyle: 2 to 3 nights a place`), a 10 night loop called walk_trips with
+`nightsPerStop 2-3` and 5 stops. Not done through curl: the one dev server allowed per folder
+belonged to another session, with no turn cap.
+
 ## What cannot be guaranteed
 
 - **Kiwi's throttle.** The public search has no key, no SLA and no published terms. After a

@@ -71,20 +71,24 @@ train, Gdańsk to another city, then back to Brașov, Sibiu or Otopeni.
   new country, +25 for a non-hub after a hub, +40 for a preferred country, +150 for a must
   city, and the style words' tilt (`wishTilt`). Been countries, avoided countries and cities,
   countries under a full travel warning and the home country are never a stop.
-- **Allowed countries** (Wild's region): stops keep to them from depth 2; the way in may land
-  in a hub (60+ destinations) outside them, so a cheap far-away entry through a hub stays
-  possible.
+- **Allowed countries** (Wild's region, `allowedCountries` or `region`): every stop is in one of
+  them, and the flight hops are targeted (see "Far regions" below). Until 2026-10-12 the way in
+  could land in a hub outside them, because an "anywhere" search from home rarely reached the
+  region; the targeted way in reaches it directly, so that exception is gone.
 - **Taste, diversity and the lookahead** (2026-10-10, night): see the section of that name
   below. In short: an easy train or coach is charged at three quarters of the hour value, the
   beam keeps one city per slot plus at least one overland and one flying branch, the
   heuristic looks one free ground hop ahead, `style=unique` weights hidden gems up and the
   biggest hubs down, and `avoid` takes country groups ("dach", "like:DE").
 - **Beam**: depth by depth. Every open state of a depth is sorted by cost plus heuristic and
-  the best `beam` are expanded (default 3), depth up to `maxStops` (default 3). Depth by
-  depth rather than one global queue, so a cheap deep branch cannot take the slots of a
-  sibling that was not looked at yet. Searches worst case: 1 + beam x maxStops for the
-  "anywhere" hops plus one home search per expanded state that can go home; 10 for the
-  owner's case (beam 2, 3 stops).
+  the best `beam` are expanded (default 3), depth up to `maxStops` (default and ceiling
+  ceil(maxNights / the fewest nights a stop), at most 16). Depth by depth rather than one global
+  queue, so a cheap deep branch cannot take the slots of a sibling that was not looked at yet.
+  The states of a depth are expanded side by side (their searches share Kiwi's gate, six at a
+  time), each search reserved from the budget before it starts. The budget defaults to about two
+  searches a stop plus the way in and home (2 x maxStops + 2, never under 12, at most 40), and
+  the beam narrows when the searches left only just cover the cheapest branch's way to a closed
+  loop (see "Far regions").
 - **Stops**: at the budget (no more live searches; the walk finishes from memory and ground),
   at the deadline (default 90 s, one search never held longer than 35 s), when the caller's
   `signal` aborts (the route passes the request's; a closed tab spends no more searches), or
@@ -109,9 +113,11 @@ train, Gdańsk to another city, then back to Brașov, Sibiu or Otopeni.
 ## The route: `GET /api/walk`
 
 `g=GHV,SBZ,OTP&home=RO&lat=45.657&lon=25.601&label=Brasov&from=2026-10-20&to=2026-10-30&minNights=5&maxNights=6`
-plus `nightsPerStop` (2 or 2-3), `maxStops`, `beam`, `budget` (default 12, cap 30),
-`ground` (minutes, default 330), `tradeoff`, `exclude` (Been, ISO2), `mustInclude`, `avoid` (countries or
-cities, codes or names), `prefer`, `countries` (allowed), `style`. Validated with
+plus `nightsPerStop` (2 or 2-3), `maxStops` (1 to 16, default scales with the nights), `beam`, `budget`
+(default about two a stop plus the way in and home, never under 12, cap 40), `ground` (minutes, default
+330, 0 for flights only), `tradeoff`, `exclude` (Been, ISO2), `mustInclude`, `avoid` (countries or
+cities, codes or names; a country's exact name wins over a city of the same name, so Singapore or Malta
+avoids the country), `prefer`, `countries` (allowed), `region` (a `lib/wild.ts` REGIONS key), `style`. Validated with
 `lib/params.ts`; a bad value is a 400 `{error}`. NDJSON lines `{node}`, `{edge}`, `{loop}`,
 `{progress}` and a final `{done: WalkResult}`, kept alive every 15 s, `maxDuration` 120. An
 answer is kept for an hour per normalised question and served as one `{done}` line; two
@@ -254,12 +260,95 @@ in score units (the sections above). Measured after the fix, all on the same mem
 - A chat tool `walk_trips` ("find me a loop from here, 6 days, 2 days a city, not Germany"):
   call `walkTrips` with the visitor's gateways, point and label, `avoid` for the "not X" words,
   `mustInclude` for named cities; read `loops[].why` and `note`.
-- Wild loops: `allowedCountries` = the region's countries, `maxStops` up to 6, `tradeoff`.
+- Wild loops: wired 2026-10-12 as `lib/wild-walk.ts wildByWalk`, the default engine of `/api/wild`
+  (see "Far regions" below).
 - Short loops: `maxGroundMin` 5 to 12 h, `maxStops` 2 to 3, tradeoff `price`.
 - The globe: while a walk runs, every `{edge}` is a faint arc from the expanded node (`from` is
   a city code or `HOME`; `lat`/`lon` are the far end), the `{node}` lines pulse, a `chosen`
   edge brightens, a `{loop}` draws the closed loop; the panel shows the beam as a tree (city,
   cost so far, date).
+
+## Far regions, nights a stop and the Wild engine (2026-10-12)
+
+The owner: "I want the wild trips and stuff to be like 2-3 days per location max, can I make these
+settings, does it work with Dijkstra and all". Before this, a 21-night Wild loop stayed 3 to 6 nights a
+stop (long trips 8 to 12), the walk's default was 2 a stop, and the walk could not reach Southeast Asia
+from Brasov: its first hop asked "anywhere", and the fifteen cheapest places from Brasov are all European.
+
+- **Targeted hops.** With a region (`region`, or `allowedCountries`) the way in is one search from the
+  home airports to the region's biggest hubs, and every later flight hop one search to the hubs of the
+  countries not seen yet: the biggest city of each such country first, six cities at the most, every
+  airport of each, as one comma list. Kiwi answers a comma list of country names with nothing (measured:
+  "Thailand,Vietnam,...,Laos" from GHV,SBZ,OTP, 0 results in 265 ms), while airport lists work (the way
+  home has always used one). A stop whose memory already holds six usable destinations skips its search.
+- **Revisits.** When the trip needs more stops than the region has usable countries (each stop at its
+  most nights), a flight may land in a country already seen; never in a city already seen. Otherwise a
+  region walk holds at most two cities a country (a train from Warsaw to Gdansk is still fine): the
+  first live Southeast Asia walk went Kuala Lumpur, Ipoh, Penang and Alor Setar by rail, because rail
+  hops cost no search and a few euros, and left Malaysia only for its last stop.
+- **Nights a stop.** A range is honoured exactly: every stop leaves inside [arrive + min, arrive + max],
+  the last stop flies home inside its own range. A pair with equal ends is exact too (`[2, 2]`, or `2` in a
+  query, is two nights, never three: the trip style's "at most 2 a place"); only a bare number passed to the
+  engine (and the default 2) keeps one day of slack. The classic chain reads `nightsPerStopMax` the same way,
+  and the stored key writes an equal max as `n2-2`. `maxStops` defaults to ceil(maxNights / min), at most 16.
+- **Arrival day of a remembered fare.** A fare from the memory or a board knows its day, not its hour, so the
+  stop's arrival is estimated from the flight's length and the longitude it crosses (a midday departure
+  assumed): Bucharest to Kuala Lumpur, 14.8 h, lands the next day, so the first stop keeps its nights. A
+  live itinerary with the same price wins over a remembered one, because it knows its real arrival.
+- **Departure window.** `departBy` caps the first leg's day from home; Wild passes its departure window's
+  last day there and the trip's end as `to`, so from == to is one fixed day in both engines.
+- **Budget.** Default 2 x maxStops + 2 (never under 12, at most 40), said in a progress line.
+  `needToClose` counts the searches a state still needs with nothing remembered (a hop per further stop
+  at the most nights a stop, and the way home). The beam's width at a depth is 1 plus the searches left
+  over that need, capped at the beam: wide early, one branch late. A stop whose searches left only just
+  cover its need takes its most nights (`tight`), so the loop closes in the fewest hops; the answer says
+  how many stops were lengthened that way.
+- **Other switches.** `maxGroundMin: 0` turns trains and coaches off; `maxFlightHours` drops longer
+  itineraries everywhere (memory, live, boards, the way home). Fly legs carry `stops` and `route`.
+- **The Wild engine** (`lib/wild-walk.ts wildByWalk`): the classic builder's parameters plus `avoid`,
+  `searchBudget` and `maxGroundMin`; the same departure window (`wildWindow`, passed as `departBy`), nights
+  given or take one, the walk's window the last departure day plus the most nights, two to three nights a
+  stop when none are given (longer only past about seven weeks, so 16 stops still fill the trip), a 150 s deadline unless the caller
+  gives one. The best loop becomes a `WildTrip` (stops with nights, living costs per stop as
+  `lib/wild.ts` counts them, visas, warnings; legs with times and booking links, ground legs as rail,
+  coach, ferry or road; totals; the judge's verdict), the next four loops its alternatives. It throws a
+  plain sentence when nothing closes. `/api/wild` uses it unless `engine=classic`, `variants > 1` or
+  `startFrom`; the classic chain now honours nights a stop exactly too (`rangeHop`, `rangeHome`).
+
+### Tested 2026-10-12 (12 searches reached Kiwi: 2 probes, 10 in the run)
+
+- Probe: `flyTo` = the eight Southeast Asian country names as a comma list answered 0 itineraries.
+- `GET /api/wild?engine=walk&region=sea&nights=14&nightsPerStop=2-3&from=2026-11-20&to=2026-11-24&searches=10`
+  from Brasov (GHV, SBZ, OTP), in-process, before the two-cities-a-country rule: 10 searches, 46 s, 67
+  `{walk}` lines (10 nodes, 51 edges, 1 loop, 5 progress). Kuala Lumpur 2 nights, Ipoh 2, Penang 3, Alor
+  Setar 3, Hat Yai 2: fly Bucharest to Kuala Lumpur 313 euro (14.8 h, one stop), rail to Ipoh, Penang,
+  Alor Setar and Hat Yai (estimated, 8 to 18 euro), fly Hat Yai to Bucharest 449 euro (19.8 h, two stops),
+  drives to and from Otopeni 13 each; flights 762, ground 75, living 430, all 1,267, 106 a night, 12
+  nights on the ground (the night out is on the plane), 25 November to 8 December. The same URL again:
+  stored, one JSON answer in 1 ms, 0 searches.
+- The judge returned nothing on every trip: with 600 output tokens the model's object stopped after
+  `score` and `tweaks`. At 2,000 it judged the loop 61 ("Hat Yai's two nights are hard to justify against
+  the nearly 20-hour, two-stop journey home").
+- `region=balkans&nights=7&nightsPerStop=2-3&searches=0`: 0 searches, 5 states expanded, no loop and the
+  plain note (the fare memory holds no way home from the Balkans for those dates, and Brasov's ground
+  reach does not touch them; with `ground=720` 13 states, still none).
+- The open walk from memory, `budget=0`, 20 to 30 October: Warsaw → Chisinau 84, Katowice → Rzeszow →
+  Warsaw 125, Warsaw → Lodz → Gdansk 177 (plane, train, coach, plane), every stop 2 or 3 nights;
+  `countries=PL,CZ,SK,HU`: Budapest → Bratislava 133, Warsaw → Budapest 108, Budapest → Bratislava →
+  Katowice 213.
+- Classic, no search: 10,000 simulated chains over `rangeHop` and `rangeHome` (14, 21, 7 and 28 nights at
+  2-3, 14 at 3-4) put no stop outside its range; 14 nights at 2-3 lasted 13, 14 or 15 nights. 60 nights at
+  2-3 is refused before a search ("need 20 stops; the most is 16").
+- After the review fixes (4 live searches): `wildByWalk` for `region=sea`, 10 nights, `from=to=2026-11-20`,
+  `nightsPerStop=2` with max 2, `searchBudget=4` closed no loop (four searches are too few for a far
+  region at one-day hop windows) and threw its plain sentence. Read back from the memory with `budget=0`:
+  the way in was asked for 2026-11-20 only (before, up to the 22nd), the remembered long-haul fares put
+  Kuala Lumpur, Singapore and Hanoi at 2026-11-21 (before, the 20th), and every hop out was a one-day
+  window two nights after arrival. The open walk at `[2, 2]` from memory, 20 to 30 October: Budapest,
+  Bratislava, Vienna at exactly 2 nights each.
+- The live run had the targeted hops, the parallel expansion and the width planner (beam 3 at the first
+  depths, 1 at the last). Not run live: the two-cities-a-country rule, added after it and checked from
+  memory only.
 
 ## Bounds and honesty
 

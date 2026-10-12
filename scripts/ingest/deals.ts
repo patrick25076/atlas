@@ -7,7 +7,7 @@
 //        DEALS_GATEWAYS=OTP pnpm ingest:deals
 import { readFile, writeFile } from "node:fs/promises";
 import { kiwiDate, nightsOf, searchFlight, type KiwiItinerary } from "../../lib/kiwi";
-import { sensibleTicket } from "../../lib/board";
+import { sensibleTicket, toDeal as boardDeal } from "../../lib/board";
 import type { City, Deal, DealsFile } from "../../lib/types";
 import { DESTINATIONS } from "./destinations";
 import { recordManifest } from "./manifest";
@@ -34,6 +34,9 @@ const returnTo = new Date(start.getTime() + (WINDOW_DAYS + MAX_NIGHTS) * 86_400_
 
 function toDeal(gw: string, dst: string, it: KiwiItinerary, nights: number): Deal {
   const carriers = [...new Set([...it.outbound.segments, ...(it.inbound?.segments ?? [])].map((s) => s.carrierName || s.carrier))];
+  // A split ticket that passed sensibleTicket (the ground graph joins its two cities within
+  // four hours) carries the second city and the graph's minutes, as the boards' deals do.
+  const { backFrom, backFromCity, gapKm, gapMin, backTo } = boardDeal(gw, it, nights);
   return {
     gw,
     dst,
@@ -50,6 +53,8 @@ function toDeal(gw: string, dst: string, it: KiwiItinerary, nights: number): Dea
     backMin: it.inbound ? Math.round(it.inbound.durationSeconds / 60) : 0,
     url: it.bookingUrl,
     bags: it.baggage ? `${it.baggage.cabinBag ? "cabin bag" : "personal item"}` : undefined,
+    ...(backFrom ? { backFrom, backFromCity, gapKm, gapMin } : {}),
+    ...(backTo ? { backTo } : {}),
   };
 }
 
@@ -82,7 +87,8 @@ async function worker() {
       const ok = r.itineraries
         .map((it) => ({ it, nights: nightsOf(it) }))
         .filter((x): x is { it: KiwiItinerary; nights: number } => x.nights != null && x.nights >= MIN_NIGHTS && x.nights <= MAX_NIGHTS)
-        // A "return" into one city and home from a far one (Chania in, Corfu out) is no getaway.
+        // A "return" into one city and home from one the ground graph does not join within four
+        // hours (Thessaloniki in, Corfu out: a coach and a ferry, seven hours) is no getaway.
         .filter(({ it }) => sensibleTicket(it))
         .sort((a, b) => a.it.price - b.it.price)
         .slice(0, KEEP_PER_ROUTE);

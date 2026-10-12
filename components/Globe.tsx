@@ -16,7 +16,8 @@ import { greatCircle, latitudeLines, routePath, type RouteLeg } from "@/lib/arc"
 import { isGem, type FameFile } from "@/lib/gems";
 import { addDays, countryName, dateRange, daysBetween, localIso, shortDate, todayIso } from "@/lib/format";
 import { EMPTY_BEEN, countryAllowed, excludedCountries, excludeParam, filterByCountry, loadBeen, saveBeen, type BeenPrefs } from "@/lib/been";
-import { BANDS, dealKey, REGION_CENTROIDS, TRIP_MODES, WILD_REGIONS, type AskState, type Band, type BoardState, type DealNights, type EventSpot, type EventsLayer, type GroupForm, type GroupState, type LiveSearch, type LongStayForm, type LongStayResult, type LongStayState, type Origin, type Period, type PickMode, type PickedDetail, type PlacePage, type Sheet, type TripMode, type View, EMPTY_WALK, WALK_MAX_EDGES, WALK_PARAM_KEYS, WILD_REGION_COUNTRIES, walkQueryString, type WalkEdgeView, type WalkNodeView, type WalkQuery, type WalkSource, type WalkState } from "@/lib/ui-types";
+import { BANDS, dealKey, matchDealKey, REGION_CENTROIDS, TRIP_MODES, WILD_REGIONS, type AskState, type Band, type BoardState, type DealNights, type EventSpot, type EventsLayer, type GroupForm, type GroupState, type LiveSearch, type LongStayForm, type LongStayResult, type LongStayState, type Origin, type Period, type PickMode, type PickedDetail, type PlacePage, type Sheet, type TripMode, type View, EMPTY_WALK, WALK_MAX_EDGES, WALK_PARAM_KEYS, WILD_REGION_COUNTRIES, walkQueryString, type WalkEdgeView, type WalkNodeView, type WalkQuery, type WalkSource, type WalkState } from "@/lib/ui-types";
+import { avoidCodes, DEFAULT_PREFS, loadPrefs, nightsParam, nightsRangeParam, prefsQuery, PREFS_EVENT, cleanPrefs, wildStopFit, type Prefs } from "@/lib/prefs";
 import type { Airport, City, CityPlaces, CountryInfo, Deal, Destination, FaresResponse, Gateway, HeritageRow, Holiday, Manifest, ReachResponse, ReachStation, Route, VisaFile, WeatherCompact, WeatherFile } from "@/lib/types";
 import { expandWeather, visaFor } from "@/lib/types";
 import Panel, { MODE_LABEL, type Capabilities, type CombosState, type PlanState, type WildState } from "./Panel";
@@ -24,7 +25,7 @@ import { countryIndexOf, EMPTY_LONGSTAY_FORM, EMPTY_TRIPS_EXTRA, emptyGroupForm,
 import RouteCard, { emptyRouteForm, EventsCard, eventsHere, optionKey, ROUTE_BUDGET, ROUTE_BUDGET_FREE, ROUTE_BUDGET_HARDER, routeParams, toEventSpot, type RawEvent, type RouteForm, type RouteLeg as AbLeg, type RouteOption, type RouteResult, type RouteState } from "./RouteFinder";
 import { eventsInWindow } from "@/lib/purpose-events";
 import { parseCommand, type Command } from "@/lib/command";
-import type { WalkLoop, WalkResult } from "@/lib/graph-walk";
+import type { WalkEvent, WalkLoop, WalkResult } from "@/lib/graph-walk";
 import WalkCard, { WALK_MORE_BUDGET } from "./WalkCard";
 import { skeletonFromDeal, skeletonFromEvent, skeletonFromGroup, skeletonFromLongStay, skeletonFromRoute, skeletonFromTrip, skeletonFromWalk, skeletonFromWild, type BudgetTier, type ItinLeg, type ItinPlace, type Itinerary as Itin, type Pace, type Skeleton } from "@/lib/itinerary";
 import { existingOwnerId } from "@/lib/owner";
@@ -60,6 +61,7 @@ import type { HotelsResult } from "@/lib/liteapi";
 import type { WildLeg, WildStop, WildTrip } from "@/lib/wild";
 import type { Sights, Sight } from "@/app/api/sights/route";
 import TopBar from "./TopBar";
+import type { ChatContext } from "./ChatPanel";
 import PriceLabels, { type LabelItem } from "./PriceLabels";
 import type { Intel } from "./PlaceIntel";
 
@@ -78,6 +80,30 @@ type WalkLine = {
   done?: WalkResult;
   error?: string;
 };
+/**
+ * One line of the /api/wild stream: progress, the finished trip, an error, and on the walk
+ * engine the walk behind it, one {walk} line per step (a WalkEvent: a node, an edge, a loop,
+ * a progress line). A line already in the /api/walk shape is taken as it is.
+ */
+type WildLine = { progress?: string; trip?: WildTrip; error?: string; walk?: WalkEvent | WalkLine };
+/** A walk step from the Wild stream in the shape the walk drawer reads. */
+function walkLineOf(e: WalkEvent | WalkLine): WalkLine {
+  if (!("type" in e)) return e;
+  switch (e.type) {
+    case "node": {
+      const { type: _t, ...node } = e;
+      return { node };
+    }
+    case "edge": {
+      const { type: _t, ...edge } = e;
+      return { edge };
+    }
+    case "loop":
+      return { loop: e.loop };
+    case "progress":
+      return { progress: e.text };
+  }
+}
 /** Something a live search just found, drawn growing from where it leaves and fading out (deals, route options). */
 type Arrival = { path: [number, number][]; at: number; color: RGBA; ground?: boolean };
 /** How long an arrival or a walk edge's price tag stays lit, in milliseconds. */
@@ -104,8 +130,6 @@ function straightPath(a: [number, number], b: [number, number], n = 12): [number
 }
 const reducedMotion = () => typeof window !== "undefined" && !!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
 const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/;
-/** How far the walk's "anywhere" explore reaches from home: the Balkans and the Caucasus from Brasov, not South East Asia. */
-const WALK_REACH_KM = 2000;
 /** The curated event kinds (lib/purpose-events.ts): a command-line word naming one filters by kind. */
 const EVENT_KINDS = new Set(["festival", "sport", "culture", "season", "music", "food"]);
 /** "Brașov" and "brasov" are one key for a place typed on the command line. */
@@ -275,7 +299,7 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
   const [wildNights, setWildNights] = useState(14);
   const [wildStyle, setWildStyle] = useState("experiences");
   const [wildBudget, setWildBudget] = useState("mid");
-  const [wildTradeoff, setWildTradeoff] = useState("balanced");
+  const [wildTradeoff, setWildTradeoff] = useState("price");
   const [wildVariants, setWildVariants] = useState(1);
   const [wildPeriod, setWildPeriod] = useState<Period>({ from: "", to: "" });
   const [plan, setPlan] = useState<PlanState>({ status: "idle" });
@@ -313,6 +337,26 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
   abFormRef.current = abForm;
   const [ab, setAb] = useState<RouteState>({ status: "idle", lines: [], options: [] });
   const [abSelected, setAbSelected] = useState<number | null>(null);
+  // The traveller's trip style (lib/prefs.ts): read from this browser once mounted (the server
+  // render has no storage), then kept in step with the Trip style control through its
+  // 'atlas:prefs' event.
+  const [prefs, setPrefs] = useState<Prefs>(DEFAULT_PREFS);
+  useEffect(() => {
+    setPrefs(loadPrefs());
+    const onPrefs = (e: Event) => setPrefs(cleanPrefs((e as CustomEvent<{ prefs?: unknown }>).detail?.prefs));
+    window.addEventListener(PREFS_EVENT, onPrefs);
+    return () => window.removeEventListener(PREFS_EVENT, onPrefs);
+  }, []);
+  // The trip style is the default of every builder: when it changes, the forms start from it
+  // again (nights a stop back to the style, its tradeoff, its longest flight). A form changed
+  // after that holds for its own searches until the style changes once more.
+  useEffect(() => {
+    setWildTradeoff(prefs.tradeoff);
+    // The Smart loop's chip key ("2" or "2-3"); runSmartLoop sends the style's exact range when it is chosen.
+    const perStop = nightsParam(prefs);
+    const smartStyle = prefs.taste === "unique" ? "unique" : prefs.tradeoff === "price" ? "cheapest" : "balanced";
+    setTripsExtra((x) => ({ ...x, wild: { ...x.wild, stopNights: null, maxHours: prefs.maxFlightHours ?? 0 }, smart: { ...x.smart, perStop, style: smartStyle } }));
+  }, [prefs]);
   const abCtrl = useRef<AbortController | null>(null);
   // The getaway finder's running stream: a newer search (one keystroke on the command line) stops it.
   const finderCtrl = useRef<AbortController | null>(null);
@@ -799,13 +843,12 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
     if (q.maxHours) params.set("maxHours", String(q.maxHours));
     if (q.returnTo.length) params.set("returnTo", q.returnTo.join(","));
     if (q.tricks) params.set("tricks", "1");
-    if (q.exhaustive) {
-      params.set("exhaustive", "1");
-      // The finder grows the origins with airports a train or coach reaches from here.
-      if (origin) {
-        params.set("lat", String(origin.lat));
-        params.set("lon", String(origin.lon));
-      }
+    if (q.exhaustive) params.set("exhaustive", "1");
+    // Where the traveller is, on every search: the paired search scores each home airport by the
+    // train, coach or drive from it to them, and the exhaustive one grows the origins from here.
+    if (origin) {
+      params.set("lat", String(origin.lat));
+      params.set("lon", String(origin.lon));
     }
     if (excludeQ) params.set("exclude", excludeQ);
     try {
@@ -941,7 +984,7 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
     return dealsAll.filter((d) => used.has(dealKey(d))).sort((a, b) => a.price - b.price);
   }, [dealsShown, dealsAll, ask, askOnly]);
   // A deal opened from the chat may not be on tonight's boards.
-  const deal = selectedDeal ? (dealsAll.find((d) => dealKey(d) === selectedDeal) ?? chatDeals.find((d) => dealKey(d) === selectedDeal) ?? null) : null;
+  const deal = selectedDeal ? (dealsAll.find((d) => matchDealKey(d, selectedDeal)) ?? chatDeals.find((d) => matchDealKey(d, selectedDeal)) ?? null) : null;
   const dealOptions = useMemo(() => (deal ? dealsAll.filter((d) => d.dstCity === deal.dstCity).sort((a, b) => a.price - b.price).slice(0, 8) : []), [deal, dealsAll]);
 
   async function askAgent(question: string) {
@@ -1175,27 +1218,55 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
   }
 
   // A wild trip: streamed progress, then the trip; stored ones come back whole.
+  const wildSeqRef = useRef(0);
   const wildCoord = useCallback((code: string): [number, number] | null => gwCoord(code) ?? (cities[code] ? [cities[code].lon, cities[code].lat] : null), [gwCoord, cities]);
-  // over: what the command line asked for ("/wild sea 21"), used at once rather than waiting
-  // for the state it also sets to land.
-  async function buildWildTrip(over?: { region?: string; countries?: string[]; nights?: number }) {
+  // over: what the command line asked for ("/wild sea 21, 3 nights a stop, unique, flights
+  // only"), used at once rather than waiting for the state it also sets to land. Its nights a
+  // stop (a pace typed alone arrives as its nights), taste and ground beat the form and the
+  // trip style for this one build.
+  async function buildWildTrip(over?: { region?: string; countries?: string[]; nights?: number; nightsPerStop?: number | [number, number]; unique?: boolean; ground?: number }) {
     if (!boardGateways.length || !gateways[0]) return;
-    setWild({ status: "loading", lines: [] });
+    // Which build this is: an older one still streaming (or stopped) never writes over a newer one.
+    const seq = ++wildSeqRef.current;
+    const current = () => wildSeqRef.current === seq;
     setPlan({ status: "idle" });
     // The trip's identity (what /api/plan needs to find the same stored trip) and the extras
     // (where the visitor is) are kept apart: the plan is asked with the identity only.
     const wf = over?.countries ? { ...tripsExtra.wild, countries: over.countries } : tripsExtra.wild;
     const region = over?.region ?? wildRegion;
     const nights = over?.nights ?? wildNights;
+    // The graph walk aimed at the region is the engine from now on; the toggle keeps the classic chain.
+    const engine = wf.classic ? "classic" : "walk";
+    // The engine the route will really use: ranked versions and other start airports are the classic chain's.
+    const builtBy = engine === "classic" || wildVariants > 1 || wf.startFrom.length ? "classic" : "walk";
     // Chosen countries replace the region ("custom"); the rest of the free-form fields ride along under the names the engine reads.
-    const query: WildQuery = { g: boardGateways.map((g) => g.iata).join(","), home: gateways[0].airport.country, region: wf.countries.length ? "custom" : region, nights: String(nights), style: wildStyle, budget: wildBudget, tradeoff: wildTradeoff, variants: String(wildVariants) };
+    const query: WildQuery = { engine, g: boardGateways.map((g) => g.iata).join(","), home: gateways[0].airport.country, region: wf.countries.length ? "custom" : region, nights: String(nights), style: wildStyle, budget: wildBudget, tradeoff: wildTradeoff, variants: String(wildVariants) };
     if (wf.countries.length) query.countries = wf.countries.join(",");
     if (wf.mustInclude.length) query.mustInclude = wf.mustInclude.join(",");
     if (wf.maxHours) query.maxFlightHours = String(wf.maxHours);
     if (wf.startFrom.length) query.startFrom = wf.startFrom.slice(0, 3).join(",");
-    if (wf.wishes.trim()) query.wishes = wf.wishes.trim();
-    // The route reads one range, "3-5".
-    if (wf.stopNights) query.nightsPerStop = `${wf.stopNights[0]}-${wf.stopNights[1]}`;
+    // Nights a stop: the command line's, else the form's own range, else the trip style's,
+    // always sent as both ends ("2-3", "2-2") so the engine never falls back to its old long
+    // stays. A loop holds at most 16 stops (8 on the classic chain past three nights a stop):
+    // a trip too long for that range at its most would be refused, so the range is stretched
+    // to the shortest stays that fit, and the form and the first progress line say so.
+    const typed = over?.nightsPerStop;
+    const asked: [number, number] = typed != null ? (Array.isArray(typed) ? [typed[0], typed[1]] : [typed, typed]) : (wf.stopNights ?? prefs.nightsPerPlace);
+    const fit = wildStopFit(asked, nights, builtBy);
+    query.nightsPerStop = nightsRangeParam(fit.range);
+    const stretchNote = fit.stretched
+      ? `${nights} nights at ${asked[0] === asked[1] ? asked[0] : `${asked[0]} to ${asked[1]}`} nights a stop would need ${fit.needed} stops; a loop takes at most ${fit.cap}. Staying ${fit.range[0]} to ${fit.range[1]} nights a stop instead.`
+      : null;
+    // The trip style's other settings. /api/wild's own style is the kind of trip (experiences,
+    // beaches), so "unique places" travels in the wishes the walk, the judge and the planner read.
+    const unique = (over?.unique || prefs.taste === "unique") && !/unique|hidden gem|off the beaten/i.test(wf.wishes);
+    const wishes = [wf.wishes.trim(), unique ? "unique places and hidden gems over the big hubs" : ""].filter(Boolean).join(", ");
+    if (wishes) query.wishes = wishes;
+    if (prefs.avoid.length) query.avoid = prefs.avoid.join(",");
+    // Ground hops in minutes: the command line's ("flights only" is 0, "only trains between cities" 480), else 0
+    // when the trip style has no trains or coaches; absent leaves the engine's own default.
+    const ground = over?.ground != null && Number.isFinite(over.ground) ? Math.max(0, Math.round(over.ground)) : prefs.groundOk ? undefined : 0;
+    if (ground != null) query.ground = String(ground);
     if (month) query.month = month;
     // The excluded countries are part of the trip's identity: the plan is looked up under the same key.
     if (excludeQ) query.exclude = excludeQ;
@@ -1206,58 +1277,92 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
       const latest = addDays(wildPeriod.from, WILD_WINDOW_DAYS);
       if (wildPeriod.to) query.to = wildPeriod.to < latest ? wildPeriod.to : latest;
     }
+    setWild({ status: "loading", lines: stretchNote ? [stretchNote] : [] });
     const q = new URLSearchParams(query);
     if (origin) {
       q.set("lat", origin.lat.toFixed(4));
       q.set("lon", origin.lon.toFixed(4));
       q.set("label", origin.label);
     }
+    // On the walk engine the stream carries the walk's own steps ({walk} lines): the globe draws
+    // the search exactly as it draws a Smart loop, through the same stage and the same drawer,
+    // and the walk card shows its lines. The build owns walkCtrl while it runs, so the card's
+    // Stop, or any newer walk, stops reading it. The trip itself then takes the globe back.
+    const walkOn = engine === "walk";
+    // A classic build takes the globe from a Wild walk left over from an earlier build.
+    if (!walkOn) setWalk((w) => (w.source === "wild" ? EMPTY_WALK : w));
+    const ctrl = new AbortController();
+    let stale = () => false;
+    let drawWalk: ((m: WalkLine) => void) | null = null;
+    let toHome = 0;
+    if (walkOn) {
+      walkCtrl.current?.abort();
+      walkCtrl.current = ctrl;
+      stale = () => walkCtrl.current !== ctrl;
+      const wq: WalkQuery = { ...(walkContext() ?? {}), countries: wf.countries.length ? wf.countries : (WILD_REGION_COUNTRIES[region] ?? []), minNights: nights, maxNights: nights, nightsPerStop: query.nightsPerStop, tradeoff: wildTradeoff };
+      const st = startWalkStage(wq, "wild");
+      toHome = st.toHome;
+      drawWalk = walkLineDrawer(st.home, stale);
+    }
+    /** The walk's drawing leaves when the trip arrives (or the build fails): the trip's own route draws instead. */
+    const endWalk = () => {
+      if (!walkOn || !current()) return;
+      window.clearTimeout(toHome);
+      if (walkCtrl.current === ctrl) walkCtrl.current = null;
+      setWalk((w) => (w.source === "wild" ? EMPTY_WALK : w));
+    };
+    // Stopped from the walk card, or by a newer walk: what the walk drew stays until the next search.
+    const stopped = () => {
+      if (current()) setWild((w) => (w.status === "loading" ? { status: "error", lines: [], note: "Stopped. The build goes on on the server; asking again in a minute or two gets the finished loop." } : w));
+    };
+    // The walk card's Stop aborts the controller: the form says so at once, whether or not the body read notices.
+    ctrl.signal.addEventListener("abort", stopped, { once: true });
     try {
-      const r = await fetch(`/api/wild?${q}`);
+      const r = await fetch(`/api/wild?${q}`, { signal: ctrl.signal });
+      if (!current()) return;
       if (!r.ok) {
         const j = await r.json().catch(() => ({}));
+        endWalk();
         setWild({ status: "error", lines: [], note: j.error ?? `failed (${r.status})` });
         return;
       }
       if (!r.headers.get("content-type")?.includes("ndjson")) {
         const trip = (await r.json()) as WildTrip;
+        endWalk();
         setWild({ status: "ok", lines: [], trip, source: "stored", query });
         frameWild(trip);
         return;
       }
-      const reader = r.body!.getReader();
-      const dec = new TextDecoder();
-      let buf = "";
       let finished = false;
-      for (;;) {
-        const { value, done } = await reader.read();
-        if (done) break;
-        buf += dec.decode(value, { stream: true });
-        let nl = buf.indexOf("\n");
-        while (nl >= 0) {
-          const line = buf.slice(0, nl).trim();
-          buf = buf.slice(nl + 1);
-          nl = buf.indexOf("\n");
-          if (!line) continue;
-          try {
-            const msg = JSON.parse(line) as { progress?: string; trip?: WildTrip; error?: string };
-            if (msg.progress) setWild((w) => ({ ...w, lines: [...w.lines, msg.progress!] }));
-            if (msg.trip) {
-              finished = true;
-              setWild({ status: "ok", lines: [], trip: msg.trip, source: "live", query });
-              frameWild(msg.trip);
-            }
-            if (msg.error) {
-              finished = true;
-              setWild({ status: "error", lines: [], note: msg.error });
-            }
-          } catch {
-            // partial line
+      const ended = await readNdjson<WildLine>(
+        r,
+        (msg) => {
+          if (!current()) return;
+          if (msg.walk && drawWalk && !stale()) drawWalk(walkLineOf(msg.walk));
+          if (msg.progress) setWild((w) => ({ ...w, lines: [...w.lines, msg.progress!] }));
+          if (msg.trip) {
+            finished = true;
+            endWalk();
+            setWild({ status: "ok", lines: [], trip: msg.trip, source: "live", query });
+            frameWild(msg.trip);
           }
-        }
+          if (msg.error) {
+            finished = true;
+            endWalk();
+            setWild({ status: "error", lines: [], note: msg.error });
+          }
+        },
+        ctrl.signal,
+      );
+      if (!finished && current()) {
+        if (!ended && ctrl.signal.aborted) return stopped();
+        endWalk();
+        setWild({ status: "error", lines: [], note: "the search stopped early; try again" });
       }
-      if (!finished) setWild({ status: "error", lines: [], note: "the search stopped early; try again" });
-    } catch {
+    } catch (err) {
+      if ((err as Error | undefined)?.name === "AbortError" || ctrl.signal.aborted) return stopped();
+      if (!current()) return;
+      endWalk();
       setWild({ status: "error", lines: [], note: "network" });
     }
   }
@@ -1471,7 +1576,7 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
       framePoints(routeEnds(r), 6);
     };
     try {
-      const r = await fetch(`/api/route?${routeParams({ from: form.from, to: form.to, depart: form.depart, flex: form.flex, nights: form.nights, oneWay: form.oneWay, maxHours: form.maxHours, exclude: excludeQ, budget })}`, { signal: ctrl.signal });
+      const r = await fetch(`/api/route?${routeParams({ from: form.from, to: form.to, depart: form.depart, flex: form.flex, nights: form.nights, oneWay: form.oneWay, maxHours: form.maxHours || prefs.maxFlightHours || 0, exclude: excludeQ, budget })}`, { signal: ctrl.signal });
       if (!r.ok) {
         const j = await r.json().catch(() => ({}));
         setAb({ status: "error", lines: [], options: [], note: j.error ?? `the route search failed (${r.status})`, query: form, budget });
@@ -1677,7 +1782,51 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
     const ctrl = new AbortController();
     walkCtrl.current = ctrl;
     const stale = () => walkCtrl.current !== ctrl;
-    // The walk takes the stage: an itinerary in front closes, the route card folds.
+    const { home, toHome } = startWalkStage(q, source);
+    let finished = false;
+    const drawLine = walkLineDrawer(home, stale);
+    const onLine = (msg: WalkLine) => {
+      if (stale()) return;
+      drawLine(msg);
+      if (msg.done) {
+        finished = true;
+        const r = msg.done;
+        setWalk((w) => {
+          const loops = r.loops.length ? r.loops : w.loops;
+          const picked = walkPickedRef.current ? loops.findIndex((x) => x.id === walkPickedRef.current) : -1;
+          return { ...w, status: "ok", result: r, loops, selected: picked >= 0 ? picked : 0, edges: w.edges.length ? w.edges : edgesOfLoops(loops, q) };
+        });
+        window.clearTimeout(toHome);
+        if (!walkPickedRef.current) frameWalkLoop(r.loops[0], q);
+      }
+      if (msg.error) {
+        finished = true;
+        setWalk((w) => ({ ...w, status: w.loops.length ? "ok" : "error", note: msg.error }));
+      }
+    };
+    try {
+      const r = await fetch(`/api/walk?${walkQueryString(q)}`, { signal: ctrl.signal });
+      if (stale()) return;
+      if (!r.ok) {
+        const j = (await r.json().catch(() => ({}))) as { error?: string };
+        if (!stale()) setWalk((w) => ({ ...w, status: "error", note: j.error ?? `the walk failed (${r.status})` }));
+        return;
+      }
+      const ended = await readNdjson<WalkLine>(r, onLine, ctrl.signal);
+      if (ended && !finished && !stale()) setWalk((w) => ({ ...w, status: w.loops.length ? "ok" : "error", note: w.loops.length ? undefined : "the walk stopped early; try again" }));
+    } catch (err) {
+      if ((err as Error | undefined)?.name === "AbortError" || stale()) return;
+      setWalk((w) => ({ ...w, status: "error", note: "network" }));
+    } finally {
+      if (walkCtrl.current === ctrl) walkCtrl.current = null;
+    }
+  }
+  /**
+   * The walk takes the stage: an itinerary in front closes, the route card folds, the walk
+   * state starts over for this question, and the camera comes to the door. Shared by the
+   * walk itself and by a Wild build on the walk engine, whose stream carries the same events.
+   */
+  function startWalkStage(q: WalkQuery, source: WalkSource): { home: [number, number] | null; toHome: number } {
     if (itin) closeItinerary();
     setRouteCard((c) => (c.open && !c.collapsed ? { ...c, collapsed: true } : c));
     if (!isPhone()) cardOpenRef.current = true;
@@ -1700,8 +1849,11 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
       // An answer from the memo can land before that: its own framing cancels this one.
       toHome = window.setTimeout(() => map.flyTo({ center: home, zoom: isPhone() ? 2.4 : 3.3, duration: reducedMotion() ? 0 : 1400, padding: panelPadding(), essential: true }), 60);
     }
-    let finished = false;
-    const onLine = (msg: WalkLine) => {
+    return { home, toHome };
+  }
+  /** Draws one streamed line of a walk (its progress, a node, an edge, a loop) into the walk state; done and error are the caller's. */
+  function walkLineDrawer(home: [number, number] | null, stale: () => boolean) {
+    return (msg: WalkLine) => {
       if (stale()) return;
       const now = performance.now();
       if (msg.progress) setWalk((w) => ({ ...w, lines: [...w.lines, msg.progress!].slice(-40) }));
@@ -1753,38 +1905,7 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
           return { ...w, loops, selected: picked >= 0 ? picked : 0 };
         });
       }
-      if (msg.done) {
-        finished = true;
-        const r = msg.done;
-        setWalk((w) => {
-          const loops = r.loops.length ? r.loops : w.loops;
-          const picked = walkPickedRef.current ? loops.findIndex((x) => x.id === walkPickedRef.current) : -1;
-          return { ...w, status: "ok", result: r, loops, selected: picked >= 0 ? picked : 0, edges: w.edges.length ? w.edges : edgesOfLoops(loops, q) };
-        });
-        window.clearTimeout(toHome);
-        if (!walkPickedRef.current) frameWalkLoop(r.loops[0], q);
-      }
-      if (msg.error) {
-        finished = true;
-        setWalk((w) => ({ ...w, status: w.loops.length ? "ok" : "error", note: msg.error }));
-      }
     };
-    try {
-      const r = await fetch(`/api/walk?${walkQueryString(q)}`, { signal: ctrl.signal });
-      if (stale()) return;
-      if (!r.ok) {
-        const j = (await r.json().catch(() => ({}))) as { error?: string };
-        if (!stale()) setWalk((w) => ({ ...w, status: "error", note: j.error ?? `the walk failed (${r.status})` }));
-        return;
-      }
-      const ended = await readNdjson<WalkLine>(r, onLine, ctrl.signal);
-      if (ended && !finished && !stale()) setWalk((w) => ({ ...w, status: w.loops.length ? "ok" : "error", note: w.loops.length ? undefined : "the walk stopped early; try again" }));
-    } catch (err) {
-      if ((err as Error | undefined)?.name === "AbortError" || stale()) return;
-      setWalk((w) => ({ ...w, status: "error", note: "network" }));
-    } finally {
-      if (walkCtrl.current === ctrl) walkCtrl.current = null;
-    }
   }
   /** Stop the walk where it is: what it found stays on the globe. */
   function cancelWalk() {
@@ -1824,87 +1945,47 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
     if (originPlace && Math.abs(originPlace.lat - h[1]) < 0.01 && Math.abs(originPlace.lon - h[0]) < 0.01) return originPlace;
     return { name: String(q?.label ?? "home"), lat: h[1], lon: h[0] };
   }
-  /** Short loops' Smart loop: the form in TripsExtra.smart as a walk. */
+  /**
+   * The trip style as walk parameters: nights a stop, the tradeoff, "unique" for the unusual,
+   * the avoid list and the longest ground hop (0 when trains and coaches are not wanted). A
+   * builder lays its own form over these; the command line fills only what the words left out.
+   */
+  function prefsWalk(p: Prefs = prefs): WalkQuery {
+    const pq = prefsQuery(p);
+    const q: WalkQuery = { nightsPerStop: pq.nightsPerStop, tradeoff: pq.tradeoff, ground: pq.ground };
+    if (pq.style) q.style = pq.style;
+    if (p.avoid.length) q.avoid = p.avoid;
+    return q;
+  }
+  /** Short loops' Smart loop: the form in TripsExtra.smart as a walk, over the trip style. */
   function runSmartLoop() {
     const f = tripsExtra.smart;
+    const base = prefsWalk();
+    // The form's style chips mix two settings: Cheapest is the price tradeoff, Unique the taste
+    // (with the trip style's tradeoff), Balanced both even. The trip style's avoid list holds
+    // on top of the form's own picks.
+    // Balanced carries Comfort too: the form has no Comfort chip, so a Comfort trip style shows as
+    // Balanced and runs as comfort (a price style shows as Cheapest instead).
+    const tradeoff = f.style === "cheapest" ? "price" : f.style === "unique" || prefs.tradeoff === "comfort" ? prefs.tradeoff : "balanced";
+    const formAvoid = f.avoidLike ? f.avoid.map((c) => `like:${c}`) : f.avoid;
     void runWalk(
       {
+        ...base,
         minNights: f.minNights,
         maxNights: f.maxNights,
-        nightsPerStop: f.perStop,
+        // The trip style's chip sends its exact range ("2-2" is two nights, never three); a chip picked here reads as typed.
+        nightsPerStop: f.perStop === nightsParam(prefs) ? nightsRangeParam(prefs.nightsPerPlace) : f.perStop,
         maxStops: f.cities,
-        tradeoff: f.style === "cheapest" ? "price" : "balanced",
-        ...(f.style === "unique" ? { style: "unique" } : {}),
+        tradeoff,
+        style: f.style === "unique" ? "unique" : undefined,
         // "like:DE" asks the engine for Germany's whole group (Austria, Switzerland), the owner's "countries like Germany".
-        avoid: f.avoidLike ? f.avoid.map((c) => `like:${c}`) : f.avoid,
+        avoid: [...new Set([...formAvoid, ...prefs.avoid])],
         mustInclude: f.mustInclude,
         budget: f.budget,
         ...(f.from ? { from: f.from } : {}),
         ...(f.to ? { to: f.to } : {}),
       },
       "short",
-    );
-  }
-  /**
-   * Whether "Walk the region" can reach the Wild region. The walk explores with the cheapest
-   * one-ways "anywhere" from home and from the hubs it lands in, and those are the 15 cheapest
-   * fares, which stay within a short flight of home (from Brasov, all European). A region whose
-   * nearest country lies beyond that comes back empty after spending live searches, so it keeps
-   * the classic builder. Unknown home: true, and runWalk says the airports are still loading.
-   */
-  const wildWalkReach = useMemo(() => {
-    const o = origin;
-    if (!o) return true;
-    const chosen = tripsExtra.wild.countries;
-    if (!chosen.length) {
-      const c = REGION_CENTROIDS[wildRegion];
-      return !c || haversineKm(o.lat, o.lon, c[0], c[1]) <= WALK_REACH_KM;
-    }
-    // Chosen countries: the nearest one's middle (the mean of its cities) decides.
-    const sum = new Map<string, [number, number, number]>();
-    for (const c of Object.values(cities)) {
-      if (!chosen.includes(c.country)) continue;
-      const t = sum.get(c.country) ?? [0, 0, 0];
-      sum.set(c.country, [t[0] + c.lat, t[1] + c.lon, t[2] + 1]);
-    }
-    if (!sum.size) return true;
-    return [...sum.values()].some(([la, lo, n]) => haversineKm(o.lat, o.lon, la / n, lo / n) <= WALK_REACH_KM);
-  }, [origin, tripsExtra.wild.countries, wildRegion, cities]);
-  /** Wild loops' "Walk the region": the region's countries (or the chosen ones) as the allowed stops, up to six of them. */
-  function runWildWalk() {
-    const wf = tripsExtra.wild;
-    // A far region would spend live searches on European fares and find nothing; the panel offers the classic builder instead.
-    if (!wildWalkReach) {
-      setNotice("This region is too far for the walk; build the loop instead.");
-      return;
-    }
-    const countries = wf.countries.length ? wf.countries : (WILD_REGION_COUNTRIES[wildRegion] ?? []);
-    const nights = Math.max(3, Math.min(60, wildNights));
-    // Nights a stop: the form's range, else one that six stops can fill and three stops do not overrun.
-    const lo = wf.stopNights?.[0] ?? Math.max(2, Math.floor(nights / 6));
-    const hi = Math.min(14, wf.stopNights?.[1] ?? Math.max(lo + 1, Math.ceil(nights / 3)));
-    const maxStops = Math.min(6, Math.max(2, Math.ceil(nights / Math.max(1, lo))));
-    const from = wildPeriod.from && wildPeriod.from > todayIso() ? wildPeriod.from : undefined;
-    const minNights = Math.max(1, nights - 1);
-    const maxNights = Math.min(60, nights + 1);
-    // The walk's window holds the whole trip, so it runs past the departure window by the trip's length.
-    const w = from ? { from, to: addDays(wildPeriod.to && wildPeriod.to > from ? wildPeriod.to : from, maxNights + 1) } : walkWindow(maxNights);
-    void runWalk(
-      {
-        countries,
-        minNights,
-        maxNights,
-        nightsPerStop: lo === hi ? String(lo) : `${lo}-${hi}`,
-        maxStops,
-        tradeoff: wildTradeoff,
-        mustInclude: wf.mustInclude.slice(0, maxStops),
-        ...(wf.wishes.trim() ? { style: wf.wishes.replace(/[^\p{L}\p{N} ,.'()&-]/gu, " ").replace(/\s+/g, " ").trim().slice(0, 120) } : {}),
-        // A far region needs an explore from the hub it lands in and from each stop: more live searches than a short loop.
-        budget: WALK_MORE_BUDGET,
-        from: w.from,
-        to: w.to,
-      },
-      "wild",
     );
   }
   /**
@@ -1926,6 +2007,11 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
     }
     if (q.from && !ISO_DAY.test(String(q.from))) delete q.from;
     if (q.to && !ISO_DAY.test(String(q.to))) delete q.to;
+    // Ground arrives in minutes (480 for "only trains between cities", 0 for "flights only"); an older
+    // parser sent the words, read here the same way. A pace typed alone already arrives as its nights a stop.
+    if (c.ground === "prefer") q.ground = 480;
+    else if (c.ground === "none") q.ground = 0;
+    else if (q.ground != null && !Number.isFinite(Number(q.ground))) delete q.ground;
     // Other names a command may use for the same things.
     const num = (k: string) => (typeof c[k] === "number" ? (c[k] as number) : undefined);
     const nights = num("nights");
@@ -1936,6 +2022,13 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
     if (q.mustInclude == null && Array.isArray(c.cities)) q.mustInclude = (c.cities as unknown[]).filter((x): x is string => typeof x === "string");
     if (!q.from && typeof c.start === "string" && ISO_DAY.test(c.start)) q.from = c.start;
     if (!q.to && typeof c.end === "string" && ISO_DAY.test(c.end)) q.to = c.end;
+    // What the words left out comes from the trip style ("loop 6 days" stays 2 to 3 nights a
+    // stop); an avoid list in the words adds to the style's own.
+    const style = prefsWalk();
+    for (const k of Object.keys(style) as (keyof WalkQuery)[]) {
+      if (k === "avoid" && q.avoid != null) q.avoid = [...new Set([...(Array.isArray(q.avoid) ? q.avoid : String(q.avoid).split(",")), ...prefs.avoid])];
+      else if (q[k] == null) q[k] = style[k];
+    }
     // "loop from Cluj": a named start is placed through the city table, with the airports near it.
     const named = typeof c.origin === "string" ? c.origin.trim() : "";
     if (named && foldName(named) !== foldName(homeCity?.city.name ?? origin?.label ?? "")) {
@@ -2542,7 +2635,7 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
         if (rk) setWildRegion(rk);
         if (nights) setWildNights(nights);
         setTripsExtra((x) => ({ ...x, wild: { ...x.wild, countries: codes } }));
-        if (rk || codes.length) void buildWildTrip({ region: rk ?? undefined, countries: codes, nights });
+        if (rk || codes.length) void buildWildTrip({ region: rk ?? undefined, countries: codes, nights, nightsPerStop: c.nightsPerStop, unique: c.style === "unique", ground: c.ground });
         else setNotice("Pick a region on the globe, or name the countries, then build the loop.");
         return;
       }
@@ -2573,6 +2666,13 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
         clearFront();
         setView("chat");
         setChatSeed(c.text);
+        return;
+      // "my settings", "/trip-style", "how do i use this": the top bar opens the editor or the guide on these events.
+      case "prefs":
+        window.dispatchEvent(new CustomEvent("atlas:open-prefs"));
+        return;
+      case "help":
+        window.dispatchEvent(new CustomEvent("atlas:guide"));
         return;
     }
   }
@@ -2628,8 +2728,10 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
     setTrips(null);
     const g = gateways.map((x) => `${x.airport.iata}:${x.airport.lat}:${x.airport.lon}:${x.driveMin}`).join(",");
     const sf = tripsExtra.short;
+    // The trip style's avoid list (groups expanded to countries) joins the Been list: neither is ever a night.
+    const skip = [...new Set([...exclude, ...avoidCodes(prefs)])];
     // ground= is the engine's own (minutes); cities, mustInclude and countries are the free-form asks.
-    const extra = `${around ? `&around=${around}` : ""}${exclude.length ? `&exclude=${exclude.join(",")}` : ""}&ground=${sf.maxGroundHours * 60}&cities=${sf.cities}${sf.mustInclude.length ? `&mustInclude=${sf.mustInclude[0]}` : ""}${sf.countries.length ? `&countries=${sf.countries.join(",")}` : ""}`;
+    const extra = `${around ? `&around=${around}` : ""}${skip.length ? `&exclude=${skip.join(",")}` : ""}&ground=${sf.maxGroundHours * 60}&cities=${sf.cities}${sf.mustInclude.length ? `&mustInclude=${sf.mustInclude[0]}` : ""}${sf.countries.length ? `&countries=${sf.countries.join(",")}` : ""}`;
     fetch(`/api/trips?g=${g}&home=${gateways[0].airport.country}&days=${days}${extra}`, { signal: ctrl.signal })
       .then((r) => r.json())
       .then((j: TripsResult) => {
@@ -2638,7 +2740,7 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
       })
       .catch(() => {});
     return () => ctrl.abort();
-  }, [shortOpen, gateways, days, around, exclude, tripsExtra.short]);
+  }, [shortOpen, gateways, days, around, exclude, tripsExtra.short, prefs]);
 
   // /api/trips already skips excluded countries; this client-side pass is belt and braces for a
   // cached answer from before the list changed, so nothing with such a night draws or lists.
@@ -2880,9 +2982,12 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
     }
     if (deal && !out.some((x) => x.key === selectedDeal)) {
       const c = dealCoord(deal);
-      if (c) out.unshift({ key: dealKey(deal), lon: c[0], lat: c[1], text: `€${deal.price}`, hot: true, cheap: deal.price < 60 });
+      // Pushed, not unshifted: a tag added at the front moves every DOM node after it, which replays their pop-in.
+      if (c) out.push({ key: dealKey(deal), lon: c[0], lat: c[1], text: `€${deal.price}`, hot: true, cheap: deal.price < 60 });
     }
-    out.sort((a, b) => (a.hot === b.hot ? 0 : a.hot ? -1 : 1));
+    // No sorting here: a hovered or selected tag moving to the front of the list made React move
+    // every DOM node before it, and a moved node replays its pop-in animation, so hovering one
+    // price re-animated them all. PriceLabels places hot tags first on its own, in a stable DOM.
     return out;
   }, [view, tripMode, pick, wildRegion, route, playing, longStay, selectedBase, group, selectedOption, wildCoord, dealsList, deal, selectedDeal, hoveredDeal, dealCoord, abShowing, ab.result, abOption, covered, eventSpots, eventSel, placePage, itinShowing, walkShowing, walk.status, walk.nodes, walk.edges, walkClock]);
   function pickLabel(key: string) {
@@ -3218,7 +3323,7 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
   }
 
   function focusDeal(key: string | null) {
-    const d = key ? (dealsAll.find((x) => dealKey(x) === key) ?? chatDeals.find((x) => dealKey(x) === key)) : null;
+    const d = key ? (dealsAll.find((x) => matchDealKey(x, key)) ?? chatDeals.find((x) => matchDealKey(x, key))) : null;
     // A pin tapped while the chat waits for a place answers the chat and stays on the Ask tab:
     // switching to Deals would unmount the chat and lose the reply it is about to stream.
     const answering = !!d && pickRef.current === "place";
@@ -3786,7 +3891,7 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
           itinerary={itin.itinerary}
           savedId={itin.savedId ?? (itin.itinerary as SavedItinerary | undefined)?.savedId}
           wishes={itin.wishes}
-          pace={itin.pace}
+          pace={itin.pace ?? prefs.pace}
           budget={itin.budget}
           onFocus={(f) => {
             const map = mapRef.current;
@@ -3808,6 +3913,11 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
     </div>
   ) : null;
   const eventsCardOpen = !!eventSel || (evLayer.on && evLayer.list);
+
+  // The chat's context: where the traveller is, their airports, month and Been list, and the
+  // trip style, which the server turns into one line of the agent's prompt (lib/prefs.ts
+  // prefsLine), so "a loop in the Balkans" in the chat stays 2 to 3 nights a place too.
+  const chatContext: ChatContext & { prefs: Prefs } = { origin: origin ? { lat: origin.lat, lon: origin.lon, label: origin.label } : undefined, gateways: boardGateways.map((g) => g.iata), home: gateways[0]?.airport.country ?? "RO", month: month ?? undefined, been: been.countries.length ? { countries: been.countries, newOnly: been.newOnly } : undefined, prefs };
 
   return (
     <div className={`app sheet-${sheet}`}>
@@ -3839,6 +3949,7 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
         been={been}
         onBeen={setBeen}
         countries={countries}
+        prefs={prefs}
       />
       {/* The layers and cards that belong to the map, not to a tab: they stay while the tabs change. */}
       <div className="mapchips">
@@ -3950,6 +4061,7 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
             gateways={gateways}
             homeLabel={homeLabel}
             excludedCount={exclude.length}
+            tradeoff={prefs.tradeoff}
           />
         )}
       </div>
@@ -4013,7 +4125,7 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
         onCombos={findCombosFor}
         selectedCombo={selectedCombo}
         onCombo={focusCombo}
-        chatContext={{ origin: origin ? { lat: origin.lat, lon: origin.lon, label: origin.label } : undefined, gateways: boardGateways.map((g) => g.iata), home: gateways[0]?.airport.country ?? "RO", month: month ?? undefined, been: been.countries.length ? { countries: been.countries, newOnly: been.newOnly } : undefined }}
+        chatContext={chatContext}
         chatSeed={chatSeed}
         onChatSeedConsumed={() => setChatSeed(null)}
         onChatDeals={onChatDeals}
@@ -4102,8 +4214,7 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
           excludedCount: exclude.length,
           walk,
           onSmartLoop: runSmartLoop,
-          onWildWalk: runWildWalk,
-          wildWalkReach,
+          prefs,
           onWalkSelect: selectWalkLoop,
         }}
         onHere={showHere}

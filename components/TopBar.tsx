@@ -1,13 +1,16 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Airport, CountryInfo } from "@/lib/types";
 import type { Origin } from "@/lib/ui-types";
 import type { BeenPrefs } from "@/lib/been";
 import { countryName, monthLabel, monthOptions } from "@/lib/format";
 import BeenEditor from "./BeenEditor";
 import CommandBar from "./CommandBar";
+import PrefsEditor from "./PrefsEditor";
+import Guide from "./Guide";
 import type { Command } from "@/lib/command";
+import { nightsLabel, sameAsDefault, type Prefs } from "@/lib/prefs";
 
 type Props = {
   origin: Origin | null;
@@ -26,6 +29,8 @@ type Props = {
   been: BeenPrefs;
   onBeen: (p: BeenPrefs) => void;
   countries: Record<string, CountryInfo>;
+  /** The trip style: the pill shows its nights a place, the editor changes it (and announces it with 'atlas:prefs'). */
+  prefs: Prefs;
 };
 
 /** Airports matching a typed code, city or name; exact code first, then the biggest. Shared with the group editor. */
@@ -61,7 +66,22 @@ function useDismiss(open: boolean, close: () => void) {
 }
 
 export default function TopBar(p: Props) {
-  const [open, setOpen] = useState<"from" | "when" | "been" | null>(null);
+  const [open, setOpen] = useState<"from" | "when" | "been" | "style" | null>(null);
+  // "How Atlas works": the "?" button, "/help" on the command line, or anyone through 'atlas:guide'.
+  const [guide, setGuide] = useState(false);
+  const closeGuide = useCallback(() => setGuide(false), []);
+  // A form's "edit" link next to "Using your trip style" opens the editor here ('atlas:open-prefs').
+  useEffect(() => {
+    const onOpenPrefs = () => setOpen("style");
+    const onGuide = () => setGuide(true);
+    window.addEventListener("atlas:open-prefs", onOpenPrefs);
+    window.addEventListener("atlas:guide", onGuide);
+    return () => {
+      window.removeEventListener("atlas:open-prefs", onOpenPrefs);
+      window.removeEventListener("atlas:guide", onGuide);
+    };
+  }, []);
+  const styleSet = !sameAsDefault(p.prefs);
   const [query, setQuery] = useState("");
   const hits = useMemo(() => searchAirports(p.airports, query), [p.airports, query]);
   const ref = useDismiss(open !== null, () => setOpen(null));
@@ -184,15 +204,40 @@ export default function TopBar(p: Props) {
             </div>
           )}
         </div>
+
+        {/* The trip style: nights a place and the rest, the default of every builder. A sibling popover, like Been's. */}
+        <div className="pillwrap">
+          <button
+            className={`pill stylepill${open === "style" ? " on" : ""}${styleSet ? " set" : ""}`}
+            onClick={() => setOpen(open === "style" ? null : "style")}
+            title="Your trip style: nights in each place, pace, cheapest or comfort, places to avoid"
+            aria-haspopup="dialog"
+            aria-expanded={open === "style"}
+          >
+            <span className="k">Trip style</span>
+            <span className="v">{nightsLabel(p.prefs)}</span>
+            {styleSet && <span className="setdot" aria-label="changed from the defaults" />}
+            <span className="caret">▾</span>
+          </button>
+          {open === "style" && (
+            <div className="popover prefspop" role="dialog" aria-label="Your trip style">
+              <PrefsEditor value={p.prefs} countries={p.countries} />
+            </div>
+          )}
+        </div>
       </div>
 
       {/* The command line: routes, events, trips, places and questions, all from one box. */}
-      <CommandBar onRun={p.onCommand} busy={p.busy} />
+      <CommandBar onRun={p.onCommand} busy={p.busy} onHelp={() => setGuide(true)} />
 
       <span className="spacer" />
+      <button className="pill helpbtn" onClick={() => setGuide(true)} title="How Atlas works" aria-label="How Atlas works">
+        ?
+      </button>
       <button className="pill share" onClick={p.onShare} title="Copy a link to this view">
         {p.copied ? "Link copied" : "Share"}
       </button>
+      <Guide open={guide} onClose={closeGuide} />
     </header>
   );
 }

@@ -3,7 +3,7 @@ import { createAmazonBedrock } from "@ai-sdk/amazon-bedrock";
 import { atlasTools, chatContext, chatSystem, rememberOutput, TURN_SEARCH_BUDGET, type AgentContext } from "@/lib/agent-tools";
 import { TtlLru } from "@/lib/memo";
 
-// POST /api/chat { messages: UIMessage[], context: { origin, gateways, home, month, today, been } }
+// POST /api/chat { messages: UIMessage[], context: { origin, gateways, home, month, today, been, prefs } }
 // The conversation with Atlas: the whole history comes with every turn (the browser keeps it),
 // the model streams its answer and calls the tools in lib/agent-tools.ts as it needs them.
 // The loop stops after ten steps, or as soon as the agent asks the traveller a question with
@@ -74,8 +74,11 @@ export async function POST(request: Request) {
   }
   const messages = (Array.isArray(body.messages) ? body.messages : []).filter((m) => m && typeof m === "object" && Array.isArray(m.parts)).slice(-40);
   if (!messages.length) return Response.json({ error: "messages required" }, { status: 400 });
-  // The context (origin, airports, Been list, the traveller's day) and the system prompt are
-  // shared with the terminal CLI (scripts/atlas.ts): lib/agent-tools.ts builds both.
+  // The context (origin, airports, Been list, the traveller's day, the trip style) and the
+  // system prompt are shared with the terminal CLI (scripts/atlas.ts): lib/agent-tools.ts builds
+  // both. The trip style is believed only field by field (chatPrefs: nights a place clamped to
+  // 1 to 14, each choice from its list, avoid words the walk can read), since anyone can post
+  // this body and its words go into the system prompt.
   const ctx: AgentContext = chatContext(body.context as Record<string, unknown> | undefined);
   // CHAT_TURN_SEARCHES lowers the Kiwi searches one turn may spend (never raises it past
   // TURN_SEARCH_BUDGET): a knob for a test server or a day Kiwi is touchy. Every live tool,

@@ -61,13 +61,21 @@ async function judgeOnce(model: Parameters<typeof generateObject>[0]["model"], b
       system:
         "You judge multi-country budget trips built from real fares. Weigh: price per day against what is seen; hours in the air against nights on the ground; pace (fewer than two nights a stop is rushed; one-stop 20-hour flights are a cost); backtracking; variety (a megacity, a beach, a small town beat three similar cities); season in that month; visa friction and warnings; whether a stop is worth its nights. When travellerWishes is given, judge the trip against those words first (a trip that ignores 'no beaches' or 'temples and street food' loses points, one that delivers them gains); when askedToPassThrough is given, those stops were the traveller's own choice: judge their nights and order, not whether to include them. Be concrete and honest; a weak trip gets a low score and clear tweaks. Prices are euros and were found on Kiwi.com today.",
       prompt: JSON.stringify(brief),
-      maxOutputTokens: 600,
+      // 600 was too few once the model started reasoning before it answers: the object came back cut after score
+      // and tweaks, with no verdict, on every trip (measured 2026-10-12).
+      maxOutputTokens: 2000,
     });
     // The model sometimes drops a field or changes its type; a verdict without tweaks is
     // still a verdict, and nothing it sends can crash the parse.
     const score = typeof object?.score === "number" ? object.score : Number(object?.score);
-    const verdict = typeof object?.verdict === "string" ? object.verdict.trim() : "";
-    if (!Number.isFinite(score) || !verdict) return null;
+    // A verdict the model left out is its first reason, when it gave one: a scored trip with reasons is still judged.
+    const firstReason = Array.isArray(object?.reasons) ? object.reasons.find((x): x is string => typeof x === "string" && x.trim().length > 0) : undefined;
+    const verdict = typeof object?.verdict === "string" && object.verdict.trim() ? object.verdict.trim() : (firstReason?.trim() ?? "");
+    if (!Number.isFinite(score) || !verdict) {
+      // Said once per attempt, shapes only (never the trip): a silent null hid a model that stopped answering.
+      console.log(`judge: unusable answer (score ${JSON.stringify(object?.score)?.slice(0, 40)}, verdict ${typeof object?.verdict}, keys ${Object.keys(object ?? {}).join(",")})`);
+      return null;
+    }
     const lines = (v: unknown, n: number) => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string" && x.trim().length > 0).map((x) => x.trim()).slice(0, n) : []);
     return {
       score: Math.max(0, Math.min(100, Math.round(score))),

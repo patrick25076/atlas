@@ -67,7 +67,9 @@ with a note and not memoised, so "no deals" never outlives the throttle (`/api/f
 | `finder.ts` | a custom search over a period from several airports: must-include date, nights, direct, max hours (0 means no limit), a region or country, open-jaw home, hidden-city scan | ~20, 40 with open-jaw |
 | `scan.ts` | the price calendar: cheapest per month to one destination, open-jaw optional, the fare memory asked first | 1 per month, 3 with open-jaw |
 | `combos.ts` | two-city versions of a deal: fly in, train or coach to a neighbour, fly home | 6 |
-| `wild.ts` + `wild-variants.ts` + `judge.ts` | the long loops: way in (via a cheaper hub when that wins), a chain of one-way hops and border crossings, way home, stopover, living costs, visas, a model's verdict; variants build 2 or 3 versions and rank them (3 up to 28 nights, 2 past that; a dated window has them too, since every version is keyed on the window) | 40 to 60 per version, about 65 worst case; at most about 200 from one click |
+| `graph-walk.ts` | the graph walk: loops from the traveller's door, best-first over lazily searched edges with a beam per depth (one "anywhere" search per expanded place, or a targeted search to a region's biggest hubs when a region or countries are given; trains and coaches from the Dijkstra in `ground.ts`; one search to every home airport to close), the fare memory read first; stops scale with the nights (up to 16), the beam narrows when the searches left only just cover a loop | about 2 a stop plus the way in and home, never under 12, at most 40 |
+| `wild-walk.ts` | Wild trips through the graph walk aimed at the region (the default engine of `/api/wild` since 2026-10-12): every stop takes the nights a stop asked for (2-3 means 2 or 3), at most two cities a country, the best loop as a `WildTrip` with living costs, visas and the judge's verdict, the other loops as alternatives | the walk's |
+| `wild.ts` + `wild-variants.ts` + `judge.ts` | the classic long loops (`engine=classic`): way in (via a cheaper hub when that wins), a chain of one-way hops and border crossings, way home, stopover, living costs, visas, a model's verdict; nights a stop given by the traveller are honoured exactly (up to 16 steps for stops of three nights or less, a second city in a country when the region runs out); variants build 2 or 3 versions and rank them (3 up to 28 nights, 2 past that; a dated window has them too, since every version is keyed on the window) | 40 to 60 per version, about 65 worst case; at most about 200 from one click |
 | `longstay.ts` | one to three months somewhere: the eight best bases of a region by worth for money, flight in and out through the scan, rent and living from World Bank price levels, side trips, climate, visa | up to 4 per base |
 | `group.ts` | several people from different airports meeting somewhere: common windows, then the cheapest city for everyone | bounded per window and city |
 | `purpose.ts` | events worth flying for in a window, each with the cheapest way there (boards first, then live) | `live` param, max 8 |
@@ -403,6 +405,15 @@ handoff in the round-three report.
   still queued unpriced and the group the windows left, each with `partial: true` and a
   plain note ("not priced in time; ask again"). An answer cut short is not memoised, so the
   next ask prices what is missing. The route finder's own cap is `deadlineMs` (above).
+- **Two Wild engines.** `/api/wild?engine=walk` (the default) builds with `lib/wild-walk.ts`, `engine=classic` with
+  `lib/wild.ts`; a walk asked with `variants > 1` or `startFrom` is built classic and the stream says so. The walk
+  streams one `{walk: WalkEvent}` line per step next to the usual `{progress}` lines, takes `avoid` (countries,
+  cities, group words), `ground` (minutes, 0 for flights only), `searches` (0 to 40) and `style=unique` (added to the
+  wishes). Its stored key is the classic key plus `-walk`, `-a<avoided countries>` (a hash of every avoided country
+  and city once a city or a long list is in it), `-g<minutes>` and `-q<searches>`
+  (`lib/wild-walk.ts engineKeySuffix`, the scheme the chat's `wild_trip` writes too); classic keys are unchanged, and
+  `/api/plan` builds the same key from the same parameters. A walk Kiwi throttled or the clock cut is shown, never
+  stored. The judge answers with up to 2,000 tokens (600 cut the object before its verdict once the model reasoned).
 - **Wild with countries is custom.** A `countries` list replaces the region's list whatever
   region was named (`effectiveRegion` is `custom`): the trip is labelled by its countries,
   tagged on the globe by them and keyed as custom (`customKey`, whose tenth argument holds

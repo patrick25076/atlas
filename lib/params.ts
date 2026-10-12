@@ -46,6 +46,8 @@ export function iso2(v: string | null | undefined): string | null {
 
 /** A point on Earth. */
 export function latLon(lat: string | null | undefined, lon: string | null | undefined): { lat: number; lon: number } | null {
+  // Number(null) and Number("") are 0: a missing point must not become the Gulf of Guinea.
+  if (lat == null || lon == null || String(lat).trim() === "" || String(lon).trim() === "") return null;
   const a = Number(lat);
   const b = Number(lon);
   if (!Number.isFinite(a) || !Number.isFinite(b) || Math.abs(a) > 90 || Math.abs(b) > 180) return null;

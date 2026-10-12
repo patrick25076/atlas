@@ -55,10 +55,15 @@ export default function PriceLabels({ map, items, onPick, onHover }: Props) {
       const covers: DOMRect[] = [];
       el.parentElement?.querySelectorAll(".mapcard, .mapnotice, .mapchips, .cmdbar, .cmdlist").forEach((n) => covers.push(n.getBoundingClientRect()));
       const underGlass = (x: number, y: number) => covers.some((r) => x > r.left - 8 && x < r.right + 8 && y > r.top - 8 && y < r.bottom + 30);
-      for (let i = 0; i < list.length; i++) {
+      // Hot tags (hovered, selected) are placed first so they always win the space, but the DOM
+      // keeps the list's order: reordering nodes would replay every moved tag's pop-in.
+      const order: number[] = [];
+      for (let i = 0; i < list.length; i++) if (list[i].hot) order.push(i);
+      for (let i = 0; i < list.length; i++) if (!list[i].hot) order.push(i);
+      for (const i of order) {
         const it = list[i];
         const node = nodes[i];
-        if (!node) break;
+        if (!node) continue;
         // Region tags fade out once you are close enough to see the countries themselves.
         let ok = haversineKm(center.lat, center.lng, it.lat, it.lon) < horizonKm && !(it.kind === "region" && zoom > 5.5);
         let x = 0;

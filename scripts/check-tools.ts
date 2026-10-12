@@ -27,9 +27,15 @@
 //              (the turn's budget spent: no search may leave, the fare memory still answers),
 //              the progress it streams, what the model reads, cheapest_way at budget 0, and one
 //              live walk of at most --walk-live=N searches (default 2, never past --live-cap).
-// --only=command,dispatch,itinerary,walk runs just those; --only=tools just the live table.
-import { atlasTools, parseDay, rememberOutput, type AgentContext } from "../lib/agent-tools";
+//   prefs      the trip style (lib/prefs.ts) as the chat reads it: the clamps of chatPrefs, the
+//              system prompt's line, and the defaults reaching walk_trips, wild_trip (the walk
+//              engine by default, classic on request), cheapest_way, group_trip and
+//              find_getaways, all through the trace or a spent budget: zero Kiwi searches.
+// --only=command,dispatch,itinerary,walk,prefs runs just those; --only=tools just the live table.
+import { atlasTools, chatContext, chatPrefs, chatSystem, parseDay, rememberOutput, UNIQUE_WISHES, type AgentContext } from "../lib/agent-tools";
+import type { Prefs } from "../lib/prefs";
 import { parseCommand, type Command } from "../lib/command";
+import { WALK_PARAM_KEYS, walkQueryString, type WalkQuery } from "../lib/ui-types";
 import { eventCommand, eventRoute, eventTripDays, routeDetail, routeResultDetail, walkCommandQuery, walkResultDetail, walkWindow, type ChatEvent } from "../lib/chat-widgets";
 import { skeletonFromDeal, skeletonFromRoute, skeletonFromWalk, type Itinerary } from "../lib/itinerary";
 import type { WalkLoop, WalkResult } from "../lib/graph-walk";
@@ -325,6 +331,41 @@ if (want("command")) {
     ["/loop sea 21", { kind: "wild", region: "sea", nights: 21 }],
     ["loop through Vietnam 3 weeks", { kind: "wild", countries: ["Vietnam"], nights: 21 }],
     ["Brasov to Lisbon then back", { kind: "route", from: "Brasov", to: "Lisbon" }],
+    // The trip style in words (lib/command.ts readTripStyle): nights a place, a cap on them, the pace, trains between
+    // places, unique. Read before the stay, so "2-3 nights a place" is never the trip's own length.
+    ["loop 2 weeks, 2-3 nights per place", { kind: "walk", minNights: 14, maxNights: 14, nightsPerStop: [2, 3] }],
+    ["loop from Brasov 6 days, 2 to 3 days each", { kind: "walk", origin: "Brasov", minNights: 5, maxNights: 6, nightsPerStop: [2, 3] }],
+    ["loop 10 nights, max 3 nights a city", { kind: "walk", minNights: 10, maxNights: 10, nightsPerStop: [2, 3] }],
+    ["loop 10 nights, 2-3 days per location max", { kind: "walk", minNights: 10, nightsPerStop: [2, 3] }],
+    ["loop 6 days, max 2 nights a place", { kind: "walk", nightsPerStop: 2 }],
+    ["loop 8 nights, slow pace", { kind: "walk", minNights: 8, nightsPerStop: [3, 4], pace: "slow" }],
+    ["loop 8 nights, 2 nights a stop, slow pace", { kind: "walk", nightsPerStop: 2, pace: "slow" }],
+    // The ground limit travels in minutes (480 trains between places, 0 flights only): the shell copies it as it is.
+    ["loop from Brasov 6 days, only trains between cities", { kind: "walk", origin: "Brasov", ground: 480, mustInclude: undefined }],
+    ["loop 6 days, flights only", { kind: "walk", ground: 0 }],
+    ["/wild balkans 14, flights only", { kind: "wild", region: "balkans", nights: 14, ground: 0 }],
+    // Style words outside a loop stay part of the line: "by train only" never leaves "Vienna by", "flights only" never
+    // turns the cheapest dates to Spain into a route.
+    ["Brasov to Vienna by train only", { kind: "route", from: "Brasov", to: "Vienna" }],
+    ["cheap flights only to Spain in november", { kind: "getaways" }],
+    ["loop 6 days, unique places", { kind: "walk", style: "unique" }],
+    ["/wild sea 21, 2-3 days per location max", { kind: "wild", region: "sea", nights: 21, nightsPerStop: [2, 3] }],
+    ["/wild balkans 14, max 3 nights a city, unique", { kind: "wild", region: "balkans", nights: 14, nightsPerStop: [2, 3], style: "unique" }],
+    ["southeast asia 3 weeks, 2-3 days per location max", { kind: "wild", region: "sea", nights: 21, nightsPerStop: [2, 3] }],
+    ["two weeks in the Balkans, cheapest", { kind: "wild", region: "balkans", nights: 14, nightsPerStop: undefined }],
+    // The trip style editor and the guide.
+    ["/style", { kind: "prefs" }],
+    ["/settings", { kind: "prefs" }],
+    ["trip style", { kind: "prefs" }],
+    ["/help", { kind: "help" }],
+    ["help", { kind: "help" }],
+    ["how does this work", { kind: "help" }],
+    ["help me find a cheap weekend", { kind: "ask" }],
+    // Words the command bar does not open by itself stay questions for the chat (the shell has no case for help or
+    // prefs, so suggesting them would do nothing).
+    ["what can you do", { kind: "ask" }],
+    ["open my trip style", { kind: "ask" }],
+    ["/h", { kind: "ask" }],
   ];
   const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
   for (const [input, wantFirst, on] of cases) {
@@ -431,6 +472,28 @@ if (want("dispatch")) {
   verdict("walk: swapped window", w3.from === "2026-11-01" && w3.to === "2026-11-10" && w3.notes.some((n) => n.includes("read as 2026-11-01 to 2026-11-10")), w3.notes.join(" | "));
   const pq = walkCommandQuery(parseCommand("loop through Poland 6 days", "2026-10-10")[0] as Extract<Command, { kind: "walk" }>, here, "2026-10-10").params;
   verdict("walk: countries to query", pq.countries === "Poland", `countries ${pq.countries}`);
+  // The trip style fills what the line did not say; the line's own words win.
+  const style: Prefs = { nightsPerPlace: [2, 3], pace: "balanced", tradeoff: "price", taste: "unique", avoid: ["dach"], groundOk: false };
+  const sq = walkCommandQuery(parseCommand("loop 2 weeks, not Poland", "2026-10-10")[0] as Extract<Command, { kind: "walk" }>, here, "2026-10-10", undefined, style).params;
+  verdict("walk: style to query", sq.nightsPerStop === "2-3" && sq.style === "unique" && sq.avoid === "Poland,dach" && sq.ground === 0 && (sq.tradeoff ?? "price") === "price", JSON.stringify({ nps: sq.nightsPerStop, style: sq.style, avoid: sq.avoid, ground: sq.ground, tradeoff: sq.tradeoff }));
+  const lq = walkCommandQuery(parseCommand("loop 2 weeks, 3-4 nights a place, only trains between cities", "2026-10-10")[0] as Extract<Command, { kind: "walk" }>, here, "2026-10-10", undefined, style).params;
+  verdict("walk: the line wins", lq.nightsPerStop === "3-4" && lq.ground === 480, `nps ${lq.nightsPerStop}, ground ${lq.ground}`);
+  // The shell's own rule (walkFromCommand in components/Globe.tsx): every WALK_PARAM_KEYS field of the command that is a
+  // number or a string is copied as it is, then the trip style fills only what is still empty. The ground field must
+  // therefore already be minutes, or "flights only" reaches /api/walk as a word it reads as its 330-minute default.
+  const shellCopy = (c: Record<string, unknown>, styleGround?: number): WalkQuery => {
+    const q: WalkQuery = {};
+    for (const k of WALK_PARAM_KEYS) {
+      const v = c[k];
+      if (typeof v === "number" || (typeof v === "string" && v.trim())) q[k] = v;
+    }
+    if (q.ground == null && styleGround != null) q.ground = styleGround;
+    return q;
+  };
+  const flightsOnly = new URLSearchParams(walkQueryString(shellCopy(parseCommand("loop 6 days, flights only", "2026-10-10")[0] as unknown as Record<string, unknown>, 330))).get("ground");
+  const trainsOnly = new URLSearchParams(walkQueryString(shellCopy(parseCommand("loop 2 weeks, only trains between cities", "2026-10-10")[0] as unknown as Record<string, unknown>))).get("ground");
+  const styleOff = new URLSearchParams(walkQueryString(shellCopy(parseCommand("loop 6 days", "2026-10-10")[0] as unknown as Record<string, unknown>, 0))).get("ground");
+  verdict("walk: shell copy, ground", flightsOnly === "0" && trainsOnly === "480" && styleOff === "0", `flights only -> ground=${flightsOnly}, trains between cities -> ground=${trainsOnly}, style off -> ground=${styleOff}`);
   console.log("");
 }
 
@@ -631,6 +694,118 @@ if (want("walk")) {
   console.log("");
 }
 
+// ---------------------------------------------------------------------------------------
+// prefs: the trip style as the chat reads it. Every case reads the parameters a tool hands its engine through the
+// trace (which throws before the engine runs) or runs a tool with the turn's budget spent: no Kiwi search leaves.
+if (want("prefs")) {
+  console.log("trip style (lib/prefs.ts) in the chat tools:");
+  const before = sent();
+  // The clamps: nights 1 to 14, the least first; an unknown choice back to the default; avoid words the walk cannot
+  // read dropped ("XX" is no country); the longest flight 40 h at most; nothing sent is no style at all.
+  {
+    const a = chatPrefs({ nightsPerPlace: [40, 0], tradeoff: "cheapest!", taste: "unique", avoid: ["XX", "dach", "DE", 7], maxFlightHours: 99, groundOk: "no" });
+    const ok = !!a && JSON.stringify(a.nightsPerPlace) === "[1,14]" && a.tradeoff === "price" && a.taste === "unique" && JSON.stringify(a.avoid) === '["dach","DE"]' && a.maxFlightHours === 40 && a.groundOk === true && chatPrefs(undefined) === undefined && chatPrefs("2-3") === undefined;
+    verdict("prefs: clamps", ok, a ? `nights ${JSON.stringify(a.nightsPerPlace)}, tradeoff ${a.tradeoff}, avoid ${JSON.stringify(a.avoid)}, hours ${a.maxFlightHours}` : "no prefs");
+    const c = chatContext({ origin: { lat: 45.657, lon: 25.601, label: "Brașov" }, gateways: ["GHV", "SBZ", "OTP"], home: "RO", today, prefs: { nightsPerPlace: [2, 3], pace: "slow", tradeoff: "price", taste: "mixed", avoid: [], groundOk: true } });
+    const sys = chatSystem(c);
+    verdict("prefs: system prompt", /2 to 3 nights in each place/.test(sys) && /cheapest first/.test(sys) && /wins for that trip only/.test(sys) && /They set it themselves/.test(sys), /2 to 3 nights in each place/.test(sys) ? "the style's sentence and the override rule are in the prompt" : "the style is not in the prompt");
+    const none = chatSystem(chatContext({ gateways: ["OTP"], home: "RO", today }));
+    verdict("prefs: prompt without style", /app's defaults/.test(none) && /2 to 3 nights in each place/.test(none), "no style sent: the defaults are named as such");
+  }
+  /** A tools instance with this style, the trace reading what one tool hands its engine. */
+  const traced = async (prefs: Prefs | undefined, name: string, input: unknown, budgetLeft = 120): Promise<{ engine: string; params: Record<string, unknown> } | null> => {
+    const c: AgentContext = { origin: { lat: 45.657, lon: 25.601, label: "Brașov" }, gateways: ["GHV", "SBZ", "OTP"], home: "RO", today, budget: { used: 120 - budgetLeft, max: 120 }, ...(prefs ? { prefs } : {}) };
+    const seen: { got: { engine: string; params: Record<string, unknown> } | null } = { got: null };
+    c.trace = (engine, params) => {
+      seen.got = { engine, params };
+      throw new Error("harness: parameters read");
+    };
+    await drain(await (atlasTools(c) as unknown as Tools)[name]?.execute?.(input, { toolCallId: `prefs-${name}`, messages: [] }));
+    return seen.got;
+  };
+  const style: Prefs = { nightsPerPlace: [2, 3], pace: "balanced", tradeoff: "price", taste: "unique", avoid: ["dach"], groundOk: true };
+  const DEFAULT_STYLE: Prefs = { nightsPerPlace: [2, 3], pace: "balanced", tradeoff: "price", taste: "mixed", avoid: [], groundOk: true };
+  const twoWeeks = { from: plus(20), to: plus(40), minNights: 14, maxNights: 14 };
+  // walk_trips: the style's nights a place, tradeoff, taste and avoid list are the defaults; stops and budget scale.
+  {
+    const g = await traced(style, "walk_trips", twoWeeks);
+    const p = g?.params ?? {};
+    verdict("prefs -> walk_trips", !!g && JSON.stringify(p.nightsPerStop) === "[2,3]" && p.tradeoff === "price" && p.style === "unique" && (p.avoid as string[])?.includes("dach") && p.maxStops === 7 && p.budget === 16 && p.maxGroundMin === 330, g ? `nps ${JSON.stringify(p.nightsPerStop)}, tradeoff ${p.tradeoff}, style ${p.style}, avoid ${String(p.avoid)}, stops ${p.maxStops}, budget ${p.budget}` : "the tool never reached the engine");
+    const g2 = await traced(style, "walk_trips", { ...twoWeeks, nightsPerStop: 3, nightsPerStopMax: 4, tradeoff: "comfort", avoid: [] });
+    const q = g2?.params ?? {};
+    verdict("prefs: message overrides", !!g2 && JSON.stringify(q.nightsPerStop) === "[3,4]" && q.tradeoff === "comfort" && Array.isArray(q.avoid) && !(q.avoid as string[]).length && q.maxStops === 5, g2 ? `nps ${JSON.stringify(q.nightsPerStop)}, tradeoff ${q.tradeoff}, avoid ${JSON.stringify(q.avoid)}, stops ${q.maxStops}` : "the tool never reached the engine");
+    const g3 = await traced({ ...style, groundOk: false }, "walk_trips", { ...twoWeeks, maxStops: 4 });
+    verdict("prefs: no trains or coaches", g3?.params.maxGroundMin === 0 && g3?.params.maxStops === 4, `maxGroundMin ${g3?.params.maxGroundMin}, stops ${g3?.params.maxStops}`);
+    const g4 = await traced(undefined, "walk_trips", { from: plus(20), to: plus(30) });
+    verdict("prefs: none sent = defaults", JSON.stringify(g4?.params.nightsPerStop) === "[2,3]" && g4?.params.tradeoff === "price" && !g4?.params.style, `nps ${JSON.stringify(g4?.params.nightsPerStop)}, tradeoff ${g4?.params.tradeoff}`);
+  }
+  // wild_trip: the walk engine by default with the style's nights a place; classic on request; a style that cannot
+  // fill the nights in 16 stops leaves the engine's own stays.
+  {
+    const g = await traced(style, "wild_trip", { region: "balkans", nights: 14 });
+    const p = g?.params ?? {};
+    verdict("prefs -> wild_trip (walk)", g?.engine === "wildByWalk" && p.nightsPerStop === 2 && p.nightsPerStopMax === 3 && ((p.tradeoff as string | undefined) ?? "price") === "price" && (p.avoid as string[])?.includes("dach") && /unique/.test(String(p.wishes)), g ? `${g.engine}: nps ${p.nightsPerStop}-${p.nightsPerStopMax}, tradeoff ${p.tradeoff}, avoid ${String(p.avoid)}` : "the tool never reached the engine");
+    const g2 = await traced(style, "wild_trip", { region: "balkans", nights: 14, engine: "classic" });
+    const q = g2?.params ?? {};
+    verdict("prefs -> wild_trip (classic)", g2?.engine === "buildWild" && q.nightsPerStop === 2 && q.nightsPerStopMax === 3 && (q.exclude as string[])?.includes("DE") && !("avoid" in q), g2 ? `${g2.engine}: nps ${q.nightsPerStop}-${q.nightsPerStopMax}, exclude ${String(q.exclude)}` : "the tool never reached the engine");
+    const g3 = await traced(undefined, "wild_trip", { region: "sea", nights: 21 });
+    verdict("wild_trip default: walk 2-3", g3?.engine === "wildByWalk" && g3.params.nightsPerStop === 2 && g3.params.nightsPerStopMax === 3, g3 ? `${g3.engine}: nps ${g3.params.nightsPerStop}-${g3.params.nightsPerStopMax}` : "the tool never reached the engine");
+    const g4 = await traced(undefined, "wild_trip", { region: "sea", nights: 60 });
+    verdict("wild_trip: 60 nights keep stays", g4?.engine === "wildByWalk" && g4.params.nightsPerStop === undefined, `nps ${g4?.params.nightsPerStop} (3 nights x 16 stops cannot fill 60)`);
+    const g5 = await traced(undefined, "wild_trip", { region: "sea", nights: 14, nightsPerStop: 3, nightsPerStopMax: 4 });
+    verdict("wild_trip: message overrides", g5?.params.nightsPerStop === 3 && g5?.params.nightsPerStopMax === 4, `nps ${g5?.params.nightsPerStop}-${g5?.params.nightsPerStopMax}`);
+    // Classic with no style sent stays 2 to 3 nights a place, as the prompt says and the Wild tab's classic toggle sends.
+    const g6 = await traced(undefined, "wild_trip", { region: "balkans", nights: 14, engine: "classic" });
+    const g7 = await traced(undefined, "wild_trip", { region: "balkans", nights: 14, variants: 2 });
+    verdict("wild_trip: classic default 2-3", g6?.engine === "buildWild" && g6.params.nightsPerStop === 2 && g6.params.nightsPerStopMax === 3 && g7?.engine === "buildWildVariants" && g7.params.nightsPerStop === 2, `classic ${g6?.params.nightsPerStop}-${g6?.params.nightsPerStopMax}, variants ${g7?.params.nightsPerStop}-${g7?.params.nightsPerStopMax}`);
+    // Taste unique: the wishes are word for word /api/wild's, so the key's wishes hash matches the Wild tab's.
+    verdict("wild_trip: unique wishes", g?.params.wishes === UNIQUE_WISHES, `wishes "${String(g?.params.wishes)}"`);
+    // The turn's leftover reaches the walk only below the walk's own budget for the nights (14 nights at 2 a stop:
+    // 8 stops, 18 searches), so 39 left is a full, stored build and 10 left is a short one.
+    const b39 = await traced(undefined, "wild_trip", { region: "balkans", nights: 14 }, 39);
+    const b10 = await traced(undefined, "wild_trip", { region: "balkans", nights: 14 }, 10);
+    verdict("wild_trip: walk budget", b39?.engine === "wildByWalk" && b39.params.searchBudget === undefined && b10?.params.searchBudget === 10, `39 left -> ${String(b39?.params.searchBudget ?? "its own 18")}, 10 left -> ${String(b10?.params.searchBudget)}`);
+  }
+  // The keys wild_trip returns, read without a search: the budget is spent, so each answer is a "nothing stored" note
+  // carrying the key it would have stored under.
+  {
+    const keyOf = async (prefs: Prefs | undefined, input: Record<string, unknown>): Promise<string> => {
+      const c: AgentContext = { origin: { lat: 45.657, lon: 25.601, label: "Brașov" }, gateways: ["GHV", "SBZ", "OTP"], home: "RO", today, budget: { used: 120, max: 120 }, ...(prefs ? { prefs } : {}) };
+      const r = (await drain(await (atlasTools(c) as unknown as Tools).wild_trip!.execute!(input, { toolCallId: "prefs-key", messages: [] }))) as Record<string, unknown>;
+      return String((r.key as { custom?: string } | undefined)?.custom ?? `(no key: ${String(r.error ?? r.note ?? "").slice(0, 60)})`);
+    };
+    const noTrains = { ...DEFAULT_STYLE, groundOk: false };
+    const variantsKey = await keyOf(noTrains, { region: "balkans", nights: 14, variants: 3 });
+    const singleKey = await keyOf(noTrains, { region: "balkans", nights: 14, engine: "classic" });
+    verdict("wild_trip: variant keys", !variantsKey.includes("-g0") && singleKey.endsWith("-g0"), `variants "${variantsKey}" (as lib/wild-variants.ts stores them), one classic "${singleKey}" (as /api/wild ground=0)`);
+  }
+  // cheapest_way and group_trip read the style too: the longest flight (door to door plus airport time) and the
+  // tradeoff; a group's nights only when the traveller changed the style.
+  {
+    const g = await traced({ ...style, maxFlightHours: 8 }, "cheapest_way", { to: "Lisbon", depart: plus(35), nights: 4 });
+    verdict("prefs -> cheapest_way", g?.params.maxHours === 11 && g?.params.tradeoff === "price", `maxHours ${g?.params.maxHours}, tradeoff ${g?.params.tradeoff}`);
+    const members = [{ name: "Ana", origins: ["Cluj"], available: [{ from: plus(30), to: plus(40) }] }, { name: "Patrick", origins: ["GHV"], available: [{ from: plus(30), to: plus(40) }] }];
+    const g2 = await traced({ ...style, nightsPerPlace: [4, 5] }, "group_trip", { members, where: "Lisbon" });
+    const g3 = await traced(undefined, "group_trip", { members, where: "Lisbon" });
+    verdict("prefs -> group_trip", g2?.params.minNights === 4 && g2?.params.maxNights === 5 && g3?.params.minNights === 2 && g3?.params.maxNights === 4, `styled ${g2?.params.minNights}-${g2?.params.maxNights}, default ${g3?.params.minNights}-${g3?.params.maxNights}`);
+  }
+  // find_getaways has no trace: with the turn's budget spent it answers from known fares, and says which of the
+  // style's defaults it used.
+  {
+    const c: AgentContext = { origin: { lat: 45.657, lon: 25.601, label: "Brașov" }, gateways: ["GHV", "SBZ", "OTP"], home: "RO", today, budget: { used: 5, max: 5 }, prefs: { ...style, nightsPerPlace: [4, 5], maxFlightHours: 6 } };
+    const r = (await drain(await (atlasTools(c) as unknown as Tools).find_getaways!.execute!({ from: plus(30), to: plus(40) }, { toolCallId: "prefs-getaways", messages: [] }))) as Record<string, unknown>;
+    const line = String(r.tripStyle ?? "");
+    verdict("prefs -> find_getaways", /4 to 5 nights/.test(line) && /under 6 h/.test(line) && /dach/.test(line), line.slice(0, 70) || String(r.error ?? r.note ?? "").slice(0, 70));
+    // A style that changed only the tradeoff leaves a getaway's nights alone (2 to 7, not the 2 to 3 a place).
+    const c2: AgentContext = { ...c, budget: { used: 5, max: 5 }, prefs: { ...DEFAULT_STYLE, tradeoff: "price" } };
+    const r2 = (await drain(await (atlasTools(c2) as unknown as Tools).find_getaways!.execute!({ from: plus(30), to: plus(40) }, { toolCallId: "prefs-getaways-2", messages: [] }))) as Record<string, unknown>;
+    const line2 = String(r2.tripStyle ?? "");
+    verdict("find_getaways: tradeoff only", !/nights/.test(line2), line2 ? line2.slice(0, 70) : "no nights from the style");
+  }
+  verdict("prefs: no search left", sent() === before, `${sent() - before} Kiwi searches sent by the prefs cases`);
+  console.log("");
+}
+
 if (!want("tools")) report();
 
 console.log(`check-tools: context GHV, SBZ, OTP, home RO, origin Brasov, today ${today}; live cap ${LIVE_CAP} searches; Kiwi ${kiwiThrottled() ? "THROTTLED (breaker open)" : "open"}`);
@@ -666,7 +841,8 @@ const wildPick = await (async () => {
   }
   return null;
 })();
-await check("wild_trip", wildPick ? { region: wildPick.region, nights: wildPick.nights } : {}, { skip: wildPick ? undefined : `no wild trip stored under wild/${gw}-<region>-next-<nights>-experiences-mid.json in the last 24 h; a build would cost ~60 searches` });
+// The stored trips this looks for are the classic chain's (the walk engine's keys end in -walk), so it asks for that engine.
+await check("wild_trip", wildPick ? { region: wildPick.region, nights: wildPick.nights, engine: "classic" } : {}, { skip: wildPick ? undefined : `no wild trip stored under wild/${gw}-<region>-next-<nights>-experiences-mid.json in the last 24 h; a build would cost ~60 searches` });
 // The day plan only when one is already stored for that trip (the planner is a minute of model calls).
 const planPick = wildPick ? await readJson<Plan>(planPath(wildPath(gw, wildPick.region, undefined, wildPick.nights, "experiences", "mid"))).catch(() => null) : null;
 await check("plan_days", wildPick ? { key: { region: wildPick.region, nights: wildPick.nights, style: "experiences", budget: "mid", custom: "" } } : {}, { skip: planPick ? undefined : "no plan stored for the stored trip; planning would cost about a minute of model calls" });
@@ -788,7 +964,8 @@ console.log("engine parameters (read through the trace, no engine call):");
     ["cheapest_way", "cheapestWay", { to: "Lisbon", depart: plus(35), nights: 4 }, (p) => [p.budget === Math.min(12, left()) && typeof p.deadlineMs === "number" && p.deadlineMs >= 10_000 && p.deadlineMs <= 90_000 && p.depart === plus(35) && p.flex === 2, `budget ${p.budget}, deadlineMs ${p.deadlineMs}, depart ${p.depart}`]],
     ["cheapest_way", "cheapestWay", { to: "Lisbon", depart: plus(35), nights: 4, harder: true }, (p) => [p.budget === Math.min(24, left()) && typeof p.deadlineMs === "number" && p.deadlineMs > 90_000 && p.deadlineMs <= 150_000, `harder: budget ${p.budget}, deadlineMs ${p.deadlineMs}`]],
     ["cheapest_way", "cheapestWay", { to: "Vienna", depart: plus(1), flex: 2, nights: 3 }, (p) => [p.depart === plus(1) && p.flex === 2, `past window: depart ${p.depart}, flex ${p.flex} (the engine trims it to today)`]],
-    ["wild_trip", "buildWild", { region: "sea", nights: 10, countries: ["Vietnam", "Thailand"] }, (p, at) => [p.region === "custom" && near(p.deadline, at + WILD_BUILD_MS - DEADLINE_MARGIN_MS) && Array.isArray(p.countries) && p.countries.join() === "VN,TH", `region ${p.region}, countries ${String(p.countries)}, deadline in ${Math.round(((p.deadline as number) - at) / 1000)} s`]],
+    ["wild_trip", "wildByWalk", { region: "sea", nights: 10, countries: ["Vietnam", "Thailand"] }, (a, at) => [a.region === "custom" && near(a.deadline, at + WILD_BUILD_MS - DEADLINE_MARGIN_MS) && Array.isArray(a.countries) && a.countries.join() === "VN,TH" && a.nightsPerStop === 2, `region ${a.region}, countries ${String(a.countries)}, nps ${a.nightsPerStop}, deadline in ${Math.round(((a.deadline as number) - at) / 1000)} s`]],
+    ["wild_trip", "buildWild", { region: "sea", nights: 10, countries: ["Vietnam", "Thailand"], engine: "classic" }, (a, at) => [a.region === "custom" && near(a.deadline, at + WILD_BUILD_MS - DEADLINE_MARGIN_MS) && Array.isArray(a.countries) && a.countries.join() === "VN,TH" && a.nightsPerStop === undefined, `classic: region ${a.region}, countries ${String(a.countries)}, nps ${a.nightsPerStop}`]],
     ["wild_trip", "buildWildVariants", { region: "sea", nights: 10, variants: 2 }, (p, at) => [p.region === "sea" && near(p.deadline, at + WILD_BUILD_MS - DEADLINE_MARGIN_MS) && p.variants === 2, `region ${p.region}, variants ${p.variants}, deadline in ${Math.round(((p.deadline as number) - at) / 1000)} s`]],
     ["long_stay", "longStay", { countries: ["PT"], months: 1 }, (p, at) => [near(p.deadline, at + LONG_BUILD_MS - DEADLINE_MARGIN_MS), `deadline in ${Math.round(((p.deadline as number) - at) / 1000)} s`]],
     ["group_trip", "groupTrip", groupIn, (p, at) => [near(p.deadline, at + LONG_BUILD_MS - DEADLINE_MARGIN_MS), `deadline in ${Math.round(((p.deadline as number) - at) / 1000)} s`]],
@@ -848,7 +1025,7 @@ await check("cheapest_deals", { country: "Narnia" }, { edge: true });
 await check("events_near", { city: "Lisboa" }, { edge: true });
 await check("price_insight", { from: "OTP", to: "LIS", month: "2026-13" }, { edge: true });
 await check("hotels_near", { city: "Lisbon", checkin: plus(40), checkout: plus(38) }, { edge: true });
-await check("wild_trip", wildPick ? { region: "Southeast Asia", nights: wildPick.nights } : {}, { edge: true, skip: wildPick?.region === "sea" ? undefined : "needs the stored Southeast Asia trip" });
+await check("wild_trip", wildPick ? { region: "Southeast Asia", nights: wildPick.nights, engine: "classic" } : {}, { edge: true, skip: wildPick?.region === "sea" ? undefined : "needs the stored Southeast Asia trip" });
 // A long stay the engine refuses in a sentence (region custom with no countries, thrown as
 // LongStayInputError before any search): the sentence comes back as the note, never { error }.
 {

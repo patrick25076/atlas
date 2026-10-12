@@ -108,8 +108,11 @@ export type RouteQuery = {
 // ---------------------------------------------------------------------------------------
 // Constants, in one place so the tradeoffs are easy to read.
 
-/** Euros per hour door to door: the balanced tradeoff behind `score`. */
-const EURO_PER_HOUR = 6;
+/**
+ * Euros per hour door to door behind `score`. Money first (the owner, 2026-10-12): hours only
+ * break ties; the fastest way is still picked and badged on its own.
+ */
+const EURO_PER_HOUR = 2;
 /** What a kilometre of train or coach costs when no fare is known. */
 const EURO_PER_KM = 0.1;
 /** Candidate airports per side. */

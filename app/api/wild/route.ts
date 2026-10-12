@@ -1,6 +1,8 @@
 import { parseExclude } from "@/lib/been";
 import { buildWild, customKey, parseCities, parseCountries, parseNightsRange, REGIONS, wildPath, type Budget, type Region, type Style, type Tradeoff, type WildTrip } from "@/lib/wild";
 import { buildWildVariants } from "@/lib/wild-variants";
+import { avoidCountryCodes, engineKeySuffix, readAvoid, wildByWalk } from "@/lib/wild-walk";
+import type { WalkEvent } from "@/lib/graph-walk";
 import { judgeTrip } from "@/lib/judge";
 import { readJson, writeJson } from "@/lib/boards-store";
 import { mainGateway } from "@/lib/board";
@@ -11,6 +13,21 @@ import { bad, iataList, intIn, iso2, isoDay, isoMonth, latLon, oneOf } from "@/l
 // GET /api/wild?g=OTP,SBZ&home=RO&region=sea&nights=14[&month=2026-11][&from=2026-11-03&to=2026-11-10][&fresh=<token>]
 //     [&exclude=TH,VN][&countries=Vietnam,Thailand][&prefer=VN][&maxStops=4][&nightsPerStop=3-5]
 //     [&mustInclude=Hanoi,BKK][&maxFlightHours=12][&startFrom=LON,PAR][&wishes=temples+and+street+food,+no+beaches]
+//     [&engine=walk|classic][&avoid=dach,like:DE,Berlin][&ground=0..720][&searches=0..40][&style=unique]
+//
+// Two engines. engine=walk (the default since 2026-10-12) is the graph walk aimed at the region (lib/wild-walk.ts):
+// the way in is one search from the home airports to the region's biggest hubs, every hop after it one search to
+// the hubs of the countries not seen yet, trains and coaches from the ground graph (ground=0 turns them off, another
+// number of minutes caps them), and one search home; every stop takes nightsPerStop nights exactly (2-3 means 2 or
+// 3). avoid takes countries, cities and group words ("dach", "like:DE"); searches caps the live searches (default
+// about two a stop plus the way in and home, at most 40; 0 answers from the fare memory alone). The stream carries
+// one {"walk": WalkEvent} line per step of the search (node, edge, loop, progress) so the globe can draw it.
+// nightsPerStop is exact in both engines: "2-3" is 2 or 3 nights, "2" is exactly 2.
+// engine=classic is the greedy chain by country (lib/wild.ts); it is also used, and said so, when variants > 1 or
+// startFrom is given (ranked versions and other start airports are the classic builder's). style=unique is the
+// walk's taste for hidden gems: it travels in the wishes, which the walk, the judge and the planner read. The
+// classic chain honours nightsPerStop exactly too, and takes the avoided countries as never a stop.
+//
 // A wild trip: the way in, a chain of cheap hops through the region, the way home, costs and
 // a verdict. 5 to 90 nights; a month, or an explicit departure window, clipped to ten days
 // (to becomes from + 10 days when it is further; only to < from or a date that is not real
@@ -40,6 +57,11 @@ export const maxDuration = 300;
 const FRESH_HOURS = 24;
 const inflight = new InFlight<WildTrip | null>();
 const STYLES = ["experiences", "beaches", "food", "cities", "slow"] as const;
+const ENGINES = ["walk", "classic"] as const;
+/** The words style=unique adds to the wishes (the Wild tab writes the same words for the trip style's taste). */
+const UNIQUE_WORDS = "unique places and hidden gems over the big hubs";
+/** The most live searches one walk may be given (lib/graph-walk.ts MAX_BUDGET). */
+const MAX_SEARCHES = 40;
 const BUDGETS = ["backpacker", "mid", "comfort"] as const;
 const TRADEOFFS = ["price", "balanced", "comfort"] as const;
 /** The nights a trip may run: lib/wild.ts caps at 90 and scales the nights per stop with it. */
@@ -103,7 +125,9 @@ export async function GET(request: Request) {
   const nightsRangeRaw = p.get("nightsPerStop");
   const nightsRange = nightsRangeRaw ? parseNightsRange(nightsRangeRaw) : null;
   const nightsPerStop = nightsRange ? Math.min(30, nightsRange[0]) : undefined;
-  const nightsPerStopMax = nightsRange && nightsRange[1] > nightsRange[0] ? Math.min(30, nightsRange[1]) : undefined;
+  // The top of the range is always passed, also when it equals the bottom: "2" (the trip style's "at most 2 a place")
+  // is exactly two nights, never the engines' old two-or-three. The key writes it as n2-2.
+  const nightsPerStopMax = nightsRange ? Math.min(30, nightsRange[1]) : undefined;
   const mustRaw = p.get("mustInclude");
   const mustParsed = parseCities(mustRaw);
   const mustInclude = mustParsed.codes.length ? mustParsed.codes.slice(0, 8) : undefined;
@@ -113,7 +137,21 @@ export async function GET(request: Request) {
   const maxFlightHours = hoursRaw && Number.isFinite(hoursNum) && hoursNum >= 1 && hoursNum <= MAX_FLIGHT_HOURS ? Math.round(hoursNum) : undefined;
   const startFromRaw = p.get("startFrom");
   const startFrom = startFromRaw ? iataList(startFromRaw, 3) : [];
-  const wishes = (p.get("wishes") ?? "").trim().slice(0, MAX_WISHES) || undefined;
+  // style=unique is a taste, not a kind of trip: the kind stays the default and the taste rides in the wishes.
+  const uniqueAsked = (p.get("style") ?? "").trim().toLowerCase() === "unique";
+  const wishesRaw = (p.get("wishes") ?? "").trim();
+  const wishes = [wishesRaw, uniqueAsked && !/unique|hidden gem|off the beaten/i.test(wishesRaw) ? UNIQUE_WORDS : ""].filter(Boolean).join(", ").slice(0, MAX_WISHES) || undefined;
+  const engineRaw = p.get("engine");
+  const engineAsked = oneOf(engineRaw, ENGINES, "walk");
+  const avoidParsed = readAvoid(p.get("avoid"));
+  const groundRaw = p.get("ground");
+  const ground = groundRaw != null && groundRaw !== "" ? intIn(groundRaw, 0, 720, 330) : undefined;
+  const searchesRaw = p.get("searches");
+  const searches = searchesRaw != null && searchesRaw !== "" ? intIn(searchesRaw, 0, MAX_SEARCHES, 0) : undefined;
+  if (engineRaw && !(ENGINES as readonly string[]).includes(engineRaw)) return bad("engine must be walk or classic");
+  if (avoidParsed.unknown.length) return bad(`unknown place to avoid: ${avoidParsed.unknown.join(", ")} (a country such as DE or Germany, a city such as Berlin, or a group such as dach or like:DE)`);
+  if (groundRaw && !Number.isFinite(Number(groundRaw))) return bad("ground must be minutes from 0 (no trains or coaches) to 720");
+  if (searchesRaw && !Number.isFinite(Number(searchesRaw))) return bad(`searches must be a number from 0 to ${MAX_SEARCHES}`);
   if (!gateways.length) return bad("g must be a comma list of three-letter airport codes");
   if (!home) return bad("home must be a two-letter country code");
   // Own keys only: "constructor" is a truthy lookup on any object but no region.
@@ -142,9 +180,17 @@ export async function GET(request: Request) {
   if (from && to && (Date.parse(to) - Date.parse(from)) / 86_400_000 > MAX_WINDOW_DAYS) to = new Date(Date.parse(from) + MAX_WINDOW_DAYS * 86_400_000).toISOString().slice(0, 10);
   if ((p.get("lat") != null || p.get("lon") != null) && !at) return bad("lat and lon must be coordinates");
 
-  // The same key /api/plan builds: every constraint through customKey, the variant count as a suffix.
+  // The engine actually used: ranked versions and other start airports are the classic builder's (the chat decides
+  // the same way), so a walk asked for with either is a classic build, and the key says classic.
+  const engine: "walk" | "classic" = engineAsked === "classic" || variants > 1 || startFrom.length ? "classic" : "walk";
+  // The classic chain never stops in an avoided country: those join the been list it reads (and its key's token).
+  const avoidCodes = [...avoidCountryCodes(avoidParsed.words)];
+  const engineExclude = engine === "classic" && avoidCodes.length ? [...new Set([...exclude, ...avoidCodes])] : exclude;
+  // The same key /api/plan builds: every constraint through customKey, the engine's suffix (lib/wild-walk.ts
+  // engineKeySuffix, the scheme the chat uses too), the variant count for ranked classic versions.
   const extras = { mustInclude, maxFlightHours, startFrom: startFrom.length ? startFrom : undefined, wishes, nightsPerStopMax };
-  const path = wildPath(mainGateway(gateways), region, month, nights, style, budget, customKey(countries, prefer, maxStops, nightsPerStop, tradeoff, noHubs, from, to, exclude, extras) + (variants > 1 ? `-v${variants}` : ""));
+  const suffix = engineKeySuffix({ engine, avoid: avoidParsed.words, ground, searches });
+  const path = wildPath(mainGateway(gateways), region, month, nights, style, budget, customKey(countries, prefer, maxStops, nightsPerStop, tradeoff, noHubs, from, to, engineExclude, extras) + suffix + (variants > 1 ? `-v${variants}` : ""));
   if (!freshAllowed(p.get("fresh"))) {
     const stored = await readJson<WildTrip>(path);
     if (stored && stored.ageHours < FRESH_HOURS) return Response.json(stored.body, { headers: { "Cache-Control": "public, s-maxage=1800, stale-while-revalidate=3600", "X-Wild": "stored" } });
@@ -168,9 +214,17 @@ export async function GET(request: Request) {
         send(obj);
       };
       const t0 = Date.now();
-      const params = { gateways, home, region, month, from, to, nights, style, budget, origin, stopover, exclude, countries, prefer, maxStops, nightsPerStop, nightsPerStopMax, mustInclude, maxFlightHours, startFrom: startFrom.length ? startFrom : undefined, wishes };
+      const params = { gateways, home, region, month, from, to, nights, style, budget, origin, stopover, exclude: engineExclude, countries, prefer, maxStops, nightsPerStop, nightsPerStopMax, mustInclude, maxFlightHours, startFrom: startFrom.length ? startFrom : undefined, wishes, maxGroundMin: ground === 0 ? 0 : engine === "walk" ? ground : undefined };
       try {
+        if (engineAsked === "walk" && engine === "classic") say({ progress: variants > 1 ? "Ranked versions come from the classic builder; building those." : "Other start airports need the classic builder; building with it." });
         const { promise, mine } = inflight.run(path, async () => {
+          if (engine === "walk") {
+            // The walk judges its own loop; every step of the search streams as a {walk} line for the globe.
+            const trip = await wildByWalk({ ...params, tradeoff, avoid: avoidParsed.words, searchBudget: searches, onProgress: (line) => say({ progress: line }), onEvent: (e: WalkEvent) => say({ walk: e }) });
+            // A walk Kiwi throttled, or cut by the clock, is shown but never stored: the next ask gets a full try.
+            if (!trip.partial) await writeJson(path, trip).catch(() => null);
+            return trip;
+          }
           if (variants > 1) {
             say({ progress: `Building ${variants} versions in parallel and ranking them…` });
             const ranked = await buildWildVariants(params, variants, (line) => say({ progress: line }));
@@ -191,7 +245,7 @@ export async function GET(request: Request) {
         const trip = await promise;
         // The usage log, only for the build itself (a joiner did no searches); never awaited.
         // The wishes text stays out of it (free text may carry personal details); its presence is logged.
-        if (mine) void logSearch("wild", { gateways, home, region, month, from, to, nights, style, budget, stopover, tradeoff, noHubs, variants, excluded: exclude.length, countries, mustInclude, maxFlightHours, startFrom, wishes: !!wishes }, trip ? 1 + (trip.alternatives?.length ?? 0) : 0, Date.now() - t0).catch(() => null);
+        if (mine) void logSearch("wild", { gateways, home, region, month, from, to, nights, style, budget, stopover, tradeoff, noHubs, variants, excluded: exclude.length, countries, mustInclude, maxFlightHours, startFrom, wishes: !!wishes, engine, avoided: avoidParsed.words.length, ground, searches, searched: trip?.searched }, trip ? 1 + (trip.alternatives?.length ?? 0) : 0, Date.now() - t0).catch(() => null);
         if (trip) say({ trip });
         else say({ error: `No way into ${region === "custom" ? "those countries" : "that region"} on those dates from here${maxFlightHours ? ` under ${maxFlightHours} h a flight` : ""}. Try another month or region.` });
       } catch (err) {

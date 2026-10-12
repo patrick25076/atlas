@@ -12,6 +12,7 @@ import { HeroNumbers, LegRows, RouteStrip, StopCards, StopPhoto } from "./RouteS
 import { skeletonFromGroup, skeletonFromLongStay, skeletonFromTrip, skeletonFromWild, type ItinPlace, type Skeleton } from "@/lib/itinerary";
 import { searchAirports } from "./TopBar";
 import { WalkLoopList } from "./WalkCard";
+import { nightsLabel, prefsSummary, wildStopFit, type Prefs } from "@/lib/prefs";
 
 // The Trips tab: the trip builders, with a mode row. Short loops and wild loops share the
 // route components; long stay and group have their own forms and cards. "A to B" and the
@@ -46,10 +47,10 @@ export type WildForm = {
   startFrom: string[];
   /** What matters, in the visitor's words; sent as wishes=. */
   wishes: string;
-  /** Nights a stop, least and most; null leaves it to the engine. */
+  /** Nights a stop, least and most; null follows the trip style (lib/prefs.ts nightsPerPlace). */
   stopNights: [number, number] | null;
-  /** "Walk the region": the graph walk (one explore from home, cheap hops, the cheapest way home) instead of the classic builder. */
-  walk: boolean;
+  /** The classic builder (lib/wild.ts, a greedy chain country by country) instead of the graph walk aimed at the region, which is the default. */
+  classic: boolean;
 };
 /** The style chips of the Smart loop: what the walk trades for (cheapest: price per hour low; unique: smaller places weighted up). */
 export type SmartStyle = "cheapest" | "unique" | "balanced";
@@ -68,7 +69,7 @@ export type TripsExtra = {
   group: { budgetPerPerson: number };
 };
 export const EMPTY_TRIPS_EXTRA: TripsExtra = {
-  wild: { countries: [], mustInclude: [], maxHours: 0, startFrom: [], wishes: "", stopNights: null, walk: false },
+  wild: { countries: [], mustInclude: [], maxHours: 0, startFrom: [], wishes: "", stopNights: null, classic: false },
   short: { cities: 3, mustInclude: [], countries: [], maxGroundHours: 5 },
   smart: { minNights: 5, maxNights: 6, perStop: "2", cities: 3, style: "cheapest", avoid: [], mustInclude: [], from: "", to: "", budget: 12 },
   longStay: { wishes: "", cities: [] },
@@ -237,10 +238,9 @@ export type TripsPanelProps = {
   // the graph walk: the Smart loop of Short loops and "Walk the region" of Wild loops run it; the globe draws it live
   walk: WalkState;
   onSmartLoop: () => void;
-  onWildWalk: () => void;
-  /** Whether the walk can reach the Wild region: its first search is the cheapest fares out of home, which stay near home, so a far region gets the classic builder. */
-  wildWalkReach: boolean;
   onWalkSelect: (i: number) => void;
+  /** The traveller's trip style: the forms start from it and say so in one line. */
+  prefs: Prefs;
 };
 
 /** A short loop in the shape of a wild trip, so the strip, cards and rows draw both. */
@@ -748,6 +748,56 @@ const PER_STOP: { key: string; label: string }[] = [
   { key: "2-3", label: "2 to 3" },
 ];
 
+/** Opens the trip style editor in the top bar (TopBar listens for this window event). */
+export function editTripStyle() {
+  window.dispatchEvent(new CustomEvent("atlas:open-prefs"));
+}
+
+/** The one line a builder shows: what it took from the trip style, and a way to change it. */
+function PrefsNote({ prefs, overridden }: { prefs: Prefs; overridden?: string }) {
+  return (
+    <div className="status muted prefsnote">
+      Using your trip style: {prefsSummary(prefs)}.{overridden ? ` ${overridden}` : ""}{" "}
+      <button type="button" className="linkbtn" onClick={editTripStyle}>
+        edit
+      </button>
+    </div>
+  );
+}
+
+/** Nights a stop as two steppers, least and most (1 to 14), the least never above the most. */
+function NightsRange({ value, onChange, label }: { value: [number, number]; onChange: (v: [number, number]) => void; label: string }) {
+  const [lo, hi] = value;
+  const step = (which: 0 | 1, d: number) => {
+    const n = Math.max(1, Math.min(14, (which === 0 ? lo : hi) + d));
+    onChange(which === 0 ? [n, Math.max(n, hi)] : [Math.min(lo, n), n]);
+  };
+  return (
+    <span className="nightsrange" role="group" aria-label={label}>
+      <span className="stepper">
+        <button type="button" onClick={() => step(0, -1)} disabled={lo <= 1} aria-label="Fewest nights a stop: one less">
+          −
+        </button>
+        <b>{lo}</b>
+        <button type="button" onClick={() => step(0, 1)} disabled={lo >= 14} aria-label="Fewest nights a stop: one more">
+          +
+        </button>
+      </span>
+      <span className="muted">to</span>
+      <span className="stepper">
+        <button type="button" onClick={() => step(1, -1)} disabled={hi <= 1} aria-label="Most nights a stop: one less">
+          −
+        </button>
+        <b>{hi}</b>
+        <button type="button" onClick={() => step(1, 1)} disabled={hi >= 14} aria-label="Most nights a stop: one more">
+          +
+        </button>
+      </span>
+      <span className="muted">nights</span>
+    </span>
+  );
+}
+
 /** What a walk started from this builder is doing: its last progress lines while it runs, then its loops as rows. */
 function WalkStatus({ walk, mine, onSelect, homeLabel, idle }: { walk: WalkState; mine: boolean; onSelect: (i: number) => void; homeLabel: string; idle: string }) {
   if (!mine || walk.status === "idle") return <div className="status muted">{idle}</div>;
@@ -777,17 +827,21 @@ function WalkStatus({ walk, mine, onSelect, homeLabel, idle }: { walk: WalkState
  * home to any of his airports). The form lives in Globe state (TripsExtra.smart); the globe
  * runs the walk and draws it as it thinks.
  */
-function SmartLoop({ form, onForm, walk, onRun, onSelect, countries, cities, homeLabel, month }: { form: SmartForm; onForm: (patch: Partial<SmartForm>) => void; walk: WalkState; onRun: () => void; onSelect: (i: number) => void; countries: Record<string, CountryInfo>; cities: Record<string, City>; homeLabel: string; month: string | null }) {
+function SmartLoop({ form, onForm, walk, onRun, onSelect, countries, cities, homeLabel, month, prefs }: { form: SmartForm; onForm: (patch: Partial<SmartForm>) => void; walk: WalkState; onRun: () => void; onSelect: (i: number) => void; countries: Record<string, CountryInfo>; cities: Record<string, City>; homeLabel: string; month: string | null; prefs: Prefs }) {
   const mine = walk.source === "short";
   const loading = mine && walk.status === "loading";
   const today = todayIso();
   const when = form.from && form.to ? null : month ? `Leaving in ${monthLabel(month)} (the When pill); pick dates to choose.` : "Leaving in the next three weeks; pick dates to choose.";
   const perStopMin = Number(form.perStop.split("-")[0]) || 2;
   const short = form.cities * Number(form.perStop.split("-").pop() || perStopMin) < form.minNights;
+  // The trip style's nights a stop is always one of the chips, whatever range it is.
+  const styleKey = prefs.nightsPerPlace[0] === prefs.nightsPerPlace[1] ? String(prefs.nightsPerPlace[0]) : `${prefs.nightsPerPlace[0]}-${prefs.nightsPerPlace[1]}`;
+  const perStopChips = PER_STOP.some((x) => x.key === styleKey) ? PER_STOP : [...PER_STOP, { key: styleKey, label: nightsLabel(prefs).replace(" nights", "").replace(" night", "") }];
   return (
     <div className="smartloop">
       <h2>Smart loop</h2>
       <div className="status">The cheapest places from your airports, then cheap hops by plane, train or coach from each, and the cheapest way home to any of your airports. Watch the globe while it thinks.</div>
+      <PrefsNote prefs={prefs} overridden={form.perStop !== styleKey ? `This loop: ${form.perStop.replace("-", " to ")} nights a stop.` : undefined} />
       <div className="chips">
         <select className="search slim" value={form.minNights} onChange={(e) => { const n = Number(e.target.value); onForm({ minNights: n, maxNights: Math.max(n, form.maxNights) }); }} aria-label="Fewest nights">
           {[2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 14].map((n) => (
@@ -811,7 +865,7 @@ function SmartLoop({ form, onForm, walk, onRun, onSelect, countries, cities, hom
         <span className="muted" style={{ fontSize: 12.5, alignSelf: "center" }}>
           Nights a stop:
         </span>
-        {PER_STOP.map((x) => (
+        {perStopChips.map((x) => (
           <button key={x.key} className={`chip ghost${form.perStop === x.key ? " on" : ""}`} onClick={() => onForm({ perStop: x.key })}>
             {x.label}
           </button>
@@ -890,9 +944,13 @@ export default function TripsPanel(p: TripsPanelProps) {
   const wildCountryBox = useRef<HTMLInputElement>(null);
   const setShortForm = (patch: Partial<ShortForm>) => p.onExtra({ ...ex, short: { ...ex.short, ...patch } });
   const setSmartForm = (patch: Partial<SmartForm>) => p.onExtra({ ...ex, smart: { ...ex.smart, ...patch } });
-  // A far region keeps the classic builder even with the toggle on: the walk could not reach it.
-  const wildWalkOn = ex.wild.walk && p.wildWalkReach;
-  const wildWalking = wildWalkOn && p.walk.source === "wild";
+  // Nights a stop: the form's own range when the traveller set one, else the trip style's.
+  const stopNights: [number, number] = ex.wild.stopNights ?? p.prefs.nightsPerPlace;
+  // The same count the build uses (lib/prefs.ts wildStopFit, the engines' own formula) on the engine the
+  // route will really use: ranked versions and other start airports run on the classic chain.
+  const wildEngine = ex.wild.classic || p.wildVariants > 1 || ex.wild.startFrom.length ? "classic" : "walk";
+  const stopFit = wildStopFit(stopNights, p.wildNights, wildEngine);
+  const stopsAbout = Math.min(stopFit.cap, Math.max(1, Math.round(p.wildNights / Math.max(1, (stopNights[0] + stopNights[1]) / 2))));
   // Shown on every form that searches with the exclude list, so the visitor knows why a country is missing.
   const beenNote = p.excludedCount > 0 ? <div className="status muted been-note">Only new countries: {p.excludedCount} excluded; layovers still allowed.</div> : null;
 
@@ -910,7 +968,7 @@ export default function TripsPanel(p: TripsPanelProps) {
       {p.mode === "short" && (
         <div className="scroll fade" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
           {beenNote}
-          <SmartLoop form={ex.smart} onForm={setSmartForm} walk={p.walk} onRun={p.onSmartLoop} onSelect={p.onWalkSelect} countries={p.countries} cities={p.cities} homeLabel={p.homeLabel} month={p.month} />
+          <SmartLoop form={ex.smart} onForm={setSmartForm} walk={p.walk} onRun={p.onSmartLoop} onSelect={p.onWalkSelect} countries={p.countries} cities={p.cities} homeLabel={p.homeLabel} month={p.month} prefs={p.prefs} />
           <h2>From tonight&apos;s fares</h2>
           <div className="status">Fly out, hop between cities by train or coach, fly home from the last one. Ranked by countries and cities per euro and hour.</div>
           <div className="chips">
@@ -1001,7 +1059,13 @@ export default function TripsPanel(p: TripsPanelProps) {
 
       {p.mode === "wild" && (
         <div className="scroll fade" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-          <div className="status">Fly out (through a cheaper hub when that wins), chain cheap one-way flights and border hops through a far region, fly home from the last city. Live fares, estimated living costs, a second opinion.</div>
+          <div className="status">
+            {ex.wild.classic
+              ? "The classic builder: fly out (through a cheaper hub when that wins), chain cheap one-way flights and border hops country by country, fly home from the last city."
+              : "Fly straight into the region, then the cheapest hops between its cities by plane, train or coach, and the cheapest way home to any of your airports. Watch the globe while it searches."}{" "}
+            Live fares, estimated living costs, a second opinion.
+          </div>
+          <PrefsNote prefs={p.prefs} overridden={ex.wild.stopNights ? `This loop: ${stopNights[0] === stopNights[1] ? stopNights[0] : `${stopNights[0]} to ${stopNights[1]}`} nights a stop.` : undefined} />
           {beenNote}
           <h2>Where · tap a region on the globe, or here</h2>
           <MoreChips
@@ -1084,66 +1148,53 @@ export default function TripsPanel(p: TripsPanelProps) {
               </button>
             ))}
           </div>
-          <div className="status muted">{p.wildNights >= 45 ? "Long trips: 5 to 7 bases of 8 to 12 nights." : p.wildNights >= 21 ? "About four to five stops." : "Two or three nights a stop."}</div>
-          <div className="chips">
+          <div className="chips nightsrow">
             <span className="muted" style={{ fontSize: 12.5, alignSelf: "center" }}>
               Nights a stop:
             </span>
-            <button className={`chip ghost${ex.wild.stopNights === null ? " on" : ""}`} onClick={() => setWildForm({ stopNights: null })}>
-              let the engine choose
-            </button>
-            {(
-              [
-                [2, 3],
-                [3, 5],
-                [5, 8],
-                [8, 12],
-              ] as [number, number][]
-            ).map(([a, b]) => (
-              <button key={a} className={`chip ghost${ex.wild.stopNights?.[0] === a && ex.wild.stopNights?.[1] === b ? " on" : ""}`} onClick={() => setWildForm({ stopNights: [a, b] })}>
-                {a} to {b}
+            <NightsRange value={stopNights} onChange={(v) => setWildForm({ stopNights: v })} label="Nights a stop" />
+            {ex.wild.stopNights && (
+              <button type="button" className="linkbtn" onClick={() => setWildForm({ stopNights: null })} title={`Back to ${nightsLabel(p.prefs)} a stop`}>
+                use my trip style
               </button>
-            ))}
+            )}
+          </div>
+          <div className="status muted">
+            {stopFit.stretched
+              ? `${p.wildNights} nights at this many nights a stop would need ${stopFit.needed} stops; a loop takes at most ${stopFit.cap}${wildEngine === "classic" ? " on the classic builder" : ""}. This build will stay ${stopFit.range[0]} to ${stopFit.range[1]} nights a stop instead. Pick fewer nights for shorter stays.`
+              : `About ${stopsAbout} stop${stopsAbout === 1 ? "" : "s"} of ${stopNights[0] === stopNights[1] ? stopNights[0] : `${stopNights[0]} to ${stopNights[1]}`} nights.`}
           </div>
           <h2>When to leave</h2>
           <PeriodPicker value={p.wildPeriod} onChange={p.onWildPeriod} windowDays={WILD_WINDOW_DAYS} />
           <div className="chips">
-            <button
-              className={`chip ghost${wildWalkOn ? " on" : ""}`}
-              aria-pressed={wildWalkOn}
-              disabled={!p.wildWalkReach}
-              onClick={() => setWildForm({ walk: !ex.wild.walk })}
-              title={p.wildWalkReach ? "Search the way you would by hand: the cheapest places from home, cheap hops between the region's cities by plane, train or coach, the cheapest way home. Up to six stops." : "This region is too far for the walk: it starts from the cheapest fares out of home, and those stay close to home. Build the loop instead."}
-            >
-              Walk the region
+            <button className="chip on" onClick={() => p.onWild()} disabled={p.wild.status === "loading"}>
+              {p.wild.status === "loading" ? "Building…" : p.wild.status === "ok" ? "Build again" : "Build the loop"}
             </button>
-            {wildWalkOn ? (
-              <button className="chip on" onClick={p.onWildWalk} disabled={wildWalking && p.walk.status === "loading"}>
-                {wildWalking && p.walk.status === "loading" ? "Walking…" : wildWalking && p.walk.status === "ok" ? "Walk again" : "Find the loop"}
-              </button>
-            ) : (
-              <button className="chip on" onClick={p.onWild} disabled={p.wild.status === "loading"}>
-                {p.wild.status === "loading" ? "Building…" : p.wild.status === "ok" ? "Build again" : "Build the loop"}
-              </button>
-            )}
-            {!wildWalkOn && p.wild.status === "ok" && wt && <PlayButton playing={p.playing} onPlay={p.onPlay} onStop={p.onStopPlay} />}
-            {!wildWalkOn && p.wild.status === "ok" && wt && <ItineraryButton onClick={() => p.onItinerary(skeletonFromWild(wt))} label={itinLabel(skeletonFromWild(wt))} />}
+            {p.wild.status === "ok" && wt && <PlayButton playing={p.playing} onPlay={p.onPlay} onStop={p.onStopPlay} />}
+            {p.wild.status === "ok" && wt && <ItineraryButton onClick={() => p.onItinerary(skeletonFromWild(wt))} label={itinLabel(skeletonFromWild(wt))} />}
+            <button
+              type="button"
+              className={`chip ghost small${ex.wild.classic ? " on" : ""}`}
+              aria-pressed={ex.wild.classic}
+              onClick={() => setWildForm({ classic: !ex.wild.classic })}
+              title="The older builder: a greedy chain country by country, longer stays. Off: the graph walk aimed at the region, the default."
+            >
+              Classic builder
+            </button>
           </div>
-          {wildWalkOn && <WalkStatus walk={p.walk} mine={wildWalking} onSelect={p.onWalkSelect} homeLabel={p.homeLabel} idle="The walk keeps to the region's countries after the way in, which may land in a big hub outside them. Up to six stops; the loops draw on the globe as they are found." />}
-          {ex.wild.walk && !p.wildWalkReach && <div className="status muted">This region is too far for the walk, which starts from the cheapest fares out of home. The loop is built the classic way.</div>}
-          {!wildWalkOn && p.wild.status === "loading" && (
+          {p.wild.status === "loading" && (
             <div className="answer">
               {p.wild.lines.map((l, i) => (
                 <p key={i} className={i === p.wild.lines.length - 1 ? "" : "muted"}>
                   {l}
                 </p>
               ))}
-              {p.wild.lines.length === 0 && <p className="muted">Starting the search: about forty live fare searches, one to two minutes.</p>}
+              {p.wild.lines.length === 0 && <p className="muted">{ex.wild.classic ? "Starting the search: about forty live fare searches, one to two minutes." : "Starting the walk: about two live searches a stop plus the way in and home, forty at most. The globe shows every price it looks at."}</p>}
             </div>
           )}
-          {!wildWalkOn && p.wild.status === "error" && <div className="status">{p.wild.note}</div>}
-          {!wildWalkOn && p.wild.status === "idle" && <div className="status muted">The first build of a loop takes a minute or two; the next visitor asking the same gets it at once.</div>}
-          {!wildWalkOn && p.wild.status === "ok" && wt && (
+          {p.wild.status === "error" && <div className="status">{p.wild.note}</div>}
+          {p.wild.status === "idle" && <div className="status muted">The first build of a loop takes a minute or two; the next visitor asking the same gets it at once.</div>}
+          {p.wild.status === "ok" && wt && (
             <div className="tripview">
               <HeroNumbers
                 items={[

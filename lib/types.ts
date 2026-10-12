@@ -60,13 +60,35 @@ export type Deal = {
   /**
    * The ticket flies home from another city than the one it lands in (Kiwi sells these as one
    * "return"): the airport and city the traveller leaves from, and the trip between the two by
-   * road, train, coach or ferry, estimated. Only kept when that trip is short; Chania in and
-   * Corfu out, two islands 450 km apart, is not a getaway and never becomes a deal.
+   * road, train, coach or ferry. Only kept when that trip is short: gapMin is the ground graph's
+   * minutes (train, coach, ferry) when it knows the way, a road estimate when it does not, and
+   * the trip must fit in four hours (lib/board.ts sensibleTicket). gapKm is the straight line.
+   * backFrom alone (no backFromCity) is another airport of the same city.
    */
   backFrom?: string;
   backFromCity?: string;
   gapKm?: number;
   gapMin?: number;
+  /**
+   * Two one-way tickets paired by the custom search (lib/pairs.ts) instead of one return: url
+   * is the way out, url2 the way home, and price is the two flights only. The way home may land
+   * at any airport of the home country (backTo); when that airport is not one the traveller
+   * flew from, homeGapMin is the train, coach or drive from it to the traveller, timed on the
+   * ground graph or by road. groundPrice is every ground leg of the trip in euros (the trip
+   * between two cities and the way home from the airport), estimated at 0.10 euro a km and not
+   * included in price.
+   */
+  pair?: boolean;
+  homeGapMin?: number;
+  groundPrice?: number;
+  /**
+   * A paired trip with a flight between two cities (lib/pairs.ts): out to `city`, this one-way
+   * on to a second city, home from there (url2). price counts all three flights; nights is the
+   * whole trip and hop.nights the part in the first city. url is the way out, hop.url this leg.
+   */
+  hop?: { from: string; to: string; city: string; country: string; date: string; nights: number; price: number; min: number; stops: number; url: string };
+  /** What kind of paired trip this is, in plain words for the card ("Budapest, there and back"). */
+  pairNote?: string;
   /** A hidden-city one-way: the ticket continues past this city; one way, cabin bag only, against airline rules. */
   trick?: string;
 };

@@ -190,23 +190,24 @@ function DealCard({ d, active, photo, gem, been, warm, why, event, onClick, onHo
       <div className="cardbody">
         <div className="cardtop">
           <span className="cardtitle">
-            {d.backFromCity ? `${d.city} → ${d.backFromCity}` : d.city}
+            {d.hop ? `${d.city} → ${d.hop.city}` : d.backFromCity ? `${d.city} → ${d.backFromCity}` : d.city}
             <span className="sub">{countryName(d.country)}</span>
           </span>
           <span className="price">
             €{d.price}
-            <span className="sub">{d.backFromCity ? "two cities" : "return"}</span>
+            <span className="sub">{d.hop ? "three tickets" : d.pair ? (d.backFromCity ? "two cities, two tickets" : "two one-ways") : d.backFromCity ? "two cities" : "return"}</span>
           </span>
         </div>
         <div className="sub">
           {dateRange(d.out, d.back)} · {d.nights} nights · from {d.gw}
+          {d.backTo && d.backTo !== d.gw ? `, home to ${d.backTo}` : ""}
         </div>
-        {d.backFromCity && (
+        {(d.pairNote || d.backFromCity) && (
           <div className="sub splitnote">
-            In to {d.city}, home from {d.backFromCity}
-            {d.gapMin ? `: about ${formatDuration(d.gapMin)} between them by land or ferry` : ""}
+            {d.pairNote ?? `In to ${d.city}, home from ${d.backFromCity}${d.gapMin ? `: about ${formatDuration(d.gapMin)} between them by land or ferry` : ""}`}
           </div>
         )}
+        {d.groundPrice ? <div className="sub">plus about €{Math.round(d.groundPrice)} by train or coach, estimated</div> : null}
         <div className="sub">
           {d.carriers[0]} · {formatDuration(d.outMin)}
           {d.stops ? ` · ${stops(d.stops)}` : ""}
@@ -421,7 +422,7 @@ export default function Panel(p: Props) {
             </button>
             <div className="title">
               <h3>
-                {p.deal.backFromCity ? `${p.deal.city} → ${p.deal.backFromCity}` : p.deal.city}
+                {p.deal.hop ? `${p.deal.city} → ${p.deal.hop.city}` : p.deal.backFromCity ? `${p.deal.city} → ${p.deal.backFromCity}` : p.deal.city}
                 <small>
                   {countryName(p.deal.country)} · {dateRange(p.deal.out, p.deal.back)} · {p.deal.nights} nights
                 </small>
@@ -433,10 +434,17 @@ export default function Panel(p: Props) {
             {p.deal.url2 ? (
               <div className="chips" style={{ gap: 8 }}>
                 <a className="book" style={{ width: "auto", flex: 1 }} href={p.deal.url} target="_blank" rel="noreferrer">
-                  Out <small>from {p.deal.gw} ↗</small>
+                  Out <small>{p.deal.gw} to {p.deal.city} ↗</small>
                 </a>
+                {p.deal.hop && (
+                  <a className="book" style={{ width: "auto", flex: 1 }} href={p.deal.hop.url} target="_blank" rel="noreferrer">
+                    On <small>to {p.deal.hop.city}, €{p.deal.hop.price} ↗</small>
+                  </a>
+                )}
                 <a className="book" style={{ width: "auto", flex: 1 }} href={p.deal.url2} target="_blank" rel="noreferrer">
-                  Home <small>to {p.deal.backTo} ↗</small>
+                  Home <small>
+                    {p.deal.hop ? p.deal.hop.city : (p.deal.backFromCity ?? p.deal.city)} to {p.deal.backTo ?? p.deal.gw} ↗
+                  </small>
                 </a>
               </div>
             ) : (
@@ -444,7 +452,15 @@ export default function Panel(p: Props) {
                 Book on Kiwi.com <small>€{p.deal.price} {p.deal.backFromCity ? `in to ${p.deal.city}, home from ${p.deal.backFromCity}` : "return"} ↗</small>
               </a>
             )}
-            {p.deal.backFromCity && (
+            {p.deal.pair && (
+              <div className="fact wide">
+                {p.deal.hop ? "Three" : "Two"} one-way tickets, booked one by one: €{p.deal.price} for the flights.
+                {p.deal.pairNote ? ` ${p.deal.pairNote}.` : ""}
+                {p.deal.groundPrice ? ` Plus about €${Math.round(p.deal.groundPrice)} by train or coach, estimated.` : ""}
+                {p.deal.homeGapMin && p.deal.backTo ? ` Home lands at ${p.deal.backTo}, then about ${formatDuration(p.deal.homeGapMin)} by train, coach or road to you.` : ""} If the first flight is late, the next ticket is your own risk.
+              </div>
+            )}
+            {!p.deal.pair && p.deal.backFromCity && (
               <div className="fact wide">
                 This ticket lands in {p.deal.city} and flies home from {p.deal.backFromCity}
                 {p.deal.gapKm != null ? `, ${p.deal.gapKm} km away` : ""}

@@ -312,7 +312,12 @@ export type RouteCardProps = {
   gateways: Gateway[];
   homeLabel: string;
   excludedCount: number;
+  /** The trip style's tradeoff (lib/prefs.ts): the order of the ways shown. Cheapest first when absent. */
+  tradeoff?: "price" | "balanced" | "comfort";
 };
+
+/** Euros an hour door to door is worth when the ways are ordered for balance (the walk's balanced hop value) and for comfort. */
+const HOUR_EURO = { balanced: 11, comfort: 24 } as const;
 
 /** The route card floating on the map: what was asked, the answer as it streams, the options, a small edit row. */
 export default function RouteCard(p: RouteCardProps) {
@@ -348,8 +353,14 @@ export default function RouteCard(p: RouteCardProps) {
     const f = state.result?.fastest ?? (options.length ? options.reduce((a, b) => (b.hours < a.hours ? b : a)) : null);
     return f ? optionKey(f) : null;
   }, [state.result, options]);
-  // Cheapest first; the fastest and the chosen one always among those shown, the rest behind "all".
-  const ranked = useMemo(() => options.map((o, i) => ({ o, i })).sort((a, b) => a.o.total - b.o.total), [options]);
+  // In the trip style's order: cheapest first, or the total plus the hours at what an hour is
+  // worth for balance or comfort. The fastest and the chosen one are always among those shown,
+  // the rest behind "all".
+  const order = p.tradeoff ?? "price";
+  const ranked = useMemo(() => {
+    const cost = (o: RouteOption) => (order === "price" ? o.total : o.total + o.hours * HOUR_EURO[order]);
+    return options.map((o, i) => ({ o, i })).sort((a, b) => cost(a.o) - cost(b.o) || a.o.total - b.o.total);
+  }, [options, order]);
   const shown = all ? ranked : ranked.filter((x, k) => k < 4 || optionKey(x.o) === fastestKey || x.i === p.selected);
   const q = state.query ?? form;
   const fromLabel = state.result?.from.label ?? q.from;
@@ -440,6 +451,7 @@ export default function RouteCard(p: RouteCardProps) {
           {state.status === "error" && <div className="status">{state.note ?? "The route search failed."}</div>}
           {state.result?.note && <div className="status">{state.result.note}</div>}
           {options.length === 0 && state.status === "ok" && <div className="status">{free ? "Nothing in the fare memory or the timetables for that. Search the live fares." : "No way found between those two for that date. Widen the flexibility or try the next days."}</div>}
+          {options.length > 1 && order !== "price" && <div className="status muted small">Ordered for {order === "comfort" ? "comfort: shorter journeys first" : "balance: money and hours weighed evenly"}, as your trip style says.</div>}
           {shown.map(({ o, i }) => (
             <OptionCard key={optionKey(o) + i} o={o} active={p.selected === i} cheapest={optionKey(o) === cheapestKey} fastest={optionKey(o) === fastestKey} onClick={() => p.onSelect(p.selected === i ? null : i)} onItinerary={() => p.onItinerary(i)} />
           ))}

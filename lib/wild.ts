@@ -224,6 +224,9 @@ export const BUDGET_SCALE: Record<Budget, number> = { backpacker: 0.65, mid: 1, 
 const MAX_COUNTRIES = 8;
 /** Chain steps at the most, whatever the nights or an explicit maxStops: each step is up to four searches. */
 const MAX_CHAIN_STEPS = 8;
+/** The step cap when the traveller asked for short stops (three nights or less): 21 nights at 2 to 3 a stop needs
+ * seven to ten stops, and eight steps would leave the last stop to run long, which is what they said they did not want. */
+const MAX_CHAIN_STEPS_SHORT = 16;
 /** Nearby hubs that often sell the cheap long-hauls: positioning flights go here first. */
 const HUBS =["BUD", "VIE", "WAW", "IST", "MIL", "LON", "PAR", "FRA", "AMS", "MAD", "ROM", "BER", "PRG", "ATH", "DUB", "CPH", "STO", "LIS", "BCN", "MUC", "ZRH", "BRU"];
 
@@ -258,6 +261,10 @@ export type WildTrip = {
   maxFlightHours?: number;
   /** Plain lines saying which of the traveller's constraints shaped this trip. */
   constraints?: string[];
+  /** Which builder made it: the graph walk (lib/wild-walk.ts) or the classic chain by country. */
+  engine?: "walk" | "classic";
+  /** True when Kiwi throttled or the time ran out mid-build: shown, never stored. */
+  partial?: boolean;
   /** Other ranked versions of the same request (variants), lighter than a full trip. */
   alternatives?: { variant: string; rank: number; score: number; title: string; totals: WildTrip["totals"]; judge?: Judge; outDate: string; backDate: string; legs: WildLeg[]; stops: WildStop[] }[];
   variant?: string;
@@ -320,10 +327,21 @@ export type WildParams = {
   prefer?: string[];
   /** Chain stops; clamped to the countries available and to eight. */
   maxStops?: number;
-  /** Nights a stop; never under two (five past 28 nights). */
+  /** Nights a stop, honoured exactly when given: with nightsPerStopMax every stop takes nightsPerStop to
+   * nightsPerStopMax nights (2-3 means 2 or 3, never 6; a max equal to it means exactly that many), alone it means
+   * that many or one more. Left out, the
+   * chain picks (two or three a stop up to two weeks, longer past that, eight to twelve past 28 nights). */
   nightsPerStop?: number;
   /** With nightsPerStop, the most nights a stop may run: the hop is searched over the whole range and the cheapest day wins. */
   nightsPerStopMax?: number;
+  /** Places the traveller does not want as a stop: countries, cities or group words ("dach", "like:DE"). The walk
+   * reads them all; the classic chain takes the countries among them as never a stop (the caller resolves them). */
+  avoid?: string[];
+  /** Live Kiwi searches the walk engine may spend (0 to 40; 0 answers from the fare memory alone). Classic ignores it. */
+  searchBudget?: number;
+  /** Minutes a train or coach hop may take; 0 turns ground hops off (flights only). Default 330 for the walk,
+   * four hours between countries for the classic chain. */
+  maxGroundMin?: number;
   /** Cities (codes or names) the chain must pass through as stops, visited nearest first; an Error names the one that cannot be reached. */
   mustInclude?: string[];
   /** The longest flight (hours, door to door) any leg may take; longer itineraries are skipped. */
@@ -352,7 +370,7 @@ export type WildParams = {
 
 export type Tradeoff = "price" | "balanced" | "comfort";
 /** Euros one hour of travel is worth, per tradeoff: way in, chain hops, way home. */
-const HOUR_VALUE: Record<Tradeoff, [number, number, number]> = { price: [5, 7, 7], balanced: [9, 11, 12], comfort: [18, 20, 24] };
+const HOUR_VALUE: Record<Tradeoff, [number, number, number]> = { price: [1.5, 2, 2], balanced: [9, 11, 12], comfort: [18, 20, 24] };
 
 /** Airlines and hubs with a free or near-free stopover programme: a night in the hub city on
  * the way, hotel included or cheap. Worth saying when a leg goes through one. */
@@ -376,7 +394,7 @@ export async function buildWild(p: WildParams): Promise<WildTrip | null> {
   const region = REGIONS[p.region];
   const style: Style = p.style ?? "experiences";
   const budget: Budget = p.budget ?? "mid";
-  const tradeoff: Tradeoff = p.tradeoff ?? "balanced";
+  const tradeoff: Tradeoff = p.tradeoff ?? "price";
   const [hIn, hHop, hHome] = HOUR_VALUE[tradeoff];
   const stopsPenalty = (stops: number) => (tradeoff === "comfort" ? stops * 60 : tradeoff === "balanced" ? stops * 20 : 0);
   const constraints: string[] = [];
@@ -469,22 +487,8 @@ export async function buildWild(p: WildParams): Promise<WildTrip | null> {
   const outOfTime = () => !!p.deadline && Date.now() > p.deadline;
 
   // The window: the dates asked for (clipped to ten days), else the first ten days of the
-  // month asked for, else three to five weeks from now.
-  const today = new Date();
-  let start = new Date(today.getTime() + 21 * 86_400_000);
-  const isoDay = (s?: string): s is string => !!s && /^\d{4}-\d{2}-\d{2}$/.test(s);
-  if (isoDay(p.from)) {
-    const earliest = new Date(today.getTime() + 2 * 86_400_000);
-    start = Date.parse(p.from) > earliest.getTime() ? new Date(Date.parse(p.from)) : earliest;
-  } else if (p.month && /^\d{4}-\d{2}$/.test(p.month)) {
-    const [y, m] = p.month.split("-").map(Number);
-    const first = new Date(Date.UTC(y, m - 1, 1));
-    const earliest = new Date(today.getTime() + 10 * 86_400_000);
-    start = first > earliest ? first : earliest;
-  }
-  const from = start.toISOString().slice(0, 10);
-  // A window given as [from, to] is kept as is, up to ten days; from == to is one fixed day.
-  const to = isoDay(p.from) && isoDay(p.to) && p.to >= from && p.to <= addDays(from, 10) ? p.to : addDays(from, 10);
+  // month asked for, else three to five weeks from now (wildWindow, shared with the walk engine).
+  const { from, to } = wildWindow(p);
   // Up to 90 nights; past four weeks the chain is a handful of real bases, not a sprint.
   const totalNights = Math.min(90, Math.max(2, Math.round(p.nights)));
 
@@ -499,18 +503,32 @@ export async function buildWild(p: WildParams): Promise<WildTrip | null> {
   // a long trip), so a request for sixty one-night stops cannot spend hundreds of searches
   // on an itinerary nobody asked for.
   const asked = (n: number | undefined) => (n != null && Number.isFinite(n) && n > 0 ? Math.round(n) : 0);
+  // Nights a stop given by the traveller are honoured exactly: every stop takes exactMin to exactMax nights, the
+  // chain grows as many stops as that needs (up to 16 for stops of three nights or less, revisiting a country with a
+  // second city when the region runs out), and the last stop never runs long to fill the trip. With nightsPerStopMax
+  // the range is exact, even when it equals the minimum (2-2 is two nights, the trip style's "at most 2 a place"); a
+  // bare number with no max means that many or one more, as it always did (two departure days to search).
+  const exact = asked(p.nightsPerStop) > 0;
+  const exactMin = exact ? Math.min(30, asked(p.nightsPerStop)) : 0;
+  const exactMax = exact ? Math.min(30, asked(p.nightsPerStopMax) >= exactMin ? asked(p.nightsPerStopMax) : exactMin + 1) : 0;
+  const stepCap = exact && exactMax <= 3 ? MAX_CHAIN_STEPS_SHORT : MAX_CHAIN_STEPS;
+  if (exact && Math.ceil(totalNights / exactMax) > stepCap) {
+    throw new Error(`${totalNights} nights at ${exactMin === exactMax ? exactMin : `${exactMin} to ${exactMax}`} nights a stop need ${Math.ceil(totalNights / exactMax)} stops; the most is ${stepCap}. Allow more nights a stop or ask for fewer nights`);
+  }
   // The chain must have room for every city the traveller named, within the hard cap.
   const maxStops = Math.max(
-    Math.min(MAX_CHAIN_STEPS, mustCodes.length),
+    Math.min(stepCap, mustCodes.length),
     Math.min(
-      MAX_CHAIN_STEPS,
+      stepCap,
       asked(p.maxStops)
-        ? Math.max(1, long ? asked(p.maxStops) : Math.min(countries.length, asked(p.maxStops)))
-        : long
-          ? Math.max(5, Math.min(7, Math.round(totalNights / 10)))
-          : style === "slow"
-            ? Math.min(countries.length, 3)
-            : Math.min(countries.length, 5),
+        ? Math.max(1, long || exact ? asked(p.maxStops) : Math.min(countries.length, asked(p.maxStops)))
+        : exact
+          ? Math.ceil(totalNights / exactMin)
+          : long
+            ? Math.max(5, Math.min(7, Math.round(totalNights / 10)))
+            : style === "slow"
+              ? Math.min(countries.length, 3)
+              : Math.min(countries.length, 5),
     ),
   );
   const floorNights = style === "slow" ? 4 : style === "experiences" ? 3 : 2;
@@ -519,8 +537,8 @@ export async function buildWild(p: WildParams): Promise<WildTrip | null> {
   // instead of ending around night fifteen and leaving the way home to pick the length.
   // A short trip (under a week) keeps every stop at two nights, so three stops still fit.
   const capNights = style === "slow" ? 7 : totalNights > 14 ? 6 : 3;
-  const nightsPerStop = asked(p.nightsPerStop)
-    ? Math.max(long ? 5 : 2, Math.min(long ? 30 : 10, asked(p.nightsPerStop)))
+  const nightsPerStop = exact
+    ? exactMin
     : long
       ? Math.max(8, Math.min(12, Math.floor((totalNights - 1) / maxStops)))
       : totalNights < 7
@@ -528,8 +546,11 @@ export async function buildWild(p: WildParams): Promise<WildTrip | null> {
         : Math.min(capNights, Math.max(floorNights, Math.floor((totalNights - 1) / maxStops)));
   // A range of nights a stop ("3-5"): the hop out of a stop is searched over the whole range
   // and the cheapest day wins; without one, two departure days as before.
-  const hopDays = asked(p.nightsPerStopMax) > nightsPerStop ? Math.min(10, asked(p.nightsPerStopMax) - nightsPerStop) : 1;
-  if (asked(p.nightsPerStop)) constraints.push(`${nightsPerStop}${hopDays > 1 ? ` to ${nightsPerStop + hopDays}` : ""} nights a stop`);
+  const hopDays = exact ? exactMax - exactMin : 1;
+  if (exact) constraints.push(exactMin === exactMax ? `${exactMin} nights a stop` : `${exactMin} to ${exactMax} nights a stop`);
+  /** Ground hops between countries: four hours by default, the traveller's own cap when given, none when 0. */
+  const groundCap = p.maxGroundMin != null && Number.isFinite(p.maxGroundMin) ? Math.max(0, Math.round(p.maxGroundMin)) : 240;
+  if (groundCap === 0) constraints.push("no trains or coaches, flights only");
   // Every must city after the landing costs a full stay at the stop before it, and the last
   // one at least a night: when that does not fit the nights asked, no search can make it fit.
   // The landing may itself be a must city, so one city is counted as free.
@@ -656,7 +677,10 @@ export async function buildWild(p: WildParams): Promise<WildTrip | null> {
     // A city still to pass through gets squeezed in as long as a day is left (the way home
     // then leaves from it); a free stop needs a full stay's worth of days.
     const room = daysBetween(earliest, endDate);
-    if (pending.size ? room < 1 : room < nightsPerStop + 1) {
+    // Exact nights a stop: the hop window keeps this stop inside its range and leaves the next one its fewest
+    // nights before the end; null means this stop can take the rest of the trip, so it is the last.
+    const win = exact ? rangeHop(stops.at(-1)!.arrive, endDate, exactMin, exactMax) : null;
+    if (exact && !pending.size ? !win : pending.size ? room < 1 : room < nightsPerStop + 1) {
       if (pending.size) throw new Error(`${totalNights} nights are not enough to pass through ${[...pending].map((c) => CITIES[c].name).join(" and ")}; add nights or drop a city`);
       break;
     }
@@ -671,10 +695,10 @@ export async function buildWild(p: WildParams): Promise<WildTrip | null> {
     if (pending.size) {
       // The current stop may be an airport we map to no city (no coordinates): then the must cities go in the order given.
       const target = cur ? [...pending].sort((a, b) => haversineKm(cur.lat, cur.lon, CITIES[a].lat, CITIES[a].lon) - haversineKm(cur.lat, cur.lon, CITIES[b].lat, CITIES[b].lon))[0] : [...pending][0];
-      const link = cur ? neighboursOf(current).find((n) => n.code === target && n.minutes <= 12 * 60) : undefined;
+      const link = cur && groundCap > 0 ? neighboursOf(current).find((n) => n.code === target && n.minutes <= 12 * 60) : undefined;
       // The hop window never runs past the day before the end, so a stop squeezed in on the
       // last day still leaves a night there and a day for the way home.
-      const hopTo = [addDays(earliest, hopDays), addDays(endDate, -1)].sort()[0];
+      const hopTo = win ? win.to : [addDays(earliest, hopDays), addDays(endDate, -1)].sort()[0];
       const its = count(await search(current, target, earliest, hopTo < earliest ? earliest : hopTo));
       const best = its.filter((it) => cityOfItinerary(it) === target && hoursOk(it)).sort((a, b) => a.price + hHop * hoursOf(a) + stopsPenalty(a.outbound.stops) - (b.price + hHop * hoursOf(b) + stopsPenalty(b.outbound.stops)))[0];
       // Ground wins when it is there and the flight is not clearly better (a short hop at a fair price).
@@ -707,7 +731,8 @@ export async function buildWild(p: WildParams): Promise<WildTrip | null> {
     let remaining = byDistance(countries.filter(([cc]) => !visited.has(cc)));
     // A long trip in a small region runs out of new countries before it runs out of nights:
     // then a second city in a country already seen is fine, as long as it is a real move.
-    const revisit = !remaining.length && long;
+    // Short stops asked for exactly need more stops than a region has countries just the same.
+    const revisit = !remaining.length && (long || exact);
     if (revisit) remaining = byDistance(countries);
     if (!remaining.length) break;
     /** A second city in a visited country must be its own place: 250 km from every earlier base there. */
@@ -719,9 +744,9 @@ export async function buildWild(p: WildParams): Promise<WildTrip | null> {
     };
     // Ground hops across a border count as a candidate without a search (Shenzhen to Hong Kong).
     const ground = cur
-      ? neighboursOf(current).filter((n) => CITIES[n.code] && farEnough(n.code) && remaining.some((r) => r.cc === CITIES[n.code].country) && n.minutes <= 240 && worth(n.code) >= 40)
+      ? neighboursOf(current).filter((n) => CITIES[n.code] && farEnough(n.code) && remaining.some((r) => r.cc === CITIES[n.code].country) && n.minutes <= groundCap && worth(n.code) >= 40)
       : [];
-    const flights = await Promise.all(remaining.map(async ({ cc, name }) => ({ cc, its: count(await search(current, name, earliest, addDays(earliest, hopDays))) })));
+    const flights = await Promise.all(remaining.map(async ({ cc, name }) => ({ cc, its: count(await search(current, name, earliest, win ? win.to : addDays(earliest, hopDays))) })));
     type Cand = { code: string; score: number; it?: KiwiItinerary; ground?: (typeof ground)[number] };
     const cands: Cand[] = [];
     // Variety: after two big cities a smaller place is welcome; a coast is welcome once. The
@@ -783,10 +808,12 @@ export async function buildWild(p: WildParams): Promise<WildTrip | null> {
     // window stays within three days of the end even when the chain stopped early (the last
     // stop just gets longer), so the cheapest fare never sets the trip length: someone who
     // asked for 28 nights does not get 18 because day 18 happened to be cheap.
-    const latest = addDays(endDate, 1);
+    // Exact nights a stop: the last stop takes its own range, never the rest of a trip the chain did not fill.
+    const ranged = exact ? rangeHome(from.arrive, endDate, exactMin, exactMax) : null;
+    const latest = ranged ? ranged.to : addDays(endDate, 1);
     const anchor = addDays(endDate, -3);
-    let earliest = addDays(from.arrive, Math.max(2, Math.min(nightsPerStop, daysBetween(from.arrive, endDate) - 1)));
-    if (earliest < anchor) earliest = anchor;
+    let earliest = ranged ? ranged.from : addDays(from.arrive, Math.max(2, Math.min(nightsPerStop, daysBetween(from.arrive, endDate) - 1)));
+    if (!ranged && earliest < anchor) earliest = anchor;
     // A stop reached on the last day or two (a must city squeezed in at the end) leaves after
     // one night rather than making the window negative and the trip fail.
     if (daysBetween(earliest, latest) < 0) earliest = addDays(from.arrive, 1);
@@ -832,7 +859,8 @@ export async function buildWild(p: WildParams): Promise<WildTrip | null> {
         count(a);
         count(b);
         let best: { a: KiwiItinerary; b: KiwiItinerary; total: number } | null = null;
-        for (const x of a.filter((it) => hoursOf(it) <= 16 && hoursOk(it))) {
+        // With exact nights a stop, leaving a day early for the hub must still leave the last stop its fewest nights.
+        for (const x of a.filter((it) => hoursOf(it) <= 16 && hoursOk(it) && (!exact || daysBetween(lastStop!.arrive, dayOf(it.outbound.departureTime)) >= exactMin))) {
           for (const y of b.filter((it) => hoursOf(it) <= 16 && hoursOk(it))) {
             if (dayOf(y.outbound.departureTime) <= dayOf(x.outbound.arrivalTime)) continue;
             const total = x.price + y.price;
@@ -904,6 +932,51 @@ export async function buildWild(p: WildParams): Promise<WildTrip | null> {
   };
 }
 
+/**
+ * Nights a stop given exactly: the days the hop out of a stop reached on `arrive` may leave on, or null when the
+ * stop should be the last one (it can take the rest of the trip, up to `endDate`, within its own most nights). The
+ * window keeps this stop at nMin to nMax nights and never leaves the next one fewer than nMin before the end.
+ * Pure, so the nights split can be checked without a search.
+ */
+export function rangeHop(arrive: string, endDate: string, nMin: number, nMax: number): { from: string; to: string } | null {
+  const left = Math.round((Date.parse(endDate) - Date.parse(arrive)) / 86_400_000);
+  if (left <= nMax) return null;
+  const from = addDays(arrive, nMin);
+  const to = [addDays(arrive, nMax), addDays(endDate, -nMin)].sort()[0];
+  return { from, to: to < from ? from : to };
+}
+
+/** The days the last stop (reached on `arrive`) may fly home on when nights a stop are exact: its own range, and
+ * never more than a day past the trip's end. */
+export function rangeHome(arrive: string, endDate: string, nMin: number, nMax: number): { from: string; to: string } {
+  const from = addDays(arrive, nMin);
+  const to = [addDays(arrive, nMax), addDays(endDate, 1)].sort()[0];
+  return { from, to: to < from ? from : to };
+}
+
+/**
+ * The departure window of a wild trip: the dates asked for (from at least two days out, `to` kept up to ten days
+ * after it; from == to is one fixed day), else the first ten days of the month asked for (at least ten days out),
+ * else three to five weeks from now. Both builders search exactly these days.
+ */
+export function wildWindow(p: Pick<WildParams, "from" | "to" | "month">, today = new Date()): { from: string; to: string } {
+  let start = new Date(today.getTime() + 21 * 86_400_000);
+  const isoDay = (s?: string): s is string => !!s && /^\d{4}-\d{2}-\d{2}$/.test(s);
+  if (isoDay(p.from)) {
+    const earliest = new Date(today.getTime() + 2 * 86_400_000);
+    start = Date.parse(p.from) > earliest.getTime() ? new Date(Date.parse(p.from)) : earliest;
+  } else if (p.month && /^\d{4}-\d{2}$/.test(p.month)) {
+    const [y, m] = p.month.split("-").map(Number);
+    const first = new Date(Date.UTC(y, m - 1, 1));
+    const earliest = new Date(today.getTime() + 10 * 86_400_000);
+    start = first > earliest ? first : earliest;
+  }
+  const from = start.toISOString().slice(0, 10);
+  // A window given as [from, to] is kept as is, up to ten days; from == to is one fixed day.
+  const to = isoDay(p.from) && isoDay(p.to) && p.to >= from && p.to <= addDays(from, 10) ? p.to : addDays(from, 10);
+  return { from, to };
+}
+
 export function wildPath(gw: string, region: string, month: string | undefined, nights: number, style: Style = "experiences", budget: Budget = "mid", custom = ""): string {
   return `wild/${gw}-${region}-${month ?? "next"}-${nights}-${style}-${budget}${custom ? `-${custom}` : ""}.json`;
 }
@@ -947,8 +1020,12 @@ export function customKey(countries?: string[], prefer?: string[], maxStops?: nu
   const window = from && /^\d{4}-\d{2}-\d{2}$/.test(from) ? `w${from.replace(/-/g, "")}${to && /^\d{4}-\d{2}-\d{2}$/.test(to) ? to.slice(8, 10) : ""}` : "";
   // Countries and favourites may arrive as names: the key holds codes, so a name and its code are one trip.
   const codesOf = (list?: string[]) => resolveCountries(list).codes;
-  const nightsPart = nightsPerStop ? `n${nightsPerStop}${extras?.nightsPerStopMax && extras.nightsPerStopMax > nightsPerStop ? `-${extras.nightsPerStopMax}` : ""}` : "";
-  const parts = [...codesOf(countries).sort(), ...codesOf(prefer).map((c) => `+${c}`).sort(), maxStops ? `s${maxStops}` : "", nightsPart, tradeoff && tradeoff !== "balanced" ? tradeoff : "", noHubs ? "direct" : "", window].filter(Boolean);
+  // A max equal to the minimum is written too ("n2-2"): it is exact, while a bare "n2" keeps a day of slack.
+  const nightsPart = nightsPerStop ? `n${nightsPerStop}${extras?.nightsPerStopMax && extras.nightsPerStopMax >= nightsPerStop ? `-${extras.nightsPerStopMax}` : ""}` : "";
+  // The tradeoff no key names is the default one, which is "price" since 2026-10-12 (money
+  // first), so a caller that leaves it out and one that sends the default share a stored trip.
+  const t = tradeoff ?? "price";
+  const parts = [...codesOf(countries).sort(), ...codesOf(prefer).map((c) => `+${c}`).sort(), maxStops ? `s${maxStops}` : "", nightsPart, t !== "price" ? t : "", noHubs ? "direct" : "", window].filter(Boolean);
   // The extras have their own cut, so a long country list can never push them out of the key.
   const extra = [
     extras?.mustInclude?.length ? `m${resolveCities(extras.mustInclude).codes.join("")}` : "",

@@ -44,14 +44,27 @@ function typingIn(t: EventTarget | null): boolean {
   return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || el.isContentEditable;
 }
 
-export default function CommandBar({ onRun, busy }: { onRun: (c: Command) => void; busy?: boolean }) {
+/**
+ * Words that open a part of the app rather than run a search: "/help" (or "help", "?", "how
+ * does atlas work") opens the guide, "/style" the trip style. Checked before the parser, which
+ * would send them to the chat as a question.
+ */
+function appCommand(text: string): "help" | "style" | null {
+  const t = text.trim().toLowerCase().replace(/\s+/g, " ");
+  if (/^\/?(help|guide|\?|how does (atlas|this|it) work\??|how to use( atlas)?)$/.test(t)) return "help";
+  if (/^\/?(style|trip style|prefs|preferences|settings)$/.test(t)) return "style";
+  return null;
+}
+
+export default function CommandBar({ onRun, busy, onHelp }: { onRun: (c: Command) => void; busy?: boolean; /** Opens "How Atlas works". */ onHelp?: () => void }) {
   const [text, setText] = useState("");
   const [open, setOpen] = useState(false);
   const [hi, setHi] = useState(0);
   const input = useRef<HTMLInputElement>(null);
   const box = useRef<HTMLFormElement>(null);
+  const special = appCommand(text);
   // Parsing is pure and cheap (no network): every keystroke re-ranks. Today is the visitor's own calendar day.
-  const suggestions = useMemo(() => (text.trim() ? parseCommand(text, todayIso()) : []), [text]);
+  const suggestions = useMemo(() => (text.trim() && !appCommand(text) ? parseCommand(text, todayIso()) : []), [text]);
   useEffect(() => setHi(0), [text]);
 
   // "/" and Ctrl+K (Cmd+K on a Mac) focus the box from anywhere, except while typing elsewhere.
@@ -88,6 +101,13 @@ export default function CommandBar({ onRun, busy }: { onRun: (c: Command) => voi
     };
   }, [open]);
 
+  const runSpecial = (what: "help" | "style") => {
+    if (what === "help") onHelp?.();
+    else window.dispatchEvent(new CustomEvent("atlas:open-prefs"));
+    setText("");
+    setOpen(false);
+    input.current?.blur();
+  };
   const run = (c: Command | undefined) => {
     if (!c) return;
     onRun(c);
@@ -105,7 +125,8 @@ export default function CommandBar({ onRun, busy }: { onRun: (c: Command) => voi
       role="search"
       onSubmit={(e) => {
         e.preventDefault();
-        run(suggestions[hi] ?? suggestions[0]);
+        if (special) runSpecial(special);
+        else run(suggestions[hi] ?? suggestions[0]);
       }}
     >
       <span className="cmdicon" aria-hidden="true">
@@ -147,9 +168,20 @@ export default function CommandBar({ onRun, busy }: { onRun: (c: Command) => voi
       <kbd className="cmdkbd" aria-hidden="true">
         /
       </kbd>
-      <button type="submit" disabled={!suggestions.length}>
+      <button type="submit" disabled={!suggestions.length && !special}>
         Go
       </button>
+      {open && special && (
+        <div className="cmdlist" id="cmdlist" role="listbox">
+          <button type="button" role="option" aria-selected className="cmdopt on" onMouseDown={(e) => e.preventDefault()} onClick={() => runSpecial(special)}>
+            <span className="cmdglyph" aria-hidden="true">
+              {special === "help" ? "?" : "≡"}
+            </span>
+            <span className="cmdlabel">{special === "help" ? "How Atlas works" : "Your trip style"}</span>
+            <span className="cmdwhat">{special === "help" ? "every feature, with one thing to try" : "nights a place, pace, what to avoid"}</span>
+          </button>
+        </div>
+      )}
       {showList && (
         <div className="cmdlist" id="cmdlist" role="listbox">
           {suggestions.map((c, i) => (

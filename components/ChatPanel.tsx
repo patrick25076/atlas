@@ -26,10 +26,13 @@ import { skeletonFromDeal, skeletonFromEvent, skeletonFromRoute, skeletonFromWal
 import { countryName, dateRange, monthLabel, monthOptions } from "@/lib/format";
 import { formatDuration } from "@/lib/geo";
 import { WILD_REGIONS } from "@/lib/ui-types";
+import { DEFAULT_PREFS, PREFS_EVENT, loadPrefs, prefsSummary, sameAsDefault, type Prefs } from "@/lib/prefs";
 import { FOLLOWUPS, ISO_DAY_RE, LOCAL_DAY, LONG_TOOLS, NIGHT_OPTIONS, ROUTE_KIND_LABEL, TOOL_LABEL, addDays, dispatchAtlas, eventCommand, eventDays, eventRoute, eventTripDays, quickDateRanges, routeDetail, routeResultDetail, toolProgress, walkResultDetail, widgetAnswer, type ChatEvent, type PersonRow, type WalkLiveLine, type WalkQuery, type WidgetKind, type WidgetSpec } from "@/lib/chat-widgets";
 import s from "./ChatPanel.module.css";
 
-export type ChatContext = { origin?: { lat: number; lon: number; label: string }; gateways: string[]; home: string; month?: string; today?: string; been?: { countries: string[]; newOnly: boolean } };
+/** What rides along with every turn. `prefs` is the trip style (lib/prefs.ts); when the shell does not pass it, the
+ * panel sends the one saved in this browser, kept current by the `atlas:prefs` event. */
+export type ChatContext = { origin?: { lat: number; lon: number; label: string }; gateways: string[]; home: string; month?: string; today?: string; been?: { countries: string[]; newOnly: boolean }; prefs?: Prefs };
 
 type Props = {
   context: ChatContext;
@@ -988,13 +991,27 @@ export default function ChatPanel(p: Props) {
   const activeRef = useRef(store.active);
   const contextRef = useRef(p.context);
   contextRef.current = p.context;
+  // The trip style: read once from this browser after mount (the server render has none), then kept current by the
+  // style control's atlas:prefs event, so the next turn carries the change without a reload.
+  const [prefs, setPrefs] = useState<Prefs>(DEFAULT_PREFS);
+  const prefsRef = useRef<Prefs>(DEFAULT_PREFS);
+  prefsRef.current = p.context.prefs ?? prefs;
+  useEffect(() => {
+    setPrefs(loadPrefs());
+    const onPrefs = (e: Event) => {
+      const next = (e as CustomEvent<{ prefs?: Prefs }>).detail?.prefs;
+      if (next && Array.isArray(next.nightsPerPlace)) setPrefs(next);
+    };
+    window.addEventListener(PREFS_EVENT, onPrefs);
+    return () => window.removeEventListener(PREFS_EVENT, onPrefs);
+  }, []);
   // What goes to the server: the thread settled (a stopped tool call is an error, not a call
   // still waiting), so a turn after Stop never fails on the half-finished one, and the
   // visitor's own calendar day, so the agent and the date widgets agree on what "today" is.
   // A written itinerary (make_itinerary's raw) is the largest payload a thread holds and the
   // server never reads it back, so it stays in the browser; the routes, deals and trips do
   // travel, because "make it an itinerary" in a later turn plans from them.
-  const transport = useMemo(() => new DefaultChatTransport({ api: "/api/chat", prepareSendMessagesRequest: ({ messages }) => ({ body: { messages: withoutItineraries(settle(messages)), context: { ...contextRef.current, today: LOCAL_DAY(new Date()) } } }) }), []);
+  const transport = useMemo(() => new DefaultChatTransport({ api: "/api/chat", prepareSendMessagesRequest: ({ messages }) => ({ body: { messages: withoutItineraries(settle(messages)), context: { ...contextRef.current, prefs: prefsRef.current, today: LOCAL_DAY(new Date()) } } }) }), []);
   const initial = useMemo(() => store.threads.find((t) => t.id === store.active)?.messages ?? [], []); // eslint-disable-line react-hooks/exhaustive-deps
   const { messages, sendMessage, status, stop, setMessages, error, regenerate, clearError } = useChat({ transport, messages: initial });
   const messagesRef = useRef(messages);
@@ -1432,6 +1449,17 @@ export default function ChatPanel(p: Props) {
 
       {storageNote && <p className={s.note}>{storageNote}</p>}
       {busy && p.seed && <p className={s.note}>Next, when this answer is done: {p.seed}</p>}
+      {/* The trip style every search starts from, one line; the button asks the top bar to open its editor
+          ('atlas:open-prefs'), so the panel never needs to know where the editor lives. */}
+      <p className={s.styleLine}>
+        <span>
+          {sameAsDefault(prefsRef.current) ? "Trip style (default): " : "Your trip style: "}
+          {prefsSummary(prefsRef.current)}
+        </span>
+        <button type="button" className={s.styleBtn} onClick={() => window.dispatchEvent(new CustomEvent("atlas:open-prefs"))}>
+          Change
+        </button>
+      </p>
       <form
         className={s.inputBar}
         onSubmit={(e) => {

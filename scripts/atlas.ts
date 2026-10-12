@@ -10,7 +10,9 @@
 //   atlas events february --live-cap 0
 //   atlas loop from Brasov 20 to 30 Oct 5 to 6 nights 2 nights a stop
 //   atlas itinerary Lisbon 3 nights from 2026-11-14
+//   atlas wild sea 14 nights --nights-per-place 2-3 --taste unique
 //   atlas ask "is Porto nice in October"
+//   atlas style
 //   atlas help
 // Flags:
 //   --from "lat,lon,label"   where you are (default Brașov, 45.657,25.601)
@@ -19,13 +21,24 @@
 //   --today YYYY-MM-DD       the calendar day the words are read against (default today)
 //   --json                   print the raw tool answer instead of the tables
 //   --all                    print every suggestion parseCommand made, then run the first
+// The trip style (lib/prefs.ts), the defaults every tool starts from, as in the app's Trip style:
+//   --nights-per-place 2-3   nights in each place, a number or a range (default 2-3)
+//   --pace slow|balanced|packed          (default balanced)
+//   --tradeoff price|balanced|comfort    (default balanced)
+//   --taste popular|unique|mixed         (default mixed)
+//   --avoid dach,DE          countries (ISO2) or group words never to stop in
+//   --max-flight-hours 8     the longest single flight
+//   --no-ground              no trains or coaches between places, flights only
+//   --engine classic         build a wild loop with the older greedy chain instead of the walk
 //
 // Kiwi throttles an address after bursts, so the cap is real: it is the turn budget the tools
 // spend from, and a command whose usual cost is above it runs from stored data instead.
 import { generateText, hasToolCall, stepCountIs } from "ai";
 import { createAmazonBedrock } from "@ai-sdk/amazon-bedrock";
-import { atlasTools, chatContext, chatSystem, type AgentContext } from "../lib/agent-tools";
-import { COMMAND_HINTS, parseCommand, type Command } from "../lib/command";
+import { atlasTools, chatContext, chatSystem, UNIQUE_WISHES, type AgentContext } from "../lib/agent-tools";
+import { COMMAND_HINTS, GROUND_PREFER_MIN, parseCommand, type Command } from "../lib/command";
+import { DEFAULT_PREFS, prefsLine, prefsSummary, sameAsDefault } from "../lib/prefs";
+import { parseNightsRange } from "../lib/wild";
 import { kiwiStats } from "../lib/kiwi";
 import { eventsAt } from "../lib/purpose-events";
 import { itineraryText } from "../lib/itinerary-server";
@@ -42,7 +55,7 @@ process.removeAllListeners("warning");
 const argv = process.argv.slice(2);
 const flags = new Map<string, string | true>();
 const words: string[] = [];
-const VALUED = new Set(["from", "airports", "live-cap", "today"]);
+const VALUED = new Set(["from", "airports", "live-cap", "today", "nights-per-place", "pace", "tradeoff", "taste", "avoid", "max-flight-hours", "engine"]);
 for (let i = 0; i < argv.length; i++) {
   const a = argv[i];
   const m = a.match(/^--([a-z-]+)(?:=(.*))?$/);
@@ -75,8 +88,27 @@ const gateways = (flag("airports") ?? "GHV,SBZ,OTP")
   .map((s) => s.trim().toUpperCase())
   .filter((s) => /^[A-Z]{3}$/.test(s));
 
-const ctx: AgentContext = chatContext({ origin, gateways, home: "RO", today });
+// The trip style from the flags, over the same defaults the app starts from (DEFAULT_PREFS); chatContext clamps it
+// exactly as the chat route does, so a terminal run and a chat turn with the same style ask the same thing.
+const prefsGiven = ["nights-per-place", "pace", "tradeoff", "taste", "avoid", "max-flight-hours", "no-ground"].some((k) => flags.has(k));
+const prefsIn = (() => {
+  const nights = parseNightsRange(flag("nights-per-place")) ?? DEFAULT_PREFS.nightsPerPlace;
+  const hours = Number(flag("max-flight-hours"));
+  return {
+    ...DEFAULT_PREFS,
+    nightsPerPlace: nights,
+    ...(flag("pace") ? { pace: flag("pace") } : {}),
+    ...(flag("tradeoff") ? { tradeoff: flag("tradeoff") } : {}),
+    ...(flag("taste") ? { taste: flag("taste") } : {}),
+    avoid: (flag("avoid") ?? "").split(",").map((s) => s.trim()).filter(Boolean),
+    ...(Number.isFinite(hours) && hours > 0 ? { maxFlightHours: hours } : {}),
+    groundOk: !flags.has("no-ground"),
+  };
+})();
+const ENGINE = flag("engine") === "classic" ? "classic" : "walk";
+const ctx: AgentContext = chatContext({ origin, gateways, home: "RO", today, prefs: prefsIn });
 ctx.budget = { used: 0, max: LIVE_CAP };
+const prefs = ctx.prefs ?? DEFAULT_PREFS;
 type Tools = Record<string, { execute?: (input: unknown, opts: unknown) => Promise<unknown> }>;
 const tools = atlasTools(ctx) as unknown as Tools;
 const kiwiAtStart = kiwiStats().today;
@@ -101,7 +133,7 @@ function table(head: string[], rows: string[][], max = 34) {
 }
 function notes(r: Record<string, unknown>) {
   // The tools write some notes to the model ("..., say so"); the terminal shows the fact only.
-  for (const k of ["corrected", "note", "unplaced", "beenFilter"]) if (typeof r[k] === "string") out(dim(`${k}: ${String(r[k]).replace(/,? say so$/, "")}`));
+  for (const k of ["corrected", "note", "unplaced", "beenFilter", "tripStyle"]) if (typeof r[k] === "string") out(dim(`${k}: ${String(r[k]).replace(/,? say so$/, "")}`));
 }
 
 /** A tool's answer: a streaming tool (walk_trips) is an async generator whose every yield before the last is
@@ -194,10 +226,12 @@ async function runWalk(c: Extract<Command, { kind: "walk" }>) {
     ...(c.countries?.length ? { countries: c.countries } : {}),
     ...(c.avoid?.length ? { avoid: c.avoid } : {}),
     ...(c.style ? { style: c.style } : {}),
+    // The command carries minutes (0 flights only, 480 trains between places); walk_trips takes its words.
+    ...(c.ground != null ? { ground: c.ground === 0 ? "none" : c.ground >= GROUND_PREFER_MIN ? "prefer" : "ok" } : {}),
   };
   const r = await call("walk_trips", input, JSON_OUT ? undefined : (line) => out(dim(`  ... ${line}`)));
   if (json(r) || failed(r)) return;
-  out(bold(`Loops from ${String(r.from ?? "here")}, ${String(r.window ?? "")}, ${String(r.nights ?? "")} nights, ${String(r.nightsPerStop ?? "")} a stop`));
+  out(bold(`Loops from ${String(r.from ?? "here")}, ${String(r.window ?? "")}, ${String(r.nights ?? "")} nights, ${String(r.nightsPerStop ?? "")} nights a place`));
   const loops = (r.loops as WalkLoopRow[] | undefined) ?? [];
   if (!loops.length) out("No loop closed.");
   loops.forEach((l, i) => {
@@ -274,17 +308,38 @@ async function runGetaways(c: Extract<Command, { kind: "getaways" }>) {
   notes(r);
 }
 
+/** Kiwi searches one wild build costs, about: the walk two a stop plus the way in and home (stops enough for the
+ * nights at the shortest stay, 16 at most, 40 searches at most); the classic chain about sixty. */
+function wildCost(nights: number, nps: number | [number, number] | undefined): number {
+  if (ENGINE === "classic") return 60;
+  const least = Array.isArray(nps) ? nps[0] : (nps ?? prefs.nightsPerPlace[0]);
+  return Math.min(40, 2 * Math.min(16, Math.ceil(nights / Math.max(1, least))) + 4);
+}
 async function runWild(c: Extract<Command, { kind: "wild" }>) {
-  // A build is about sixty searches: under that cap only a stored loop can answer.
-  if (LIVE_CAP < 60 && ctx.budget) ctx.budget.used = ctx.budget.max;
-  const r = await call("wild_trip", { region: c.countries?.length ? "custom" : (c.region ?? "sea"), ...(c.countries?.length ? { countries: c.countries } : {}), ...(c.nights ? { nights: c.nights } : {}) });
+  // Under the build's cost only a stored loop can answer: the turn's budget is marked spent, so no search leaves.
+  const nights = c.nights ?? 14;
+  const cost = wildCost(nights, c.nightsPerStop);
+  if (LIVE_CAP < cost && ctx.budget) ctx.budget.used = ctx.budget.max;
+  // The line's own nights a place win over the trip style; "unique" rides in the wishes, as the chat passes it.
+  const nps = c.nightsPerStop;
+  const input = {
+    region: c.countries?.length ? "custom" : (c.region ?? "sea"),
+    ...(c.countries?.length ? { countries: c.countries } : {}),
+    ...(c.nights ? { nights: c.nights } : {}),
+    ...(nps != null ? (Array.isArray(nps) ? { nightsPerStop: nps[0], nightsPerStopMax: nps[1] } : { nightsPerStop: nps }) : {}),
+    // The same words the Wild tab, /api/wild and the chat write for "unique", so all four share one stored trip.
+    ...(c.style === "unique" ? { wishes: UNIQUE_WISHES } : {}),
+    ...(ENGINE === "classic" ? { engine: "classic" } : {}),
+  };
+  const r = await call("wild_trip", input);
   if (json(r) || failed(r)) return;
   printTrip(r);
-  if (LIVE_CAP < 60) out(dim(`(building a new loop costs about 60 Kiwi searches; run with --live-cap 60 to allow it)`));
+  if (c.ground != null) out(dim(`(${c.ground === 0 ? "flights only" : "trains between places"} is read by the loop walk in the app and the chat; the wild builder takes it from your trip style, --no-ground for flights only)`));
+  if (LIVE_CAP < cost) out(dim(`(building a new loop costs about ${cost} Kiwi searches with the ${ENGINE} engine; run with --live-cap ${cost} to allow it)`));
 }
 /** A wild trip as wild_trip summarises it: the stops and legs are lines already. */
 function printTrip(r: Record<string, unknown>) {
-  if (r.title) out(bold(`${r.title}${r.dates ? `, ${r.dates}` : ""}`));
+  if (r.title) out(bold(`${r.title}${r.dates ? `, ${r.dates}` : ""}${r.engine ? dim(`  (${r.engine === "walk" ? "built by the walk" : "classic chain"})`) : ""}`));
   for (const s of (r.stops as string[] | undefined) ?? []) out(`  stay  ${s}`);
   for (const l of (r.legs as string[] | undefined) ?? []) out(dim(`  leg   ${l}`));
   const t = r.totals as { flights?: number; living?: number; all?: number; perDay?: number; nights?: number } | undefined;
@@ -375,12 +430,22 @@ async function runAsk(text: string) {
 function help() {
   out(bold("atlas: the command line of Atlas"));
   out("");
-  // "/itinerary" alone means "what is on screen", which a terminal does not have.
-  const rows = COMMAND_HINTS.filter((h) => h.example !== "/itinerary").map((h) => [`atlas ${h.example}`, h.what]);
-  rows.push(["atlas ask <question>", "one turn with the agent, which picks the tools"], ["atlas help", "this list"]);
+  // "/itinerary" alone means "what is on screen", which a terminal does not have; /style and /help are below.
+  const rows = COMMAND_HINTS.filter((h) => !["/itinerary", "/style", "/help"].includes(h.example)).map((h) => [`atlas ${h.example.replace(/^\//, "")}`, h.what]);
+  rows.push(["atlas ask <question>", "one turn with the agent, which picks the tools"], ["atlas style", "the trip style this run uses"], ["atlas help", "this list"]);
   table(["try", "what it does"], rows, 48);
   out("");
   out("Flags: --from \"lat,lon,label\"  --airports OTP,SBZ  --live-cap N (default 12)  --today YYYY-MM-DD  --json  --all");
+  out("Trip style: --nights-per-place 2-3  --pace slow|balanced|packed  --tradeoff price|balanced|comfort  --taste popular|unique|mixed  --avoid dach,DE  --max-flight-hours 8  --no-ground  --engine classic");
+}
+
+/** The trip style this run uses: the flags over the app's defaults, as the agent reads it. */
+function style() {
+  if (JSON_OUT) return void out(JSON.stringify(prefs, null, 2));
+  out(bold(`Trip style${sameAsDefault(prefs) ? " (the defaults)" : ""}: ${prefsSummary(prefs)}`));
+  out(prefsLine(prefs));
+  out(dim(`wild loops are built by the ${ENGINE === "walk" ? "graph walk (the default)" : "classic chain"}`));
+  if (!prefsGiven) out(dim("change it for one run with --nights-per-place 2-3, --taste unique, --tradeoff price, --avoid dach (see atlas help)"));
 }
 
 // ---------------------------------------------------------------------------------------
@@ -391,7 +456,7 @@ async function main() {
   if (/^ask\b/i.test(text)) return runAsk(text.replace(/^ask\s*/i, ""));
   // The words after `atlas` read like the top bar's line; "itinerary ..." and "events ..."
   // work as they are, and a leading verb that names a slash command is read as one.
-  const line = /^(route|events|getaways|wild|stay|place|itinerary|loop|walk)\b/i.test(text) && !/^(events|itinerary)\b/i.test(text) ? `/${text}` : text;
+  const line = /^(route|events|getaways|wild|stay|place|itinerary|loop|walk|style|prefs|settings)\b/i.test(text) && !/^(events|itinerary)\b/i.test(text) ? `/${text}` : text;
   const list = parseCommand(line, today);
   if (flags.has("all")) {
     out(dim("suggestions:"));
@@ -417,6 +482,10 @@ async function main() {
       return runItinerary(c);
     case "walk":
       return runWalk(c);
+    case "prefs":
+      return style();
+    case "help":
+      return help();
     case "ask":
       return runAsk(c.text);
   }

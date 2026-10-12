@@ -26,7 +26,23 @@ export type Command =
       maxPrice?: number;
       label: string;
     }
-  | { kind: "wild"; region?: string; countries?: string[]; nights?: number; label: string }
+  | {
+      kind: "wild";
+      region?: string;
+      countries?: string[];
+      nights?: number;
+      /** Nights a place, as typed ("2-3 nights a place", "max 3 nights a city"): 2, or a range [2, 3]. Absent means
+       * the traveller's trip style (lib/prefs.ts). */
+      nightsPerStop?: number | [number, number];
+      /** "unique" for hidden gems, smaller places. */
+      style?: string;
+      /** "slow pace" or "packed": longer or shorter stays when no nights a place were typed. */
+      pace?: "slow" | "packed";
+      /** Ground hop limit in minutes, as /api/wild and /api/walk read it: GROUND_PREFER_MIN (480) for "only trains
+       * between cities", 0 for "flights only". Absent means the trip style's. */
+      ground?: number;
+      label: string;
+    }
   | { kind: "longstay"; region?: string; countries?: string[]; months?: number; label: string }
   | { kind: "place"; name: string; label: string }
   | {
@@ -65,8 +81,18 @@ export type Command =
       /** Places the traveller does not want, as the walk reads them: a country name ("Germany"), "like:DE" for
        * "countries like Germany", or a group word ("dach", "benelux", "nordics"). */
       avoid?: string[];
+      /** "slow pace" or "packed": the walk stays 3 to 4 or 1 to 2 nights a place when no nights a place were typed. */
+      pace?: "slow" | "packed";
+      /** Ground hop limit in minutes, as /api/walk reads it: GROUND_PREFER_MIN (480, "only trains between cities":
+       * hops up to 8 hours) or 0 ("flights only"). Minutes, not words, because the shell copies this field into the
+       * walk's query as it is (walkFromCommand in components/Globe.tsx). Absent means the trip style's. */
+      ground?: number;
       label: string;
     }
+  /** "/style", "trip style", "settings": open the trip style editor (lib/prefs.ts). */
+  | { kind: "prefs"; label: string }
+  /** "/help", "help", "how does this work": open the guide to every feature. */
+  | { kind: "help"; label: string }
   | { kind: "ask"; text: string; label: string };
 
 export const COMMAND_HINTS: { example: string; what: string }[] = [
@@ -79,11 +105,15 @@ export const COMMAND_HINTS: { example: string; what: string }[] = [
   { example: "getaways under 3h this weekend", what: "short trips from your airports" },
   { example: "loop from Brasov 20 to 30 Oct 6 days", what: "a loop of the cheapest hops by plane, train or coach, and home" },
   { example: "3 cities in 6 days, not Germany, unique", what: "a few cities, the cheapest edges first, off the beaten track" },
+  { example: "loop 2 weeks, 2-3 nights a place, only trains between cities", what: "a longer loop at your pace, overland where it can" },
   { example: "/wild sea 21", what: "a 21 night loop through Southeast Asia" },
+  { example: "/wild balkans 14, max 3 nights a city, unique", what: "a wild loop at 2 to 3 nights a place, off the beaten track" },
   { example: "/stay thailand 2 months", what: "a long stay: bases, rent, flights" },
   { example: "/place Porto", what: "a place: sights, food, what is on, how to get there" },
   { example: "itinerary Lisbon 3 nights from 14 Nov", what: "a day by day plan" },
   { example: "/itinerary", what: "turn what is on screen into a day by day plan" },
+  { example: "/style", what: "your trip style: nights a place, pace, price or comfort, taste, places to avoid" },
+  { example: "/help", what: "every feature and how to use it" },
 ];
 
 // ---------------------------------------------------------------------------------------
@@ -491,6 +521,79 @@ function splitRoute(rest: string): { from?: string; to: string; more?: string[] 
 }
 
 // ---------------------------------------------------------------------------------------
+// Trip style words: how long a place, how fast, how to get between places, the unusual over the
+// famous. Read before the dates and the stay, so "2-3 nights a place" is never taken as the
+// trip's length. The walk and the wild loop take them for this one search; the lasting version
+// of the same choices is the traveller's trip style (lib/prefs.ts, "/style").
+
+type TripStyle = {
+  nightsPerStop?: number | [number, number];
+  pace?: "slow" | "packed";
+  ground?: "prefer" | "none";
+  style?: "unique";
+  /** The text with every span read replaced by " | ". */
+  rest: string;
+};
+/** What a stay is counted in: a stop, a city, a place, a location (the owner's word), a base. */
+const STAY_PLACE = "(?:stops?|city|cities|towns?|places?|locations?|spots?|bases?|destinations?)";
+const EACH = "(?:a|an|per|each|in each|at each|for each|in every|every)";
+const NPS_NUM = "(\\d{1,2}|one|two|three|four|five|six|a couple of)";
+/** "max 3 nights a city", "at most 3 days per place", "no more than 3 nights in each city". */
+const NPS_MAX = new RegExp(`\\b(?:max(?:imum)?|at most|up to|no more than|not more than)\\s+${NPS_NUM}\\s+(?:nights?|days?)\\s+${EACH}\\s+${STAY_PLACE}\\b`, "i");
+/** "2-3 nights per place", "2 to 3 days per location max", "3 nights max a city", "2 nights a stop". */
+const NPS_EACH = new RegExp(`\\b${NPS_NUM}(?:\\s*(?:-|–|to)\\s*(\\d{1,2}))?\\s+(?:nights?|days?)\\s+(max(?:imum)?\\s+)?${EACH}\\s+${STAY_PLACE}\\b(\\s+(?:max(?:imum)?|at most|tops))?`, "i");
+/** "2 to 3 days each", "2 nights each". */
+const NPS_BARE_EACH = new RegExp(`\\b${NPS_NUM}(?:\\s*(?:-|–|to)\\s*(\\d{1,2}))?\\s+(?:nights?|days?)\\s+each\\b`, "i");
+const PACE_SLOW = /\b(?:slow(?:er)?\s+(?:pace|travel|trip)|(?:at\s+)?a\s+slow\s+pace|take it slow|relaxed pace|no rush)\b/i;
+const PACE_PACKED = /\b(?:(?:fast|quick|packed|busy|faster)\s+pace|fast[\s-]paced|packed|see as much as possible)\b/i;
+/** "only trains between cities", "trains between places", "trains only", "only by train or coach". */
+const GROUND_PREFER = /\b(?:(?:only|just)\s+(?:by\s+)?(?:trains?|rail)(?:\s+(?:and|or)\s+(?:coach(?:es)?|bus(?:es)?))?(?:\s+between\s+(?:the\s+)?(?:cities|places|stops|towns))?|(?:by\s+)?(?:trains?|rail)(?:\s+(?:and|or)\s+(?:coach(?:es)?|bus(?:es)?))?\s+(?:only\s+)?between\s+(?:the\s+)?(?:cities|places|stops|towns)|(?:by\s+)?(?:trains?|rail)\s+only|overland\s+between\s+(?:the\s+)?(?:cities|places|stops))\b/i;
+/** "flights only", "only flights", "fly only", "no trains", "no coaches or trains". */
+const GROUND_NONE = /\b(?:flights?\s+only|only\s+(?:by\s+)?(?:flights?|planes?|air)|fly\s+only|no\s+(?:trains?|coach(?:es)?|bus(?:es)?)(?:\s+(?:or|and)\s+(?:trains?|coach(?:es)?|bus(?:es)?))?)\b/i;
+
+/** The ground hop limit "only trains between cities" stands for: hops up to 8 hours (the walk's default is 330). */
+export const GROUND_PREFER_MIN = 480;
+/** The style's ground word as the minutes a command carries: 480 for trains between places, 0 for flights only. */
+const groundMinutes = (g?: "prefer" | "none"): number | undefined => (g === "prefer" ? GROUND_PREFER_MIN : g === "none" ? 0 : undefined);
+
+/** The trip style words of a line, and the line without them. Pure, like the rest of this file. */
+function readTripStyle(text: string): TripStyle {
+  let w = ` ${text} `;
+  const out: TripStyle = { rest: "" };
+  // A cap alone ("max 3") is a range up to it from two nights (one night at a cap of one): the owner's "2-3 days
+  // per location max". A range is kept as typed; one number with no cap is that many nights.
+  const nights = (a: string, b?: string, cap = false): boolean => {
+    const x = numberOf(a);
+    const y = b ? Number(b) : null;
+    if (x == null || x < 1 || x > 14) return false;
+    out.nightsPerStop = y != null && y > x && y <= 14 ? [x, y] : cap && x > 2 ? [2, x] : x;
+    return true;
+  };
+  w = w.replace(NPS_MAX, (all, a: string) => (nights(a, undefined, true) ? " | " : all));
+  if (out.nightsPerStop == null) w = w.replace(NPS_EACH, (all, a: string, b?: string, capBefore?: string, capAfter?: string) => (nights(a, b, !b && !!(capBefore || capAfter)) ? " | " : all));
+  if (out.nightsPerStop == null) w = w.replace(NPS_BARE_EACH, (all, a: string, b?: string) => (nights(a, b) ? " | " : all));
+  w = w.replace(PACE_SLOW, () => ((out.pace = "slow"), " | "));
+  if (!out.pace) w = w.replace(PACE_PACKED, () => ((out.pace = "packed"), " | "));
+  w = w.replace(GROUND_PREFER, () => ((out.ground = "prefer"), " | "));
+  if (!out.ground) w = w.replace(GROUND_NONE, () => ((out.ground = "none"), " | "));
+  w = w.replace(STYLE_UNIQUE, () => ((out.style = "unique"), " | "));
+  out.rest = w.trim();
+  return out;
+}
+/** The nights a place a pace stands for when none were typed: slow is 3 to 4, packed 1 to 2. */
+const paceNights = (pace?: "slow" | "packed"): [number, number] | undefined => (pace === "slow" ? [3, 4] : pace === "packed" ? [1, 2] : undefined);
+/** "2 to 3 nights a place", "slow pace", "trains between places", "off the beaten track": the label's pieces. */
+function styleLabel(ts: Pick<TripStyle, "nightsPerStop" | "pace" | "ground" | "style">): string[] {
+  const n = ts.nightsPerStop;
+  return [
+    n == null ? "" : Array.isArray(n) ? `${n[0]} to ${n[1]} nights a place` : `${n} night${n === 1 ? "" : "s"} a place`,
+    ts.pace ? `${ts.pace} pace` : "",
+    ts.ground === "prefer" ? "trains between places" : ts.ground === "none" ? "flights only" : "",
+    ts.style ? "off the beaten track" : "",
+  ].filter(Boolean);
+}
+
+// ---------------------------------------------------------------------------------------
 // Walks: a loop of cheap hops (lib/graph-walk.ts), searched the way the owner does it by hand
 // with Skyscanner Explore. "loop from Brasov 20-30 Oct 6 days", "3 cities in 6 days", "Brasov
 // to Warsaw then train then home", "cheap unique loop next month not germany".
@@ -498,7 +601,7 @@ function splitRoute(rest: string): { from?: string; to: string; more?: string[] 
 /** Words that ask for a loop of hops rather than one trip: a loop, a number of cities, nights a
  * stop, or a chain of hops written out ("plane then train", "then another city", "then home").
  * "Rome to Paris then back" stays a return route: "then back" alone is no chain. */
-const WALK_TRIGGER = /\b(?:loops?|circuit|multi[\s-]?city|city[\s-]?hop(?:ping)?|(?:\d|two|three|four|five|six|a few|few)\s+(?:cities|stops|towns|places)|(?:nights?|days?)\s+(?:a|per|each|in each|at each|for each)\s+(?:stop|city|town|place)|then\s+(?:by\s+)?(?:train|rail|coach|bus|plane|fly|flight|ferry|home|another)|back home|come back from|plane then train|train then plane|(?:plane|train|coach|bus|flight|ferry)s?\s*,?\s*then|to another (?:city|place|town))\b/i;
+const WALK_TRIGGER = /\b(?:loops?|circuit|multi[\s-]?city|city[\s-]?hop(?:ping)?|(?:\d|two|three|four|five|six|a few|few)\s+(?:cities|stops|towns|places)|(?:nights?|days?)\s+(?:max(?:imum)?\s+)?(?:a|per|each|in each|at each|for each|in every|every)\s+(?:stop|city|town|place|location|spot|base|destination)|then\s+(?:by\s+)?(?:train|rail|coach|bus|plane|fly|flight|ferry|home|another)|back home|come back from|plane then train|train then plane|(?:plane|train|coach|bus|flight|ferry)s?\s*,?\s*then|to another (?:city|place|town))\b/i;
 /** Words that make a loop the wild engine's (a far region, weeks overland), not the walk's. "through" and
  * "across" are read apart: "loop through Poland 6 days" is a walk kept to Poland; a far country or two weeks
  * or more is Wild's. */
@@ -603,17 +706,11 @@ function walkPlaces(text: string): { origin?: string; mustInclude: string[] } {
 /** A loop of hops, or null when the line is not one (no walk words, a far region, weeks overland). */
 function readWalk(raw: string, today: string): Extract<Command, { kind: "walk" }> | null {
   if (!WALK_TRIGGER.test(raw)) return null;
-  let w = ` ${raw} `;
-  // The walk's own phrases first, so the date and stay reader below never sees "2 nights a stop" as the stay.
-  let nps: number | [number, number] | undefined;
-  const npsOf = (a: string, b?: string) => {
-    const x = numberOf(a);
-    const y = b ? numberOf(b) : null;
-    if (x == null || x < 1 || x > 14) return;
-    nps = y != null && y > x && y <= 14 ? [x, y] : x;
-  };
-  w = w.replace(/\b(\d{1,2}|one|two|three|four|a couple of)(?:\s*(?:-|–|to)\s*(\d{1,2}))?\s+(?:nights?|days?)\s+(?:a|per|each|in each|at each|for each)\s+(?:stop|city|town|place)\b/i, (_all, a: string, b?: string) => (npsOf(a, b), " | "));
-  if (nps == null) w = w.replace(/\b(\d{1,2}|one|two|three|four)(?:\s*(?:-|–|to)\s*(\d{1,2}))?\s+(?:nights?|days?)\s+each\b/i, (_all, a: string, b?: string) => (npsOf(a, b), " | "));
+  // The trip style words first (nights a place, pace, trains between places, unique), so the date and stay reader
+  // below never sees "2 nights a stop" as the stay. A pace with no nights a place typed stands for its nights.
+  const ts = readTripStyle(raw);
+  let w = ` ${ts.rest} `;
+  const nps: number | [number, number] | undefined = ts.nightsPerStop ?? paceNights(ts.pace);
   let range: [number, number] | undefined;
   w = w.replace(/\b(\d{1,2})\s*(?:-|–|to)\s*(\d{1,2})\s+(nights?|days?)\b/i, (all, a: string, b: string, unit: string) => {
     const x = Number(a);
@@ -628,8 +725,7 @@ function readWalk(raw: string, today: string): Extract<Command, { kind: "walk" }
     if (k != null && k >= 1 && k <= 6) maxStops = k;
     return " | ";
   });
-  let style: string | undefined;
-  w = w.replace(STYLE_UNIQUE, () => ((style = "unique"), " | "));
+  const style: string | undefined = ts.style;
   const avoid: string[] = [];
   w = w.replace(AVOID_RE, (all, like: string | undefined, names: string) => {
     const got: string[] = [];
@@ -679,12 +775,11 @@ function readWalk(raw: string, today: string): Extract<Command, { kind: "walk" }
   const from = win?.from;
   const to = win && !win.exact ? win.to : undefined;
   const avoidLabel = avoid.map((a) => (a.startsWith("like:") ? `nothing like ${ISO_NAME[a.slice(5)] ?? a.slice(5)}` : `not ${GROUP_LABEL[a] ?? a}`)).join(", ");
-  const npsLabel = nps == null ? "" : Array.isArray(nps) ? `${nps[0]} to ${nps[1]} nights a stop` : `${nps} night${nps === 1 ? "" : "s"} a stop`;
   const label = [
     `A loop${origin ? ` from ${origin}` : ""}${mustInclude.length ? ` through ${mustInclude.join(", ")}` : ""}${countries ? ` in ${countries.join(", ")}` : ""}`,
     win ? `${win.month ? "in " : ""}${winLabel(win, today)}` : "",
     nights ? `${nights[0] === nights[1] ? nights[0] : `${nights[0]} to ${nights[1]}`} nights` : "",
-    npsLabel,
+    ...styleLabel({ nightsPerStop: nps, pace: ts.pace, ground: ts.ground }),
     maxStops ? `up to ${maxStops} stops` : "",
     avoidLabel,
     style ? "off the beaten track" : "",
@@ -703,6 +798,8 @@ function readWalk(raw: string, today: string): Extract<Command, { kind: "walk" }
     ...(countries ? { countries } : {}),
     ...(style ? { style } : {}),
     ...(avoid.length ? { avoid } : {}),
+    ...(ts.pace ? { pace: ts.pace } : {}),
+    ...(ts.ground ? { ground: groundMinutes(ts.ground) } : {}),
     label,
   };
 }
@@ -785,6 +882,17 @@ function eventsLabel(c: { words?: string[]; where?: string; win?: Win | null }, 
   return `${what}${c.where ? ` in ${c.where}` : ""}${c.win ? `, ${c.win.month ? "" : c.win.exact ? "from " : ""}${winLabel(c.win, today)}` : ""}`;
 }
 
+const PREFS_COMMAND: Command = { kind: "prefs", label: "Trip style: nights a place, pace, price or comfort, taste, places to avoid" };
+const HELP_COMMAND: Command = { kind: "help", label: "How Atlas works: every feature and how to use it" };
+/** A whole line that asks for the trip style editor. Exactly the words the command bar opens the editor for itself
+ * (appCommand in components/CommandBar.tsx): the shell's runCommand has no case for this kind, so a wider net here
+ * would turn "open my trip style" from a question for the chat into a suggestion that does nothing. The terminal
+ * (scripts/atlas.ts) and atlas:command read the same words. */
+const PREFS_WORDS = /^\s*(?:style|trip style|prefs|preferences|settings)\s*$/i;
+/** A whole line that asks for the guide: the command bar's own words for it, for the same reason ("what can you do"
+ * stays a question for the chat, which explains the app in its own words). */
+const HELP_WORDS = /^\s*(?:help|guide|\?|how does (?:atlas|this|it) work\??|how to use(?: atlas)?)\s*$/i;
+
 /** The ranked suggestions for one line. `today` is the traveller's calendar day, YYYY-MM-DD. */
 export function parseCommand(text: string, today: string): Command[] {
   const day = ISO_RE.test(today) ? today : new Date().toISOString().slice(0, 10);
@@ -805,7 +913,15 @@ export function parseCommand(text: string, today: string): Command[] {
     return out;
   };
 
-  const r = readLine(raw, day);
+  // The trip style words ("2-3 nights a place", "slow pace", "only trains between cities", "unique") are read
+  // first and kept apart, so the reader below never takes "2-3 nights a place" for the trip's own length.
+  const ts = readTripStyle(raw);
+  // The style words are taken out of the line only where they belong to a loop (a wild line, a far region), where
+  // the stay reader would misread them (nights a place, a pace), or where they would hide a route ("Brasov to Vienna
+  // by train only"). "Flights only" elsewhere stays part of the words: "cheap flights only to Spain in november" is
+  // still the cheapest dates to Spain, not a route to it.
+  const styleLine = WILD_TRIGGER.test(raw) || REGION_WORDS.some(([re]) => re.test(raw.toLowerCase())) || ts.nightsPerStop != null || ts.pace != null || ts.ground === "prefer";
+  const r = readLine(styleLine ? ts.rest : raw, day);
   const lower = raw.toLowerCase();
   const restLower = r.rest.toLowerCase();
   const win = r.win;
@@ -856,22 +972,36 @@ export function parseCommand(text: string, today: string): Command[] {
       .slice(0, 8);
   /** "/wild sea 21", "/stay thailand 2": a bare number after a slash verb is the length. */
   const bareNumber = (rest: string): number | undefined => {
-    const m = rest.match(/(?:^|[\s|])(\d{1,2})(?=[\s|]|$)/);
+    // "/wild sea 21, 2-3 nights a place": the number may sit before a comma.
+    const m = rest.match(/(?:^|[\s|])(\d{1,2})(?=[\s|,;]|$)/);
     return m ? Number(m[1]) : undefined;
   };
-  const wild = (rest: string, keys = false): Command => {
+  const wild = (rest: string, keys = false, read: Read = r, style: TripStyle = ts): Command => {
     const reg = regionOf(rest.toLowerCase(), keys);
-    const nights = r.nights ?? (r.nightsRange ? r.nightsRange[1] : undefined) ?? (keys ? bareNumber(rest) : undefined);
-    if (keys) rest = rest.replace(/(?:^|[\s|])\d{1,2}(?=[\s|]|$)/, " ");
+    const nights = read.nights ?? (read.nightsRange ? read.nightsRange[1] : undefined) ?? (keys ? bareNumber(rest) : undefined);
+    if (keys) rest = rest.replace(/(?:^|[\s|])\d{1,2}(?=[\s|,;]|$)/, " ");
     const residue = reg ? "" : rest.replace(WILD_TRIGGER, " ").replace(/\b(?:a|an|the|in|through|across|around|of|wild|trip)\b/gi, " ");
     const countries = reg ? [] : countriesOf(residue);
     const where = reg ? reg[1] : countries.join(", ");
-    return { kind: "wild", ...(reg ? { region: reg[0] } : {}), ...(countries.length ? { countries } : {}), ...(nights ? { nights } : {}), label: `A wild loop${where ? ` through ${where}` : ""}${nights ? `, ${nights} nights` : ""}` };
+    // Nights a place as typed, else the pace's; neither means the trip style decides where the loop is built.
+    const nps = style.nightsPerStop ?? paceNights(style.pace);
+    const extra = styleLabel({ nightsPerStop: nps, pace: style.pace, ground: style.ground, style: style.style });
+    return {
+      kind: "wild",
+      ...(reg ? { region: reg[0] } : {}),
+      ...(countries.length ? { countries } : {}),
+      ...(nights ? { nights } : {}),
+      ...(nps != null ? { nightsPerStop: nps } : {}),
+      ...(style.style ? { style: style.style } : {}),
+      ...(style.pace ? { pace: style.pace } : {}),
+      ...(style.ground ? { ground: groundMinutes(style.ground) } : {}),
+      label: `A wild loop${where ? ` through ${where}` : ""}${nights ? `, ${nights} nights` : ""}${extra.length ? `, ${extra.join(", ")}` : ""}`,
+    };
   };
   const longstay = (rest: string, keys = false): Command => {
     const reg = regionOf(rest.toLowerCase(), keys);
     const months = r.months ?? (r.nights && r.nights >= 28 ? Math.round(r.nights / 30) : undefined) ?? (keys ? bareNumber(rest) : undefined);
-    if (keys) rest = rest.replace(/(?:^|[\s|])\d{1,2}(?=[\s|]|$)/, " ");
+    if (keys) rest = rest.replace(/(?:^|[\s|])\d{1,2}(?=[\s|,;]|$)/, " ");
     const residue = reg ? "" : rest.replace(STAY_TRIGGER, " ").replace(/\b(?:a|an|the|in|stay|long|somewhere|month|months|for)\b/gi, " ");
     const countries = reg ? [] : countriesOf(residue);
     const where = reg ? reg[1] : countries.join(", ");
@@ -890,7 +1020,8 @@ export function parseCommand(text: string, today: string): Command[] {
   if (slash) {
     const verb = slash[1].toLowerCase();
     const args = slash[2];
-    const argRead = readLine(args, day);
+    const argStyle = readTripStyle(args);
+    const argRead = readLine(argStyle.rest, day);
     const argRest = argRead.rest;
     switch (verb) {
       case "route":
@@ -921,13 +1052,13 @@ export function parseCommand(text: string, today: string): Command[] {
       }
       case "wild":
       case "w":
-        push(wild(argRest, true));
+        push(wild(argRest, true, argRead, argStyle));
         return finish();
       // "/loop" and "/walk" are the graph walk, unless a far region is named ("/loop sea 21" is still Wild).
       case "loop":
       case "walk":
         // A leading name is where the loop starts ("/loop Brasov 6 days"), as "loop from Brasov" would say it.
-        push(regionOf(args.toLowerCase(), true) ? wild(argRest, true) : (readWalk(/^\s*(?:from\b|[^\p{L}])/iu.test(args) || !args.trim() ? `loop ${args}` : `loop from ${args}`, day) ?? wild(argRest, true)));
+        push(regionOf(args.toLowerCase(), true) ? wild(argRest, true, argRead, argStyle) : (readWalk(/^\s*(?:from\b|[^\p{L}])/iu.test(args) || !args.trim() ? `loop ${args}` : `loop from ${args}`, day) ?? wild(argRest, true, argRead, argStyle)));
         return finish();
       case "stay":
       case "s":
@@ -951,10 +1082,33 @@ export function parseCommand(text: string, today: string): Command[] {
       case "ask":
       case "a":
         return [{ ...ask, text: args.trim() || raw, label: `Ask Atlas: ${(args.trim() || raw).slice(0, 60)}` }];
+      case "style":
+      case "prefs":
+      case "preferences":
+      case "settings":
+        push(PREFS_COMMAND);
+        return finish();
+      case "help":
+      case "guide":
+        push(HELP_COMMAND);
+        return finish();
       default:
         return finish();
     }
   }
+
+  // The trip style editor and the guide, in words: "trip style", "settings", "help", "how does this work".
+  if (PREFS_WORDS.test(raw)) {
+    push(PREFS_COMMAND);
+    return finish();
+  }
+  if (HELP_WORDS.test(raw)) {
+    push(HELP_COMMAND);
+    return finish();
+  }
+  // Any other line about the trip style or the settings ("open my trip style", "change my settings") is a question
+  // for the chat, which points to the Trip style button; read as a place it would open nothing.
+  if (/\b(?:trip style|travel style|settings|preferences|prefs)\b/i.test(raw)) return [ask];
 
   // Free text. The strong patterns first: they win even when the line is a question.
   if (ITIN_TRIGGER.test(lower)) {

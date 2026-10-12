@@ -10,7 +10,9 @@ import airportsJson from "@/public/data/airports.json";
 import routesJson from "@/public/data/routes-openflights.json";
 import countriesJson from "@/public/data/countries.json";
 import { driveMinutes, haversineKm } from "./geo";
+import { reachFrom } from "./ground";
 import { kiwiDate, nightsOf, searchFlight, type KiwiItinerary } from "./kiwi";
+import { TtlLru } from "./memo";
 import type { Airport, City, CountryInfo, Deal, Route } from "./types";
 
 const CITIES = citiesJson as unknown as Record<string, City>;
@@ -148,33 +150,215 @@ export function windowFor(month?: string): { from: string; to: string } {
 
 /**
  * Kiwi sells "returns" that land in one city and fly home from another: for Greece, 13 of 15
- * answers on 10 October 2026. That is a fine two-city trip when the two are a few hours apart by
- * land (Thessaloniki in, Corfu out: 280 km by road and ferry, about five hours; Chania in,
- * Heraklion out) and nonsense when they are not (Chania in, Corfu out: 587 km across the sea).
- * Past this straight-line distance between the two airports the ticket is not a getaway; below
- * it the deal carries both cities and the trip between, which the card must show.
+ * answers on 10 October 2026, and for "anywhere" from Brasov all 15 on 12 October. That is a
+ * fine two-city trip when the two are a few hours apart by land (Brussels in, Amsterdam out)
+ * and nonsense when they are not: Thessaloniki in and Corfu out looks like 280 km on a map but
+ * is a coach to Igoumenitsa and a ferry, about seven hours. So the trip between is timed on the
+ * ground graph (16,000 train, coach and ferry stations), never guessed from the straight line
+ * when the graph knows it, and the ticket is kept only when the graph gets there in four hours.
+ * The road is trusted only where the graph has no stations at either airport and both are in
+ * the same country (a corner the feeds do not cover), and then they must be within 120 km by
+ * road. Anywhere else a missing path means no getaway: the graph has the ports and the ferries,
+ * so "no path" between Kos and Bodrum, or Samos and Izmir, is a border and a seasonal boat,
+ * not a 75-minute drive. Past OPEN_JAW_MAX_KM in a straight line the graph is not even asked:
+ * no train, coach or ferry covers that in four hours (Madrid to Barcelona, 480 km, is two and
+ * a half on the AVE).
  */
-export const OPEN_JAW_MAX_KM = 300;
+export const OPEN_JAW_MAX_KM = 700;
+/** A split ticket (or two one-ways from two cities) is a getaway when the graph gets between them in this. */
+export const SPLIT_MAX_MIN = 240;
+/** Where the graph has no stations at either airport (same country), the two must be this close by road. */
+export const SPLIT_ROAD_MAX_KM = 120;
+/** Straight line to road kilometres, the factor driveMinutes uses. */
+const ROAD_FACTOR = 1.3;
+/**
+ * How far the graph is walked from an airport: well past four hours, so "a long way by land"
+ * (Thessaloniki to Sofia, five and a half hours) is told apart from "the graph has no path"
+ * (Crete, whose coaches are not in the feeds). One walk is 10 to 90 ms and is memoised.
+ */
+const GAP_GRAPH_MIN = 600;
+/** Stations within this distance of an airport are its ways onto and off the graph. */
+const STATION_KM = 20;
+/** Minutes added for getting off at the last station and on to the airport, besides the drive. */
+const EGRESS_MIN = 5;
+const GAP_TTL_MS = 6 * 3_600_000;
 
-/** Where the ticket lands, where it flies home from, and how far apart those are. */
-export function ticketGap(it: KiwiItinerary): { land: string; leave: string; landCity: string; leaveCity: string; km: number } | null {
+/** A place on the ground graph: a memo key and where it is. */
+export type GraphEnd = { key: string; lat: number; lon: number };
+/**
+ * The trip between two airports by land: minutes, the straight line in km, and how it was
+ * timed. "none" is no way by land that we trust (minutes is Infinity): never a getaway.
+ */
+export type GroundGap = { minutes: number; km: number; by: "graph" | "road" | "none" };
+
+// Memos: a walk is a typed array of minutes per station (64 KB), so only a few dozen are kept;
+// the answers per airport pair are small and kept by the thousand.
+const walkMemo = new TtlLru<Float32Array>(48, GAP_TTL_MS);
+const nearMemo = new TtlLru<{ id: number; minutes: number }[]>(2000, GAP_TTL_MS);
+const gapMemo = new TtlLru<GroundGap | null>(20_000, GAP_TTL_MS);
+
+/** Minutes from a place to every station the graph reaches from it in GAP_GRAPH_MIN (Infinity when not). */
+function walkFrom(end: GraphEnd, accessKm: number): Float32Array {
+  const key = `${end.key}:${accessKm}`;
+  const hit = walkMemo.get(key);
+  if (hit) return hit;
+  const r = reachFrom(end.lat, end.lon, GAP_GRAPH_MIN, accessKm);
+  const minutes = new Float32Array(r.stations).fill(Number.POSITIVE_INFINITY);
+  // The start stations count too: two airports a short drive apart share one.
+  for (const s of r.starts) minutes[s.id] = Math.min(minutes[s.id], s.minutes);
+  for (const s of r.reached) minutes[s.id] = Math.min(minutes[s.id], s.minutes);
+  walkMemo.set(key, minutes);
+  return minutes;
+}
+
+/** The stations within STATION_KM of a place, with the drive from each to it. */
+function stationsNear(end: GraphEnd): { id: number; minutes: number }[] {
+  const hit = nearMemo.get(end.key);
+  if (hit) return hit;
+  // A walk of zero minutes is just the list of stations around the point.
+  const near = reachFrom(end.lat, end.lon, 0, STATION_KM).starts.map((s) => ({ id: s.id, minutes: s.minutes }));
+  nearMemo.set(end.key, near);
+  return near;
+}
+
+/**
+ * Minutes by train, coach or ferry from one place to another on the ground graph (with the
+ * drive to the first station and from the last), or null when the graph has no path within
+ * ten hours: no station near one of them, or no line between. Exported for lib/pairs.ts, which
+ * times the traveller's own point to a home airport with it (accessKm 40, as route-finder does).
+ */
+export function graphMinutes(from: GraphEnd, to: GraphEnd, accessKm = STATION_KM): number | null {
+  const near = stationsNear(to);
+  if (!near.length) return null;
+  const walk = walkFrom(from, accessKm);
+  let best = Number.POSITIVE_INFINITY;
+  for (const s of near) {
+    const m = walk[s.id] + s.minutes + EGRESS_MIN;
+    if (m < best) best = m;
+  }
+  return Number.isFinite(best) ? Math.round(best) : null;
+}
+
+/** An airport or city code as a place on the graph. */
+export function graphEnd(code: string): GraphEnd | null {
+  const a = airportByIata.get(code);
+  if (a) return { key: code, lat: a.lat, lon: a.lon };
+  const c = CITIES[code];
+  return c ? { key: code, lat: c.lat, lon: c.lon } : null;
+}
+
+/** The city code an airport belongs to (BGY and MXP are both MIL), or the code itself. */
+export function airportCity(code: string): string {
+  return cityOf.get(code) ?? code;
+}
+
+/**
+ * The trip by land between two airports, timed on the ground graph when it has a path and by
+ * road over the straight line when it does not. Memoised per ordered pair. Null when our data
+ * cannot place one of the airports.
+ */
+export function groundGap(from: string, to: string): GroundGap | null {
+  const key = `${from}>${to}`;
+  const hit = gapMemo.get(key);
+  if (hit !== undefined) return hit;
+  const a = graphEnd(from);
+  const b = graphEnd(to);
+  let gap: GroundGap | null = null;
+  if (a && b) {
+    const km = haversineKm(a.lat, a.lon, b.lat, b.lon);
+    const graph = km <= OPEN_JAW_MAX_KM ? graphMinutes(a, b) : null;
+    if (graph != null) gap = { minutes: graph, km, by: "graph" };
+    // The road only where the feeds have nothing at either end, inside one country: a
+    // straight line across a sea or a border is not a drive (Kos to Bodrum is 72 km on a map).
+    else if (km <= OPEN_JAW_MAX_KM && roadTrusted(from, a, to, b)) gap = { minutes: driveMinutes(km), km, by: "road" };
+    else gap = { minutes: Number.POSITIVE_INFINITY, km, by: "none" };
+  }
+  gapMemo.set(key, gap);
+  return gap;
+}
+
+/** The country an airport or city code is in, or "" when our data does not know it. */
+function countryOfCode(code: string): string {
+  return airportByIata.get(code)?.country ?? CITIES[code]?.country ?? CITIES[cityOf.get(code) ?? ""]?.country ?? "";
+}
+
+/**
+ * Whether a road estimate may stand in for the graph between two places: both in the same
+ * known country and neither with a station (train, coach or ferry port) within STATION_KM.
+ * When the graph has stations at an end and still no path, the graph is the better witness.
+ */
+function roadTrusted(fromCode: string, a: GraphEnd, toCode: string, b: GraphEnd): boolean {
+  const ca = countryOfCode(fromCode);
+  if (!ca || ca !== countryOfCode(toCode)) return false;
+  return !stationsNear(a).length && !stationsNear(b).length;
+}
+
+/**
+ * The trip by land between two places of one country, for a leg the graph may not know (the
+ * traveller's home to an airport): the graph's minutes, else the road when roadTrusted allows
+ * it, else null. accessKm is how far the start may be from its first station.
+ */
+export function landMinutes(from: GraphEnd, to: GraphEnd, sameCountry: boolean, accessKm = STATION_KM): number | null {
+  const graph = graphMinutes(from, to, accessKm);
+  if (graph != null) return graph;
+  if (!sameCountry || stationsNear(from).length || stationsNear(to).length) return null;
+  return driveMinutes(haversineKm(from.lat, from.lon, to.lat, to.lon));
+}
+
+/** Airports a getaway flies from or to (large or medium, of a city on the globe): code and place. */
+const FLIGHT_AIRPORTS = AIRPORTS.filter((a) => a.size !== "small" && cityOf.has(a.iata));
+
+/** Those airports within `km` of a place, nearest first, with the straight line. */
+export function airportsWithin(lat: number, lon: number, km: number): { code: string; km: number; country: string }[] {
+  const out: { code: string; km: number; country: string }[] = [];
+  for (const a of FLIGHT_AIRPORTS) {
+    const d = haversineKm(lat, lon, a.lat, a.lon);
+    if (d <= km) out.push({ code: a.iata, km: d, country: a.country });
+  }
+  return out.sort((x, y) => x.km - y.km);
+}
+
+/** Every such airport of one country (ISO2). */
+export function countryAirports(cc: string): string[] {
+  return FLIGHT_AIRPORTS.filter((a) => a.country === cc).map((a) => a.iata);
+}
+
+/** The airports of the city an airport belongs to (BGY gives BGY, MXP, LIN), or the code itself. */
+export function cityAirports(code: string): string[] {
+  return CITIES[airportCity(code)]?.airports ?? [code];
+}
+
+/**
+ * Whether a trip between two cities is short enough to be part of a getaway: on the graph
+ * within `maxMinutes` when the graph knows the way, or within SPLIT_ROAD_MAX_KM by road when it
+ * does not.
+ */
+export function gapFits(g: GroundGap, maxMinutes = SPLIT_MAX_MIN): boolean {
+  if (g.by === "graph") return g.minutes <= maxMinutes;
+  if (g.by === "none") return false;
+  return g.km * ROAD_FACTOR <= SPLIT_ROAD_MAX_KM && g.minutes <= maxMinutes;
+}
+
+/** Where the ticket lands, where it flies home from, how far apart those are and how long the trip between takes ("none": no trusted way by land). */
+export function ticketGap(it: KiwiItinerary): { land: string; leave: string; landCity: string; leaveCity: string; km: number; minutes?: number; by?: GroundGap["by"] } | null {
   if (!it.inbound) return null;
   const land = it.outbound.to;
   const leave = it.inbound.from;
   const landCity = cityOf.get(land) ?? land;
   const leaveCity = cityOf.get(leave) ?? leave;
   if (land === leave || landCity === leaveCity) return { land, leave, landCity, leaveCity, km: 0 };
-  const a = airportByIata.get(land);
-  const b = airportByIata.get(leave);
-  // Two airports our data cannot place: trust the ticket only when they share a city name.
-  if (!a || !b) return { land, leave, landCity, leaveCity, km: Number.POSITIVE_INFINITY };
-  return { land, leave, landCity, leaveCity, km: haversineKm(a.lat, a.lon, b.lat, b.lon) };
+  const g = groundGap(land, leave);
+  // Two airports our data cannot place: the ticket is not trusted.
+  if (!g) return { land, leave, landCity, leaveCity, km: Number.POSITIVE_INFINITY };
+  return { land, leave, landCity, leaveCity, km: g.km, minutes: g.minutes, by: g.by };
 }
 
-/** A one-way, a plain return, or a return whose two ends are close enough to travel between by land. */
+/** A one-way, a plain return, or a return whose two ends the ground graph joins within four hours. */
 export function sensibleTicket(it: KiwiItinerary): boolean {
   const g = ticketGap(it);
-  return !g || g.km <= OPEN_JAW_MAX_KM;
+  if (!g || g.km === 0) return true;
+  if (g.minutes == null || !g.by) return false;
+  return gapFits({ minutes: g.minutes, km: g.km, by: g.by });
 }
 
 export function toDeal(gw: string, it: KiwiItinerary, nights: number): Deal {
@@ -190,7 +374,9 @@ export function toDeal(gw: string, it: KiwiItinerary, nights: number): Deal {
           backFrom: gap.leave,
           backFromCity: CITIES[gap.leaveCity]?.name ?? it.inbound?.segments[0]?.fromCity ?? gap.leave,
           gapKm: Number.isFinite(gap.km) ? Math.round(gap.km) : undefined,
-          gapMin: Number.isFinite(gap.km) ? driveMinutes(gap.km) : undefined,
+          // The graph's minutes by train, coach or ferry, or the road estimate where it has no
+          // path; never a "none" gap (no trusted way by land), which has no minutes to show.
+          gapMin: gap.by === "none" ? undefined : gap.minutes,
         }
       : {};
   // The flight home lands at another of the traveller's airports than the one it left from.
@@ -275,7 +461,7 @@ export async function buildBoard(gatewayCode: string, opts: BuildOptions = {}): 
         const found = r.itineraries
           .map((it) => ({ it, nights: nightsOf(it) }))
           .filter((x): x is { it: KiwiItinerary; nights: number } => x.nights != null && x.nights >= MIN_NIGHTS && x.nights <= MAX_NIGHTS)
-          // In one city and home from another one far away (Chania in, Corfu out) is not a getaway.
+          // In one city and home from one the ground graph does not join within four hours is not a getaway.
           .filter(({ it }) => sensibleTicket(it))
           .map(({ it, nights }) => toDeal(gw.code, it, nights))
           // Not home, and no domestic hop with a connection (a 7-hour way to cross one country).

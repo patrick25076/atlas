@@ -4,17 +4,21 @@ import { readJson, writeJson } from "@/lib/boards-store";
 import { planDays, planPath, type Plan } from "@/lib/plan";
 import { customKey, parseCities, parseCountries, parseNightsRange, wildPath, REGIONS, type Budget, type Style, type Tradeoff, type WildTrip } from "@/lib/wild";
 import { mainGateway } from "@/lib/board";
+import { avoidCountryCodes, engineKeySuffix, readAvoid } from "@/lib/wild-walk";
 import { InFlight } from "@/lib/memo";
 import { bad, iataList, intIn, isoDay, isoMonth, oneOf } from "@/lib/params";
 
 // GET /api/plan?g=OTP&region=sea&nights=14[&month=][&from=&to=][&style=][&budget=][&tradeoff=][&noHubs=1][&variants=3][&exclude=TH,VN]
 //     [&countries=][&prefer=][&maxStops=][&nightsPerStop=3-5][&mustInclude=][&maxFlightHours=][&startFrom=][&wishes=][&fresh=<token>]
+//     [&engine=walk|classic][&avoid=][&ground=][&searches=][&style=unique]
 // The day-by-day plan of a stored wild trip: experiences, food, costs, a month's rent. Built
 // once (one to two minutes of model and research calls), then stored next to the trip. Two
 // visitors asking for the same plan share one build. The trip is looked up under exactly the
 // key /api/wild stored it with, so every parameter that shapes that key (month or window,
 // style, budget, tradeoff, noHubs, variants, exclude, countries, prefer, maxStops,
-// nightsPerStop, mustInclude, maxFlightHours, startFrom, wishes) is accepted here with the
+// nightsPerStop, mustInclude, maxFlightHours, startFrom, wishes, and the engine with its own: avoid, ground,
+// searches, style=unique as wishes; walk is the default and classic is used when variants > 1 or startFrom is
+// given, exactly as /api/wild decides) is accepted here with the
 // same validation and clamps (a window wider than ten days is clipped to from + 10 days, as
 // /api/wild clips it, so the key matches; the been list becomes the same token; names become
 // the same codes); a caller must send what it sent to /api/wild. No Kiwi searches. `fresh`
@@ -34,6 +38,10 @@ const MAX_VARIANTS = 3;
 const MAX_VARIANTS_LONG = 2;
 const MAX_FLIGHT_HOURS = 40;
 const MAX_WISHES = 300;
+const ENGINES = ["walk", "classic"] as const;
+/** The same words /api/wild adds to the wishes for style=unique, so the key's wishes hash matches. */
+const UNIQUE_WORDS = "unique places and hidden gems over the big hubs";
+const MAX_SEARCHES = 40;
 
 function freshAllowed(v: string | null): boolean {
   const token = process.env.ATLAS_FRESH_TOKEN?.trim();
@@ -87,7 +95,9 @@ export async function GET(request: Request) {
   const nightsRange = nightsRangeRaw ? parseNightsRange(nightsRangeRaw) : null;
   if (nightsRangeRaw && !nightsRange) return bad("nightsPerStop must be a number or a range such as 3-5");
   const nightsPerStop = nightsRange ? Math.min(30, nightsRange[0]) : undefined;
-  const nightsPerStopMax = nightsRange && nightsRange[1] > nightsRange[0] ? Math.min(30, nightsRange[1]) : undefined;
+  // The top of the range is always passed, also when it equals the bottom: "2" (the trip style's "at most 2 a place")
+  // is exactly two nights, never the engines' old two-or-three. The key writes it as n2-2.
+  const nightsPerStopMax = nightsRange ? Math.min(30, nightsRange[1]) : undefined;
   const mustRaw = p.get("mustInclude");
   const mustParsed = parseCities(mustRaw);
   const mustInclude = mustParsed.codes.length ? mustParsed.codes.slice(0, 8) : undefined;
@@ -100,9 +110,27 @@ export async function GET(request: Request) {
   const startFromRaw = p.get("startFrom");
   const startFrom = startFromRaw ? iataList(startFromRaw, 3) : [];
   if (startFromRaw && !startFrom.length) return bad("startFrom must be a comma list of three-letter airport codes");
-  const wishes = (p.get("wishes") ?? "").trim().slice(0, MAX_WISHES) || undefined;
+  const uniqueAsked = (p.get("style") ?? "").trim().toLowerCase() === "unique";
+  const wishesRaw = (p.get("wishes") ?? "").trim();
+  const wishes = [wishesRaw, uniqueAsked && !/unique|hidden gem|off the beaten/i.test(wishesRaw) ? UNIQUE_WORDS : ""].filter(Boolean).join(", ").slice(0, MAX_WISHES) || undefined;
+  // The engine and its parameters, read as /api/wild reads them, so the key is the one the trip was stored under.
+  const engineRaw = p.get("engine");
+  if (engineRaw && !(ENGINES as readonly string[]).includes(engineRaw)) return bad("engine must be walk or classic");
+  const engineAsked = oneOf(engineRaw, ENGINES, "walk");
+  const engine: "walk" | "classic" = engineAsked === "classic" || variants > 1 || startFrom.length ? "classic" : "walk";
+  const avoidParsed = readAvoid(p.get("avoid"));
+  if (avoidParsed.unknown.length) return bad(`unknown place to avoid: ${avoidParsed.unknown.join(", ")}`);
+  const groundRaw = p.get("ground");
+  if (groundRaw && !Number.isFinite(Number(groundRaw))) return bad("ground must be minutes from 0 to 720");
+  const ground = groundRaw != null && groundRaw !== "" ? intIn(groundRaw, 0, 720, 330) : undefined;
+  const searchesRaw = p.get("searches");
+  if (searchesRaw && !Number.isFinite(Number(searchesRaw))) return bad(`searches must be a number from 0 to ${MAX_SEARCHES}`);
+  const searches = searchesRaw != null && searchesRaw !== "" ? intIn(searchesRaw, 0, MAX_SEARCHES, 0) : undefined;
+  const avoidCodes = [...avoidCountryCodes(avoidParsed.words)];
+  const engineExclude = engine === "classic" && avoidCodes.length ? [...new Set([...exclude, ...avoidCodes])] : exclude;
   const extras = { mustInclude, maxFlightHours, startFrom: startFrom.length ? startFrom : undefined, wishes, nightsPerStopMax };
-  const tripPath = wildPath(g, region, month, nights, style, budget, customKey(countries, prefer, maxStops, nightsPerStop, tradeoff, noHubs, from, to, exclude, extras) + (variants > 1 ? `-v${variants}` : ""));
+  const suffix = engineKeySuffix({ engine, avoid: avoidParsed.words, ground, searches });
+  const tripPath = wildPath(g, region, month, nights, style, budget, customKey(countries, prefer, maxStops, nightsPerStop, tradeoff, noHubs, from, to, engineExclude, extras) + suffix + (variants > 1 ? `-v${variants}` : ""));
   const path = planPath(tripPath);
   if (!freshAllowed(p.get("fresh"))) {
     const stored = await readJson<Plan>(path);

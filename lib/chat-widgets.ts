@@ -10,6 +10,7 @@ import type { RouteResult } from "./route-finder";
 import type { BudgetTier, Itinerary, Pace, Skeleton } from "./itinerary";
 import type { WalkLoop, WalkResult } from "./graph-walk";
 import type { Command } from "./command";
+import type { Prefs } from "./prefs";
 
 export type WidgetKind = "dates" | "month" | "nights" | "region" | "choices" | "people" | "map-region" | "map-place";
 
@@ -156,8 +157,11 @@ export function toolProgress(name: string, input: unknown): string {
         return `Searching ${a.where && a.where !== "anywhere" ? a.where : "anywhere"}, ${a.from ?? ""} to ${a.to ?? ""}${a.minNights || a.maxNights ? `, ${a.minNights ?? 2} to ${a.maxNights ?? 7} nights` : ""}`;
       case "reprice_route":
         return `Pricing ${a.from ?? ""} to ${a.to ?? ""} around ${a.depart ?? ""}`;
-      case "wild_trip":
-        return `Building a ${a.nights ?? 14} night loop in ${a.region ?? "the region"}${skipping} (a minute or two)`;
+      case "wild_trip": {
+        const nps = a.nightsPerStop ? `, ${a.nightsPerStop}${a.nightsPerStopMax ? ` to ${a.nightsPerStopMax}` : ""} nights a place` : "";
+        const how = a.engine === "classic" ? "" : ", walking the cheapest hops";
+        return `Building a ${a.nights ?? 14} night loop in ${a.region ?? "the region"}${nps}${how}${skipping} (a minute or two)`;
+      }
       case "long_stay":
         return `Pricing ${a.months ?? 2} month stays in ${a.region ?? list(a.countries) ?? "the region"}`;
       case "group_trip":
@@ -179,7 +183,8 @@ export function toolProgress(name: string, input: unknown): string {
       case "walk_trips": {
         const must = list(a.mustInclude);
         const avoid = list(a.avoid);
-        return `Walking the cheapest hops${a.origin ? ` from ${a.origin}` : ""}${must ? ` through ${must}` : ""}${a.from && a.to ? `, ${a.from} to ${a.to}` : ""}: anywhere from home, the next hop by plane, train or coach, then home${avoid ? `, not ${avoid}` : ""}${a.style === "unique" ? ", off the beaten track" : ""}`;
+        const nps = a.nightsPerStop ? `, ${a.nightsPerStop}${a.nightsPerStopMax ? ` to ${a.nightsPerStopMax}` : ""} nights a place` : "";
+        return `Walking the cheapest hops${a.origin ? ` from ${a.origin}` : ""}${must ? ` through ${must}` : ""}${a.from && a.to ? `, ${a.from} to ${a.to}` : ""}${nps}: anywhere from home, the next hop by plane, train or coach, then home${avoid ? `, not ${avoid}` : ""}${a.style === "unique" ? ", off the beaten track" : ""}`;
       }
       case "plan_days":
         return "Planning the days (about a minute)";
@@ -402,7 +407,8 @@ export function walkQuery(p: {
   if (p.maxStops) q.maxStops = p.maxStops;
   if (p.beam) q.beam = p.beam;
   if (p.budget != null) q.budget = p.budget;
-  if (p.ground) q.ground = p.ground;
+  // 0 is a real value here (flights only), so the limit goes in whenever it was given.
+  if (p.ground != null) q.ground = p.ground;
   if (p.tradeoff) q.tradeoff = p.tradeoff;
   for (const k of ["exclude", "mustInclude", "avoid", "prefer", "countries"] as const) {
     const v = list(p[k]);
@@ -420,13 +426,21 @@ export type WalkHere = { lat: number; lon: number; label: string; gateways: stri
  * walkWindow, the traveller's point and airports from `here`. A named start ("loop from Cluj")
  * is placed by `resolve` (the shell knows the cities file; this file does not); when it cannot
  * be placed, or no resolver is given, the walk starts from `here` and the label says so.
+ * `prefs` (the traveller's trip style, lib/prefs.ts) fills what the line did not say: nights a
+ * place, the tradeoff, "unique" for that taste, the places to avoid (added to the line's own),
+ * and trains and coaches; the words typed win, the way the chat's walk_trips reads them.
  */
-export function walkCommandQuery(c: Extract<Command, { kind: "walk" }>, here: WalkHere, today: string, resolve?: (name: string) => WalkHere | null): { params: WalkQuery; notes: string[] } {
+export function walkCommandQuery(c: Extract<Command, { kind: "walk" }>, here: WalkHere, today: string, resolve?: (name: string) => WalkHere | null, prefs?: Prefs): { params: WalkQuery; notes: string[] } {
   const win = walkWindow({ from: c.from, to: c.to, minNights: c.minNights, maxNights: c.maxNights }, today);
   const named = c.origin && c.origin.trim().toLowerCase() !== here.label.trim().toLowerCase() ? (resolve?.(c.origin) ?? null) : null;
   const start = named ?? here;
   const notes = [...win.notes, ...(c.origin && !named && c.origin.trim().toLowerCase() !== here.label.trim().toLowerCase() ? [`${c.origin} could not be placed; the loop starts from ${here.label}`] : [])];
-  const params = walkQuery({ gateways: start.gateways, home: start.home, lat: start.lat, lon: start.lon, label: start.label, from: win.from, to: win.to, minNights: win.minNights, maxNights: win.maxNights, nightsPerStop: c.nightsPerStop, maxStops: c.maxStops, mustInclude: c.mustInclude, avoid: c.avoid, countries: c.countries, style: c.style });
+  const nightsPerStop = c.nightsPerStop ?? prefs?.nightsPerPlace;
+  const avoid = [...new Set([...(c.avoid ?? []), ...(prefs?.avoid ?? [])])];
+  const style = c.style ?? (prefs?.taste === "unique" ? "unique" : undefined);
+  // The command carries the ground limit in minutes already (480 for trains between places, 0 for flights only).
+  const ground = c.ground ?? (prefs && !prefs.groundOk ? 0 : undefined);
+  const params = walkQuery({ gateways: start.gateways, home: start.home, lat: start.lat, lon: start.lon, label: start.label, from: win.from, to: win.to, minNights: win.minNights, maxNights: win.maxNights, nightsPerStop, maxStops: c.maxStops, mustInclude: c.mustInclude, avoid, countries: c.countries, style, ...(ground != null ? { ground } : {}), ...(prefs && prefs.tradeoff !== "price" ? { tradeoff: prefs.tradeoff } : {}) });
   return { params, notes };
 }
 
