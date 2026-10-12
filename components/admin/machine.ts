@@ -36,7 +36,7 @@ export const MACHINE: Node[] = [
       "Ranked by money door to door (tickets plus ground) plus hours at the trip style's rate (0 at Cheapest); the chips filter after, instantly.",
     ],
     file: "lib/search.ts",
-    uses: ["flightgraph", "pairs", "routefinder", "walk", "wildwalk", "scan", "longstay", "group"],
+    uses: ["answers", "flightgraph", "pairs", "routefinder", "walk", "wildwalk", "scan", "longstay", "group"],
   },
   {
     id: "trippage",
@@ -165,6 +165,7 @@ export const MACHINE: Node[] = [
 
   // ---------------- the data ----------------
   { id: "nightly", kind: "data", name: "Nightly flight graph", line: "164 airports × 14 three-day buckets, the 15 cheapest each: about 19,000 flights, six weeks ahead", file: "scripts/ingest/flight-edges.ts → Blob graph/flights/" },
+  { id: "answers", kind: "data", name: "Shared answers", line: "An hour, for every visitor and server: the same search, walk or way home is read back, not run again", file: "lib/shared-cache.ts (Postgres answers)" },
   { id: "memory", kind: "data", name: "Fare memory", line: "Every live search writes its fares to Postgres; engines read the last day first", file: "lib/db.ts (fares)" },
   { id: "kiwi", kind: "data", name: "Kiwi live search", line: "One search: from, to (anywhere, a country, a list of airports), a date range; 15 itineraries back", file: "lib/kiwi.ts (6 at a time, 24 h memo, 1,500 a day)" },
   { id: "ground", kind: "data", name: "Ground graph", line: "23,000 stations from public timetables (GTFS); Dijkstra on minutes", algo: "Dijkstra", file: "lib/ground.ts" },

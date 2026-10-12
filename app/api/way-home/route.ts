@@ -1,5 +1,6 @@
 import { TtlLru } from "@/lib/memo";
 import { newRun, saveRun, small, step, withRun } from "@/lib/run-log";
+import { sharedGet, sharedPut } from "@/lib/shared-cache";
 import { bad, iataList, iso2, isoDay, latLon, today } from "@/lib/params";
 import { homeCountryOf, wayHome, WayHomeInputError, WAY_HOME_MAX_DAYS, type WayHomeResult } from "@/lib/way-home";
 
@@ -72,14 +73,21 @@ export async function GET(request: Request) {
   }
 
   const key = JSON.stringify([from.toLowerCase(), codeRaw, cc, fromDate, toDate, direct, homeCountry, origin.lat.toFixed(3), origin.lon.toFixed(3), gateways]);
-  const hit = memo.get(key);
-  if (hit) return Response.json(withNotes(hit, notes), { headers: { "Cache-Control": "private, max-age=300", "X-Way-Home": "memo" } });
+  // This instance's memo, else the shared cache (any visitor, any instance, half an hour: way-home prices move).
+  const hit = memo.get(key) ?? (await sharedGet<WayHomeResult>("way-home", key, 30 * 60_000))?.value;
+  if (hit && Array.isArray(hit.days)) {
+    memo.set(key, hit);
+    return Response.json(withNotes(hit, notes), { headers: { "Cache-Control": "private, max-age=300", "X-Way-Home": "memo" } });
+  }
   // The run log (the engine room's Live tab): the question and a short form of the calendar it answered.
   const rec = newRun(request, { kind: "way-home", source: "Trip page", title: `Ways home from ${from || codeRaw}, ${fromDate} to ${toDate}${direct ? ", direct" : ""}`, input: { from: from || codeRaw, code: codeRaw, cc, fromDate, toDate, direct, home: homeCountry, gateways } });
   const t0 = Date.now();
   try {
     const r = await withRun(rec, () => wayHome({ from: from || codeRaw, ...(codeRaw ? { code: codeRaw } : {}), ...(cc ? { country: cc } : {}), fromDate, toDate, direct, home: homeCountry, origin, gateways }));
-    if (!r.failed && !r.refused) memo.set(key, r);
+    if (!r.failed && !r.refused) {
+      memo.set(key, r);
+      void sharedPut("way-home", key, r);
+    }
     if (rec) {
       step("engine", `Ways home: ${r.days.filter((d) => d.cheapest || d.direct).length} days with a flight, ${r.searched} live searches${r.failed ? `, ${r.failed} failed` : ""}`, { ms: Date.now() - t0, ...(r.refused ? { error: "live prices rate-limited" } : {}), data: small(r) }, rec);
       await saveRun(rec);

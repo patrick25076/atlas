@@ -127,9 +127,47 @@ async function createTables(db: NonNullable<ReturnType<typeof client>>): Promise
       ms int, errors int not null default 0, body jsonb not null
     )`;
     await db`create index if not exists runs_at_idx on runs (at desc)`;
+    // Answers shared across server instances and visitors (lib/shared-cache.ts): a search, a walk or a way home
+    // asked again within the hour is answered from here instead of running again.
+    await db`create table if not exists answers (
+      key text primary key, kind text not null, at timestamptz not null default now(), body jsonb not null
+    )`;
     return true;
   } catch (err) {
     console.log(`db: schema ${err instanceof Error ? err.message.slice(0, 200) : err}`);
+    return false;
+  }
+}
+
+// ---------------------------------------------------------------------------------------
+// Shared answers (lib/shared-cache.ts).
+
+/** A kept answer no older than maxAgeMs, or null. Never throws. */
+export async function getAnswer(key: string, maxAgeMs: number): Promise<{ at: string; body: unknown } | null> {
+  const db = client();
+  if (!db || !(await ensureSchema())) return null;
+  try {
+    const rows = await db<{ at: Date; body: unknown }[]>`select at, body from answers where key = ${key} and at > now() - (${Math.round(maxAgeMs / 1000)} || ' seconds')::interval`;
+    const x = rows[0];
+    if (!x) return null;
+    return { at: new Date(x.at).toISOString(), body: typeof x.body === "string" ? JSON.parse(x.body) : x.body };
+  } catch (err) {
+    console.log(`db: answer ${err instanceof Error ? err.message.slice(0, 160) : err}`);
+    return null;
+  }
+}
+
+/** Keeps an answer (its JSON already made), replacing an older one; now and then drops answers past a day. */
+export async function putAnswer(key: string, kind: string, json: string): Promise<boolean> {
+  const db = client();
+  if (!db || !(await ensureSchema())) return false;
+  try {
+    await db`insert into answers (key, kind, at, body) values (${key}, ${kind}, now(), ${json}::text::jsonb)
+      on conflict (key) do update set at = now(), body = excluded.body, kind = excluded.kind`;
+    if (Math.random() < 0.02) await db`delete from answers where at < now() - interval '1 day'`;
+    return true;
+  } catch (err) {
+    console.log(`db: answer ${err instanceof Error ? err.message.slice(0, 160) : err}`);
     return false;
   }
 }

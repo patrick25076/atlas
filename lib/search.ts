@@ -36,6 +36,7 @@ import { countryAllowed } from "./been";
 import { countryLabel, resolveGateway } from "./board";
 import { cheapestTripsIn, everywhereIn, homeAirportsFor, loadFlightGraph, type FlightGraph, type TripsQuery } from "./flight-graph";
 import { step } from "./run-log";
+import { SHARED_TTL_MS, sharedGet, sharedPut } from "./shared-cache";
 import { findDeals, isCityTarget, REGION_COUNTRIES, regionCountries } from "./finder";
 import { countryGroup, walkTrips, type WalkParams } from "./graph-walk";
 import { groupTrip, GroupInputError } from "./group";
@@ -83,7 +84,8 @@ export const MAX_BUDGET = 60;
 export const MAX_RESULTS = 60;
 /** Results kept in the memo before the filters, so changing a chip still has enough to show. */
 const POOL_MAX = 200;
-const MEMO_TTL_MS = 30 * 60_000;
+/** An answer stands an hour, here and in the shared cache: the same search within the hour never runs twice. */
+const MEMO_TTL_MS = SHARED_TTL_MS;
 /** The nights asked for when the query does not say (the search bar's default). */
 const DEFAULT_NIGHTS: [number, number] = [3, 7];
 /** The widest window the flight graph is asked about at once (its route refuses more: CPU on a serverless instance). */
@@ -537,6 +539,19 @@ export async function runSearch(q: SearchQuery, emit: (line: SearchLine) => void
       if (shown.length) emit({ results: shown });
     } else emit(line);
   };
+  // Not on this instance: the shared cache (another instance, another visitor, within the hour), unless the same
+  // search is running here right now (then it is joined below).
+  if (!runs.has(key)) {
+    const shared = await sharedGet<Answer>("search", key);
+    if (shared && Array.isArray(shared.value?.pool)) {
+      memo.set(key, shared.value);
+      step("memo", `Answered from the shared cache: the same search ran ${Math.max(1, Math.round(shared.ageMs / 60_000))} min ago (any visitor, any server); no engine ran`);
+      if (shared.value.graph) emit({ graph: true });
+      const shown = rank(applyFilters(shared.value.pool, q.filters, been), plan.rate).slice(0, MAX_RESULTS);
+      if (shown.length) emit({ results: shown });
+      return finishFrom(shared.value);
+    }
+  }
   let run = runs.get(key);
   if (run) {
     step("shared", "The same search was already running for someone else: joined it");
@@ -707,7 +722,10 @@ async function execute(p: Plan, emit: (line: SearchLine) => void, nobodyLeft: ()
   if (!shownCount && !notes.length) notes.push("nothing fits this search; try a wider window, more nights or another place");
   const done: SearchDone = { count: Math.min(MAX_RESULTS, shownCount), searched: spent(), engines: [...new Set(engines)], ...(notes.length ? { note: notes.join("; ") } : {}) };
   const answer: Answer = { pool: all.slice(0, POOL_MAX), done, graph: graphAnswered };
-  if (!refused && !failed && !abandoned) memo.set(memoKey(p.q), answer);
+  if (!refused && !failed && !abandoned) {
+    memo.set(memoKey(p.q), answer);
+    void sharedPut("search", memoKey(p.q), answer);
+  }
   say(`Done in ${Math.round((Date.now() - t0) / 1000)} s`);
   return answer;
 }

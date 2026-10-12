@@ -3,6 +3,7 @@ import { logSearch } from "@/lib/db";
 import { walkTrips, wantsUnique, type WalkEvent, type WalkResult } from "@/lib/graph-walk";
 import { InFlight, keepAlive, TtlLru } from "@/lib/memo";
 import { newRun, saveRun, withRun } from "@/lib/run-log";
+import { SHARED_TTL_MS, sharedGet, sharedPut } from "@/lib/shared-cache";
 import { bad, iataList, intIn, iso2, isoDay, latLon, oneOf } from "@/lib/params";
 import { parseCities, parseCountries, parseNightsRange, REGIONS } from "@/lib/wild";
 
@@ -33,7 +34,7 @@ import { parseCities, parseCountries, parseNightsRange, REGIONS } from "@/lib/wi
 // a fresh try.
 export const maxDuration = 120;
 
-const MEMO_TTL_MS = 60 * 60_000;
+const MEMO_TTL_MS = SHARED_TTL_MS;
 const MAX_BUDGET = 40;
 const MAX_DAYS_OUT = 366;
 const TRADEOFFS = ["price", "balanced", "comfort"] as const;
@@ -118,8 +119,9 @@ export async function GET(request: Request) {
       };
       const t0 = Date.now();
       try {
-        const hit = memo.get(key);
-        if (hit) {
+        const hit = memo.get(key) ?? (await sharedGet<WalkResult>("walk", key))?.value;
+        if (hit && Array.isArray(hit.loops)) {
+          memo.set(key, hit);
           say({ done: hit });
           return;
         }
@@ -140,7 +142,10 @@ export async function GET(request: Request) {
         if (mine) await saveRun(rec);
         // A walk the breaker refused, or that lost as many searches as it made, is a weak answer and must not stand
         // for an hour: the next ask gets a fresh try (and the fare memory keeps what this one did find).
-        if (mine && !result.partial && !(result.failed > 0 && result.failed >= result.searched)) memo.set(key, result);
+        if (mine && !result.partial && !(result.failed > 0 && result.failed >= result.searched)) {
+          memo.set(key, result);
+          void sharedPut("walk", key, result);
+        }
         // The usage log, never awaited and never personal: codes and numbers, no label or coordinates.
         if (mine) void logSearch("walk", { g: gateways, home, from, to, minNights, maxNights, nps: nightsPerStop ?? [2, 2], maxStops, beam, budget, ground: maxGroundMin, tradeoff, excluded: exclude.length, must: must.codes.length, avoid: avoid.length, countries: countries.codes.length, region: region || undefined, unique: wantsUnique(style), searched: result.searched, failed: result.failed, fromMemory: result.fromMemory, expanded: result.expanded, loops: result.loops.length }, result.loops.length, Date.now() - t0).catch(() => null);
         say({ done: result });
