@@ -458,11 +458,12 @@ function graphLegToTrip(l: GraphLeg, origin: string): TripLeg {
     ...(l.depart ? { depart: l.depart } : {}),
     minutes: l.minutes,
     price: l.price,
-    ...(l.estimated || l.kind !== "fly" ? { estimated: true } : {}),
+    // A bus, train or ferry at a typical fare is a ticket you buy (counted with the tickets), not a ground estimate.
+    ...(l.source !== "overland" && (l.estimated || l.kind !== "fly") ? { estimated: true } : {}),
     ...(l.carrier ? { carrier: l.carrier } : {}),
     ...(l.stops != null ? { stops: l.stops } : {}),
     ...(l.url ? { url: l.url } : {}),
-    note: l.source === "tp" ? `a recent Aviasales fare${l.offDay ? " a day from this one" : ""}${l.seen ? `, seen ${l.seen.slice(0, 10)}` : ""}; an estimate, not checked live` : l.source === "graph" ? `price from the nightly graph${l.seen ? `, seen ${l.seen.slice(0, 10)}` : ""}; confirm before booking` : l.source === "memory" ? `a fare seen${l.seen ? ` ${l.seen.slice(0, 10)}` : " in the last three days"}; confirm before booking` : l.kind === "ground" ? "to or from the airport; fare estimated" : `${l.kind}, fare estimated from the distance`,
+    note: l.source === "overland" ? `${l.carrier ? `${l.carrier}, ` : ""}${l.kind} at a typical fare; check and book before you go` : l.source === "tp" ? `a recent Aviasales fare${l.offDay ? " a day from this one" : ""}${l.seen ? `, seen ${l.seen.slice(0, 10)}` : ""}; an estimate, not checked live` : l.source === "graph" ? `price from the nightly graph${l.seen ? `, seen ${l.seen.slice(0, 10)}` : ""}; confirm before booking` : l.source === "memory" ? `a fare seen${l.seen ? ` ${l.seen.slice(0, 10)}` : " in the last three days"}; confirm before booking` : l.kind === "ground" ? "to or from the airport or station; fare estimated" : `${l.kind}, fare estimated from the distance`,
   };
 }
 function oldestSeen(legs: GraphLeg[]): string | undefined {
@@ -476,7 +477,7 @@ export function tripFromGraphTrip(t: GraphTrip, opts: ConvertOpts & { origin?: s
   const legs = t.legs.map((l) => graphLegToTrip(l, origin));
   const stops: TripStop[] = t.stops.map((s) => ({ name: s.name, code: s.code, country: s.country, lat: s.lat, lon: s.lon, arrive: s.arrive, leave: s.leave, nights: s.nights }));
   const flights = t.legs.filter((l) => l.kind === "fly");
-  const source: TripResult["source"] = flights.some((l) => l.source === "tp") ? "estimate" : flights.length && flights.every((l) => l.source === "memory") ? "memory" : "graph";
+  const source: TripResult["source"] = t.legs.some((l) => l.source === "tp" || l.source === "overland") ? "estimate" : flights.length && flights.every((l) => l.source === "memory") ? "memory" : "graph";
   return finish({
     title: t.stops.map((s) => s.name).join(", "),
     stops,
@@ -511,7 +512,7 @@ export function tripFromEverywhereCity(c: EverywhereCity, opts: ConvertOpts & { 
     back,
     nights: stops[0].nights,
     why: [back ? `there and back${(c.back ?? []).some((l) => l.kind !== "fly" && l.from !== HOME_CODE && l.to !== HOME_CODE) ? ", home from a neighbour by land" : ""}` : "one way", "prices from the nightly graph and the fare memory; confirm before booking"],
-    source: opts.source ?? ([...c.out, ...(c.back ?? [])].filter((l) => l.kind === "fly").every((l) => l.source === "memory") ? "memory" : "graph"),
+    source: opts.source ?? ([...c.out, ...(c.back ?? [])].some((l) => l.source === "tp" || l.source === "overland") ? "estimate" : [...c.out, ...(c.back ?? [])].filter((l) => l.kind === "fly").every((l) => l.source === "memory") ? "memory" : "graph"),
     engine: opts.engine ?? "everywhere",
     seen: opts.seen ?? oldestSeen([...c.out, ...(c.back ?? [])]),
     raw: c,

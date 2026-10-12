@@ -24,6 +24,13 @@ dates finds nothing at budget 0 (the map holds no fare on those days, the live e
 still chains small Malaysian and Thai towns (taste, waiting for the owner's own method); overland links (the curated
 list) are being researched.
 
+**Overland, later the same day:** public/data/overland.json, 90 links researched with sources (55 Southeast Asia, 18
+Balkans, 17 Turkey, Caucasus, Central Asia and Morocco; 67 high and 23 medium confidence; closed crossings such as
+Thailand to Cambodia left out), laid into the price map every day at the middle of their fare range (lib/overland.ts),
+towns without an airport as places of their own, and into the graph walk. A bus or train leaves from the city centre,
+not an airport, and its fare counts as a ticket. Benchmark: Hanoi to Vientiane 38 euro door to door by the sleeper
+bus (157 before); both brains found the best in 8 of 8, the one brain in 0.1 s a question against 2.6 s.
+
 ## What was measured (12 October)
 
 | The price graph today | |

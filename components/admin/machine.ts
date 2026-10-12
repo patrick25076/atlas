@@ -86,7 +86,7 @@ export const MACHINE: Node[] = [
     cost: "euros + hours × rate (0 at Cheapest) + 12 euro per change of plane",
     spends: "0",
     file: "lib/flight-graph.ts (cheapestTripsIn, relaxedHome, everywhereIn)",
-    uses: ["nightly", "tp", "memory", "ground"],
+    uses: ["nightly", "tp", "memory", "overland", "ground"],
   },
   {
     id: "verify",
@@ -182,6 +182,7 @@ export const MACHINE: Node[] = [
 
   // ---------------- the data ----------------
   { id: "tp", kind: "data", name: "Travelpayouts cache", line: "Recent Aviasales fares from about 250 cities, every place and every day, three months ahead: about 55,000 fares a night, estimates until checked live", file: "scripts/ingest/tp-edges.ts → Blob graph/tp/" },
+  { id: "overland", kind: "data", name: "Overland links", line: "90 sourced buses, trains and ferries where no timetable is public (Hanoi to Vientiane sleeper bus, the Laos-China railway, Kotor to Dubrovnik), every day at a typical fare; towns like Ninh Binh and Hoi An become places to stop", file: "public/data/overland.json, lib/overland.ts" },
   { id: "nightly", kind: "data", name: "Nightly flight graph", line: "164 airports × 14 three-day buckets, the 15 cheapest each: about 19,000 flights, six weeks ahead", file: "scripts/ingest/flight-edges.ts → Blob graph/flights/" },
   { id: "answers", kind: "data", name: "Shared answers", line: "An hour, for every visitor and server: the same search, walk or way home is read back, not run again", file: "lib/shared-cache.ts (Postgres answers)" },
   { id: "memory", kind: "data", name: "Fare memory", line: "Every live search writes its fares to Postgres; engines read the last day first", file: "lib/db.ts (fares)" },

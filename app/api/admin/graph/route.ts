@@ -60,6 +60,7 @@ export async function GET(request: Request) {
       fromGraph: g.fromGraph,
       fromMemory: g.fromMemory,
       fromTp: g.fromTp,
+      fromOverland: g.fromOverland,
       thin: !!g.thin,
       days: Number.isFinite(lo) ? { from: dayIso(lo), to: dayIso(hi) } : null,
       perDay: [...perDay.entries()].sort((a, b) => a[0].localeCompare(b[0])).map(([d, n]) => ({ date: d, edges: n })),

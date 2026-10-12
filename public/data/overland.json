@@ -1,0 +1,2796 @@
+{
+  "generated": "2026-10-12",
+  "currencyNote": "prices in EUR, converted at rough 2026 rates: 1 EUR = 1.16 USD, 30500 VND, 25000 LAK, 4700 KHR, 38 THB, 4.9 MYR, 1.5 SGD, 19000 IDR, 8.3 CNY, 97 ALL, 61.5 MKD, 1.956 BAM, 117 RSD, 48 TRY, 3.15 GEL, 450 AMD, 14500 UZS, 600 KZT, 101 KGS, 10.7 MAD; Croatia, Montenegro and Kosovo use EUR",
+  "links": [
+    {
+      "from": {
+        "name": "Hanoi",
+        "code": "HAN",
+        "country": "VN",
+        "lat": 21.028,
+        "lon": 105.854
+      },
+      "to": {
+        "name": "Vientiane",
+        "code": "VTE",
+        "country": "LA",
+        "lat": 17.975,
+        "lon": 102.633
+      },
+      "mode": "coach",
+      "minutes": 1380,
+      "priceEur": [
+        26,
+        47
+      ],
+      "both": true,
+      "operator": "sleeper buses (HTX Van Tai 27-7, Huyen Chau, Grouptour and others)",
+      "book": "https://12go.asia/en/travel/hanoi/vientiane",
+      "note": "Overnight sleeper from Nuoc Ngam, border at Cau Treo / Nam Phao, arrives next afternoon at Vientiane Southern Bus Station, 11 km out. Carry USD for the visa.",
+      "sources": [
+        "https://www.rome2rio.com/s/Hanoi/Vientiane",
+        "https://north-vietnam.com/how-to-get-from-hanoi-to-vientiane-laos/",
+        "https://junglebosstours.com/explorer/tourism-blog/hanoi-to-laos-bus"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Hanoi",
+        "code": "HAN",
+        "country": "VN",
+        "lat": 21.028,
+        "lon": 105.854
+      },
+      "to": {
+        "name": "Luang Prabang",
+        "code": "LPQ",
+        "country": "LA",
+        "lat": 19.886,
+        "lon": 102.135
+      },
+      "mode": "coach",
+      "minutes": 1500,
+      "priceEur": [
+        34,
+        60
+      ],
+      "both": true,
+      "operator": "sleeper buses (HTX Van Tai 27-7 and others)",
+      "book": "https://12go.asia/en/travel/hanoi/luang-prabang",
+      "note": "Once-daily sleeper, 24 to 29 h on mountain roads and often late. Border Nam Can or Tay Trang by operator; some tickets are bus plus van combos via Dien Bien Phu.",
+      "sources": [
+        "https://www.rome2rio.com/s/Hanoi/Luang-Prabang",
+        "https://north-vietnam.com/?p=11680",
+        "https://junglebosstours.com/explorer/tourism-blog/hanoi-to-laos-bus"
+      ],
+      "confidence": "medium"
+    },
+    {
+      "from": {
+        "name": "Hanoi",
+        "code": "HAN",
+        "country": "VN",
+        "lat": 21.028,
+        "lon": 105.854
+      },
+      "to": {
+        "name": "Ninh Binh",
+        "code": null,
+        "country": "VN",
+        "lat": 20.251,
+        "lon": 105.975
+      },
+      "mode": "van",
+      "minutes": 120,
+      "priceEur": [
+        6,
+        9
+      ],
+      "both": true,
+      "operator": "limousine vans (Binh Minh Limousine and others)",
+      "book": "https://12go.asia/en/travel/hanoi/ninh-binh",
+      "note": "Limousine vans with Old Quarter pickup, roughly hourly. Traffic can add 30 to 45 min. The train (about 2 h, from about 114,000 VND) is cheaper.",
+      "sources": [
+        "https://www.rome2rio.com/s/Hanoi/Ninh-Binh",
+        "https://www.vietnamtourism.com/en/sleeper-bus-to-hanoi-prices-and-travel-times-from-sapa-ha-giang-ninh-binh-hue-and-cat-ba"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Hanoi",
+        "code": "HAN",
+        "country": "VN",
+        "lat": 21.028,
+        "lon": 105.854
+      },
+      "to": {
+        "name": "Sapa",
+        "code": null,
+        "country": "VN",
+        "lat": 22.336,
+        "lon": 103.844
+      },
+      "mode": "coach",
+      "minutes": 360,
+      "priceEur": [
+        9,
+        15
+      ],
+      "both": true,
+      "operator": "sleeper and cabin buses (Sao Viet, Inter Bus Lines and others)",
+      "book": "https://12go.asia/en/travel/hanoi/sapa",
+      "note": "Day and night sleeper or cabin buses on the expressway, many with Old Quarter pickup. The overnight train only reaches Lao Cai, 35 km below Sapa.",
+      "sources": [
+        "https://www.rome2rio.com/s/Hanoi/Sapa",
+        "https://www.vietnamtourism.com/en/hanoi-to-sapa-in-2026-trains-buses-costs-compared"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Hanoi",
+        "code": "HAN",
+        "country": "VN",
+        "lat": 21.028,
+        "lon": 105.854
+      },
+      "to": {
+        "name": "Ha Long",
+        "code": null,
+        "country": "VN",
+        "lat": 20.951,
+        "lon": 107.08
+      },
+      "mode": "van",
+      "minutes": 150,
+      "priceEur": [
+        9,
+        14
+      ],
+      "both": true,
+      "operator": "limousine vans and buses (Trung Thanh Limousine, Arcady Limousine, Duc Duong and others)",
+      "book": "https://12go.asia/en/travel/hanoi/ha-long",
+      "note": "Hourly limousine vans and buses, usually with hotel pickup. Drop-offs at Bai Chay, Tuan Chau or the cruise port, so check which pier your boat uses.",
+      "sources": [
+        "https://www.baolau.com/en/s/ha-long/hanoi/",
+        "https://www.vietnamtourism.com/en/getting-to-ha-long-bay-from-hanoi-by-bus-car-and-high-speed-boat"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Hanoi",
+        "code": "HAN",
+        "country": "VN",
+        "lat": 21.028,
+        "lon": 105.854
+      },
+      "to": {
+        "name": "Hue",
+        "code": "HUI",
+        "country": "VN",
+        "lat": 16.463,
+        "lon": 107.59
+      },
+      "mode": "train",
+      "minutes": 765,
+      "priceEur": [
+        37,
+        40
+      ],
+      "both": true,
+      "operator": "Vietnam Railways (Reunification Express)",
+      "book": "https://dsvn.vn",
+      "note": "Overnight SE1, SE3 or SE19 from Hanoi station. Price is a 4-berth soft sleeper; soft seat about 19 EUR. Sleeper buses cost 350,000 to 500,000 VND.",
+      "sources": [
+        "https://www.seat61.com/Vietnam.htm",
+        "https://www.vietnamtourism.com/en/sleeper-bus-to-hanoi-prices-and-travel-times-from-sapa-ha-giang-ninh-binh-hue-and-cat-ba"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Hanoi",
+        "code": "HAN",
+        "country": "VN",
+        "lat": 21.028,
+        "lon": 105.854
+      },
+      "to": {
+        "name": "Dong Hoi",
+        "code": "VDH",
+        "country": "VN",
+        "lat": 17.468,
+        "lon": 106.623
+      },
+      "mode": "train",
+      "minutes": 600,
+      "priceEur": [
+        26,
+        38
+      ],
+      "both": true,
+      "operator": "Vietnam Railways (Reunification Express)",
+      "book": "https://dsvn.vn",
+      "note": "Overnight SE trains arriving early morning; price is a soft sleeper berth. For Phong Nha, local bus from Dong Hoi (1 to 1.5 h) or a direct sleeper bus from Hanoi.",
+      "sources": [
+        "https://www.seat61.com/Vietnam.htm",
+        "https://www.geckoroutes.com/vietnam/hanoi-to-phong-nha/",
+        "https://www.rome2rio.com/s/Hanoi/Dong-Hoi"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Hue",
+        "code": "HUI",
+        "country": "VN",
+        "lat": 16.463,
+        "lon": 107.59
+      },
+      "to": {
+        "name": "Hoi An",
+        "code": null,
+        "country": "VN",
+        "lat": 15.88,
+        "lon": 108.335
+      },
+      "mode": "coach",
+      "minutes": 195,
+      "priceEur": [
+        6,
+        11
+      ],
+      "both": true,
+      "operator": "The Sinh Tourist, limousine buses (Travel Bus and others)",
+      "book": "https://12go.asia/en/travel/hue/hoi-an",
+      "note": "Daytime tourist and limousine buses between the town centres, several a day. Sinh Tourist about 199,000 VND. No sightseeing stop on the Hai Van pass.",
+      "sources": [
+        "https://goodmorning-hoian.com/en/hue-to-hoi-an/",
+        "https://www.rome2rio.com/s/Hue/Hoi-An"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Hue",
+        "code": "HUI",
+        "country": "VN",
+        "lat": 16.463,
+        "lon": 107.59
+      },
+      "to": {
+        "name": "Da Nang",
+        "code": "DAD",
+        "country": "VN",
+        "lat": 16.054,
+        "lon": 108.202
+      },
+      "mode": "train",
+      "minutes": 155,
+      "priceEur": [
+        3.5,
+        9
+      ],
+      "both": true,
+      "operator": "Vietnam Railways (Reunification Express)",
+      "book": "https://dsvn.vn",
+      "note": "The scenic coastal line over the Hai Van pass, several trains a day. Soft seat about 106,000 VND, sleeper berths 227,000 to 265,000 VND.",
+      "sources": [
+        "https://www.seat61.com/Vietnam.htm",
+        "https://www.rome2rio.com/s/Hue/Hoi-An"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Da Nang",
+        "code": "DAD",
+        "country": "VN",
+        "lat": 16.054,
+        "lon": 108.202
+      },
+      "to": {
+        "name": "Hoi An",
+        "code": null,
+        "country": "VN",
+        "lat": 15.88,
+        "lon": 108.335
+      },
+      "mode": "van",
+      "minutes": 60,
+      "priceEur": [
+        3.9,
+        8
+      ],
+      "both": true,
+      "operator": "shared shuttle vans (Barri Ann and others)",
+      "book": "https://12go.asia/en/travel/da-nang/hoi-an",
+      "note": "Shared shuttles roughly hourly, including from Da Nang airport (top of the range). Local bus LK02 costs about 35,000 VND but does not serve the airport.",
+      "sources": [
+        "https://localvietnam.com/?p=134679",
+        "https://www.rome2rio.com/s/Da-Nang/Hoi-An",
+        "https://www.geckoroutes.com/vietnam/da-nang-to-hoi-an/"
+      ],
+      "confidence": "medium"
+    },
+    {
+      "from": {
+        "name": "Da Nang",
+        "code": "DAD",
+        "country": "VN",
+        "lat": 16.054,
+        "lon": 108.202
+      },
+      "to": {
+        "name": "Nha Trang",
+        "code": "NHA",
+        "country": "VN",
+        "lat": 12.239,
+        "lon": 109.197
+      },
+      "mode": "train",
+      "minutes": 590,
+      "priceEur": [
+        14,
+        28
+      ],
+      "both": true,
+      "operator": "Vietnam Railways (Reunification Express)",
+      "book": "https://dsvn.vn",
+      "note": "Daytime SE1 or SE3, arriving in the evening. Soft seat about 424,000 VND, soft sleeper about 800,000 VND. From Hoi An, go to Da Nang station first.",
+      "sources": [
+        "https://www.seat61.com/Vietnam.htm"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Nha Trang",
+        "code": "NHA",
+        "country": "VN",
+        "lat": 12.239,
+        "lon": 109.197
+      },
+      "to": {
+        "name": "Dalat",
+        "code": "DLI",
+        "country": "VN",
+        "lat": 11.94,
+        "lon": 108.458
+      },
+      "mode": "coach",
+      "minutes": 210,
+      "priceEur": [
+        7,
+        13
+      ],
+      "both": true,
+      "operator": "FUTA (Phuong Trang), The Sinh Tourist, limousine vans",
+      "book": "https://12go.asia/en/travel/nha-trang/da-lat",
+      "note": "Frequent daytime buses and 9-seat limousine vans up the mountain road, about 3 to 4 hours. Limousine vans run from about 265,000 VND.",
+      "sources": [
+        "https://geckoroutes.com/vietnam/nha-trang-to-dalat/",
+        "https://www.rome2rio.com/s/Nha-Trang/Da-Lat"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Dalat",
+        "code": "DLI",
+        "country": "VN",
+        "lat": 11.94,
+        "lon": 108.458
+      },
+      "to": {
+        "name": "Ho Chi Minh City",
+        "code": "SGN",
+        "country": "VN",
+        "lat": 10.776,
+        "lon": 106.701
+      },
+      "mode": "coach",
+      "minutes": 420,
+      "priceEur": [
+        9,
+        21
+      ],
+      "both": true,
+      "operator": "FUTA (Phuong Trang), Kumho Samco, Thanh Buoi and others",
+      "book": "https://12go.asia/en/travel/da-lat/ho-chi-minh-city",
+      "note": "Sleeper and cabin buses day and night, FUTA about every 30 min (sleeper about 290,000 VND). Saigon drop-off points vary by company.",
+      "sources": [
+        "https://geckoroutes.com/vietnam/dalat-to-ho-chi-minh/",
+        "https://www.momo.vn/blog/dat-ve-xe-phuong-trang-di-da-lat-c101dt1740",
+        "https://www.rome2rio.com/s/Da-Lat/Ho-Chi-Minh-City"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Nha Trang",
+        "code": "NHA",
+        "country": "VN",
+        "lat": 12.239,
+        "lon": 109.197
+      },
+      "to": {
+        "name": "Ho Chi Minh City",
+        "code": "SGN",
+        "country": "VN",
+        "lat": 10.776,
+        "lon": 106.701
+      },
+      "mode": "train",
+      "minutes": 485,
+      "priceEur": [
+        13,
+        28
+      ],
+      "both": true,
+      "operator": "Vietnam Railways (Reunification Express)",
+      "book": "https://dsvn.vn",
+      "note": "Overnight SE1 or SE3 arrive Saigon station around 05:15 to 05:45, other trains run by day. Soft seat about 404,000 VND, 4-berth soft sleeper 813,000 to 869,000 VND.",
+      "sources": [
+        "https://www.seat61.com/Vietnam.htm",
+        "https://www.rome2rio.com/s/Nha-Trang/Ho-Chi-Minh-City"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Ho Chi Minh City",
+        "code": "SGN",
+        "country": "VN",
+        "lat": 10.776,
+        "lon": 106.701
+      },
+      "to": {
+        "name": "Phnom Penh",
+        "code": "PNH",
+        "country": "KH",
+        "lat": 11.556,
+        "lon": 104.928
+      },
+      "mode": "coach",
+      "minutes": 420,
+      "priceEur": [
+        19,
+        33
+      ],
+      "both": true,
+      "operator": "Giant Ibis, Kumho Samco, Virak Buntham and others",
+      "book": "https://12go.asia/en/travel/ho-chi-minh-city/phnom-penh",
+      "note": "Many daytime departures via Moc Bai / Bavet; everyone gets off at both posts. Bus staff can arrange the Cambodian visa on arrival (about 35 USD cash).",
+      "sources": [
+        "https://geckoroutes.com/vietnam/ho-chi-minh-to-phnom-penh/",
+        "https://www.rome2rio.com/s/Ho-Chi-Minh-City/Phnom-Penh"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Chau Doc",
+        "code": null,
+        "country": "VN",
+        "lat": 10.7,
+        "lon": 105.117
+      },
+      "to": {
+        "name": "Phnom Penh",
+        "code": "PNH",
+        "country": "KH",
+        "lat": 11.556,
+        "lon": 104.928
+      },
+      "mode": "ferry",
+      "minutes": 360,
+      "priceEur": [
+        26,
+        43
+      ],
+      "both": true,
+      "operator": "Hang Chau Tourist (speedboat)",
+      "book": "https://12go.asia/en/travel/chau-doc/phnom-penh",
+      "note": "Hang Chau speedboat, one morning departure a day, about 4 h afloat plus up to 2 h at the Vinh Xuong / Kaam Samnor border. Visa on arrival in USD cash, no e-visa.",
+      "sources": [
+        "https://en.wikivoyage.org/wiki/Chau_Doc",
+        "https://north-vietnam.com/?p=13944"
+      ],
+      "confidence": "medium"
+    },
+    {
+      "from": {
+        "name": "Bangkok",
+        "code": "BKK",
+        "country": "TH",
+        "lat": 13.756,
+        "lon": 100.502
+      },
+      "to": {
+        "name": "Vientiane",
+        "code": "VTE",
+        "country": "LA",
+        "lat": 17.975,
+        "lon": 102.633
+      },
+      "mode": "train",
+      "minutes": 700,
+      "priceEur": [
+        15,
+        23
+      ],
+      "both": true,
+      "operator": "State Railway of Thailand (SRT)",
+      "book": "https://dticket.railway.co.th/",
+      "note": "Overnight train 133, Krung Thep Aphiwat 21:25 to Khamsavath station (7 km from the centre) 09:05. Seat to lower berth. Return train 134 takes about 13 h.",
+      "sources": [
+        "https://www.seat61.com/Laos.htm",
+        "https://www.baolau.com/en/s/Bangkok/Vientiane/"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Vientiane",
+        "code": "VTE",
+        "country": "LA",
+        "lat": 17.975,
+        "lon": 102.633
+      },
+      "to": {
+        "name": "Vang Vieng",
+        "code": null,
+        "country": "LA",
+        "lat": 18.923,
+        "lon": 102.448
+      },
+      "mode": "train",
+      "minutes": 53,
+      "priceEur": [
+        10,
+        12
+      ],
+      "both": true,
+      "operator": "Laos-China Railway (LCR)",
+      "book": "https://www.baolau.com/en/s/Vientiane/Vang-Vieng/",
+      "note": "Several LCR trains a day. Agent fares shown; the LCR app fare is lower. Sales open a few days ahead and trains sell out.",
+      "sources": [
+        "https://www.baolau.com/en/s/vang-vieng/vientiane/",
+        "https://yesmytrips.com/en/train-travel-laos"
+      ],
+      "confidence": "medium"
+    },
+    {
+      "from": {
+        "name": "Vang Vieng",
+        "code": null,
+        "country": "LA",
+        "lat": 18.923,
+        "lon": 102.448
+      },
+      "to": {
+        "name": "Luang Prabang",
+        "code": "LPQ",
+        "country": "LA",
+        "lat": 19.886,
+        "lon": 102.135
+      },
+      "mode": "train",
+      "minutes": 55,
+      "priceEur": [
+        10,
+        12
+      ],
+      "both": true,
+      "operator": "Laos-China Railway (LCR)",
+      "book": "https://www.baolau.com/en/s/Vang-Vieng/Luang-Prabang/",
+      "note": "All Vientiane to Luang Prabang trains stop here. Agent fares for 2nd class; the LCR app is cheaper. Luang Prabang station is outside town.",
+      "sources": [
+        "https://yesmytrips.com/en/train-travel-laos",
+        "https://laostrainticket.com/",
+        "https://www.baolau.com/en/s/Luang-Prabang/Vang-Vieng/"
+      ],
+      "confidence": "medium"
+    },
+    {
+      "from": {
+        "name": "Vientiane",
+        "code": "VTE",
+        "country": "LA",
+        "lat": 17.975,
+        "lon": 102.633
+      },
+      "to": {
+        "name": "Luang Prabang",
+        "code": "LPQ",
+        "country": "LA",
+        "lat": 19.886,
+        "lon": 102.135
+      },
+      "mode": "train",
+      "minutes": 120,
+      "priceEur": [
+        14,
+        18
+      ],
+      "both": true,
+      "operator": "Laos-China Railway (LCR)",
+      "book": "https://www.baolau.com/en/s/Vientiane/Luang-Prabang/",
+      "note": "About six LCR trains a day, 1 h 45 to 2 h 45. Official 2nd class fare 360,000 LAK since April 2026, agents charge more. Sales open about 3 days ahead.",
+      "sources": [
+        "https://www.tourismlaos.org/2026/04/01/laos-china-railway-raises-fares-across-all-routes-starting-1-april/",
+        "https://www.baolau.com/en/s/Vientiane/Luang-Prabang/",
+        "https://backpackmoments.com/vientiane-to-luang-prabang-train/"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Luang Prabang",
+        "code": "LPQ",
+        "country": "LA",
+        "lat": 19.886,
+        "lon": 102.135
+      },
+      "to": {
+        "name": "Kunming",
+        "code": "KMG",
+        "country": "CN",
+        "lat": 25.04,
+        "lon": 102.717
+      },
+      "mode": "train",
+      "minutes": 457,
+      "priceEur": [
+        57,
+        58
+      ],
+      "both": true,
+      "operator": "Laos-China Railway (LCR)",
+      "book": "https://www.baolau.com/en/s/Luang-Prabang/Kunming/",
+      "note": "Two daily D trains to Kunming South; China is 1 h ahead. Border checks at Boten and Mohan. Sold via 12306, the LCR app or agents, and often sells out.",
+      "sources": [
+        "https://yesmytrips.com/en/train-travel-laos",
+        "https://booking.baolau.com/en/s/luang-prabang/kunming",
+        "https://www.seat61.com/Laos.htm"
+      ],
+      "confidence": "medium"
+    },
+    {
+      "from": {
+        "name": "Huay Xai",
+        "code": null,
+        "country": "LA",
+        "lat": 20.276,
+        "lon": 100.413
+      },
+      "to": {
+        "name": "Luang Prabang",
+        "code": "LPQ",
+        "country": "LA",
+        "lat": 19.886,
+        "lon": 102.135
+      },
+      "mode": "ferry",
+      "minutes": 780,
+      "priceEur": [
+        16,
+        19
+      ],
+      "both": false,
+      "operator": "Mekong slow boat (public)",
+      "book": "https://12go.asia/en/travel/huay-xai/luang-prabang",
+      "note": "Two-day slow boat with a night in Pakbeng; minutes is on-board time only. Lands 10 km outside Luang Prabang. Upstream is slower and dearer.",
+      "sources": [
+        "https://explorertom.com/mekong-slow-boat-nach-luang-prabang/",
+        "https://passportandstamps.com/mekong-river-slow-boat"
+      ],
+      "confidence": "medium"
+    },
+    {
+      "from": {
+        "name": "Chiang Rai",
+        "code": "CEI",
+        "country": "TH",
+        "lat": 19.91,
+        "lon": 99.841
+      },
+      "to": {
+        "name": "Huay Xai",
+        "code": null,
+        "country": "LA",
+        "lat": 20.276,
+        "lon": 100.413
+      },
+      "mode": "coach",
+      "minutes": 140,
+      "priceEur": [
+        5,
+        7
+      ],
+      "both": true,
+      "operator": "local buses plus border shuttle",
+      "book": "https://www.rome2rio.com/s/Chiang-Rai/Huay-Xai",
+      "note": "Local bus to Chiang Khong (about 2 h), tuk-tuk to Friendship Bridge IV, shuttle bus across, tuk-tuk into Huay Xai. Lao visa fees extra.",
+      "sources": [
+        "https://travelfeed.com/@geekontheroad/how-to-cross-the-thailand-laos-border-friendship-bridge-iv-in-2026",
+        "https://www.rome2rio.com/s/Chiang-Rai/Huay-Xai"
+      ],
+      "confidence": "medium"
+    },
+    {
+      "from": {
+        "name": "Pakse",
+        "code": "PKZ",
+        "country": "LA",
+        "lat": 15.117,
+        "lon": 105.816
+      },
+      "to": {
+        "name": "Don Det (Si Phan Don)",
+        "code": null,
+        "country": "LA",
+        "lat": 13.973,
+        "lon": 105.922
+      },
+      "mode": "van",
+      "minutes": 180,
+      "priceEur": [
+        6,
+        10
+      ],
+      "both": true,
+      "operator": "minivans and buses (several companies)",
+      "book": "https://www.baolau.com/en/s/Pakse/Don-Det/",
+      "note": "Minivan or bus to Ban Nakasang pier, then a short boat to Don Det, usually included in the ticket (van + boat). Most departures leave Pakse around 08:30 to 09:00.",
+      "sources": [
+        "https://www.baolau.com/en/s/Pakse/Don-Det/",
+        "https://12go.com/en/van/pakse/don-det"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Don Det (Si Phan Don)",
+        "code": null,
+        "country": "LA",
+        "lat": 13.973,
+        "lon": 105.922
+      },
+      "to": {
+        "name": "Siem Reap",
+        "code": "SAI",
+        "country": "KH",
+        "lat": 13.362,
+        "lon": 103.86
+      },
+      "mode": "van",
+      "minutes": 600,
+      "priceEur": [
+        20,
+        28
+      ],
+      "both": true,
+      "operator": "Asia Van Transfer and others",
+      "book": "https://www.baolau.com/en/s/Don-Det/Siem-Reap/",
+      "note": "Boat to Nakasang, then van or bus via the Nong Nok Khiene / Trapeang Kriel border, one main departure around 09:00. Cambodian visa on arrival in clean USD.",
+      "sources": [
+        "https://www.baolau.com/en/s/Don-Det/Siem-Reap/",
+        "https://www.geckoroutes.com/laos/don-det-to-siem-reap/"
+      ],
+      "confidence": "medium"
+    },
+    {
+      "from": {
+        "name": "Phnom Penh",
+        "code": "PNH",
+        "country": "KH",
+        "lat": 11.556,
+        "lon": 104.928
+      },
+      "to": {
+        "name": "Siem Reap",
+        "code": "SAI",
+        "country": "KH",
+        "lat": 13.362,
+        "lon": 103.86
+      },
+      "mode": "coach",
+      "minutes": 360,
+      "priceEur": [
+        11,
+        15
+      ],
+      "both": true,
+      "operator": "Giant Ibis, Virak Buntham, VET, Larryta and others",
+      "book": "https://www.baolau.com/en/s/Phnom-Penh/Siem-Reap/",
+      "note": "Very frequent buses and minivans day and night, 5 h 30 min to 6 h. Night sleeper buses also run.",
+      "sources": [
+        "https://www.baolau.com/en/s/Phnom-Penh/Siem-Reap/",
+        "https://www.baolau.com/en/s/Siem-Reap/Phnom-Penh/"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Phnom Penh",
+        "code": "PNH",
+        "country": "KH",
+        "lat": 11.556,
+        "lon": 104.928
+      },
+      "to": {
+        "name": "Kampot",
+        "code": null,
+        "country": "KH",
+        "lat": 10.61,
+        "lon": 104.181
+      },
+      "mode": "coach",
+      "minutes": 180,
+      "priceEur": [
+        5,
+        9
+      ],
+      "both": true,
+      "operator": "Kim Seng, Virak Buntham, Ekareach, Giant Ibis and others",
+      "book": "https://www.baolau.com/en/s/Phnom-Penh/Kampot/",
+      "note": "Buses and minivans roughly every 30 min. Royal Railway also runs a daily train at 07:00 (about 4 h 15 min, US$10).",
+      "sources": [
+        "https://www.baolau.com/en/s/Phnom-Penh/Kampot/",
+        "https://www.checkmybus.com/phnom-penh/kampot"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Phnom Penh",
+        "code": "PNH",
+        "country": "KH",
+        "lat": 11.556,
+        "lon": 104.928
+      },
+      "to": {
+        "name": "Sihanoukville",
+        "code": "KOS",
+        "country": "KH",
+        "lat": 10.627,
+        "lon": 103.522
+      },
+      "mode": "coach",
+      "minutes": 210,
+      "priceEur": [
+        10,
+        13
+      ],
+      "both": true,
+      "operator": "Virak Buntham, Capitol, VET, Giant Ibis and others",
+      "book": "https://www.baolau.com/en/s/Phnom-Penh/Sihanoukville/",
+      "note": "Frequent buses and minivans on the expressway, 3 h to 4 h 30 min. Royal Railway daily train 07:00 to 13:30 costs US$12.",
+      "sources": [
+        "https://www.checkmybus.com/phnom-penh/sihanoukville",
+        "https://www.baolau.com/en/s/Phnom-Penh/Sihanoukville/"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Sihanoukville",
+        "code": "KOS",
+        "country": "KH",
+        "lat": 10.627,
+        "lon": 103.522
+      },
+      "to": {
+        "name": "Koh Rong (Koh Touch)",
+        "code": null,
+        "country": "KH",
+        "lat": 10.666,
+        "lon": 103.273
+      },
+      "mode": "ferry",
+      "minutes": 45,
+      "priceEur": [
+        10,
+        15
+      ],
+      "both": true,
+      "operator": "Buva Sea, Speed Ferry Cambodia and others",
+      "book": "https://www.baolau.com/en/s/Sihanoukville/Koh-Rong/",
+      "note": "Speedboats from Sihanoukville Autonomous Port to Koh Touch pier, several a day; some also call at Long Set beach. No night sailings.",
+      "sources": [
+        "https://www.baolau.com/en/s/Sihanoukville/Koh-Rong/",
+        "https://www.ferryscanner.com/en/ferry-routes/ferry-sihanoukville-all-ports-koh-rong-all-ports"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Battambang",
+        "code": null,
+        "country": "KH",
+        "lat": 13.095,
+        "lon": 103.202
+      },
+      "to": {
+        "name": "Siem Reap",
+        "code": "SAI",
+        "country": "KH",
+        "lat": 13.362,
+        "lon": 103.86
+      },
+      "mode": "coach",
+      "minutes": 180,
+      "priceEur": [
+        7,
+        9
+      ],
+      "both": true,
+      "operator": "Capitol, Virak Buntham, Larryta, VET and others",
+      "book": "https://www.checkmybus.com/battambang/siem-reap",
+      "note": "Several morning and afternoon buses and minivans, 2 h 30 min to 4 h. Battambang departures may leave from a station outside town.",
+      "sources": [
+        "https://www.checkmybus.com/battambang/siem-reap",
+        "https://www.rome2rio.com/s/Battambang/Siem-Reap"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Bangkok",
+        "code": "BKK",
+        "country": "TH",
+        "lat": 13.756,
+        "lon": 100.502
+      },
+      "to": {
+        "name": "Chiang Mai",
+        "code": "CNX",
+        "country": "TH",
+        "lat": 18.788,
+        "lon": 98.985
+      },
+      "mode": "train",
+      "minutes": 760,
+      "priceEur": [
+        18,
+        27
+      ],
+      "both": true,
+      "operator": "State Railway of Thailand (SRT)",
+      "book": "https://12go.asia/en/travel/bangkok/chiang-mai",
+      "note": "Overnight sleepers 9, 13, 51 and 109 from Krung Thep Aphiwat, 2nd class a/c berths 688 to 1,041 THB. VIP buses from Mo Chit take 9 to 11 h.",
+      "sources": [
+        "https://www.train36.com/bangkok-to-chiang-mai-train.html",
+        "https://www.visitthailandtoday.com/guides/bangkok-to-chiang-mai",
+        "https://www.seat61.com/Thailand.htm"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Chiang Mai",
+        "code": "CNX",
+        "country": "TH",
+        "lat": 18.788,
+        "lon": 98.985
+      },
+      "to": {
+        "name": "Pai",
+        "code": null,
+        "country": "TH",
+        "lat": 19.359,
+        "lon": 98.441
+      },
+      "mode": "van",
+      "minutes": 225,
+      "priceEur": [
+        4,
+        9
+      ],
+      "both": true,
+      "operator": "Prempracha Transport, Aya Service",
+      "book": "https://premprachatransports.com/routes/chiang-mai-pai/",
+      "note": "Hourly Prempracha vans 06:30 to 17:30 from Arcade terminal, cheaper at the counter than online. Aya picks up at hotels. Very winding road.",
+      "sources": [
+        "https://www.visitthailandtoday.com/guides/chiang-mai-to-pai",
+        "https://geckoroutes.com/thailand/chiang-mai-to-pai/"
+      ],
+      "confidence": "medium"
+    },
+    {
+      "from": {
+        "name": "Bangkok",
+        "code": "BKK",
+        "country": "TH",
+        "lat": 13.756,
+        "lon": 100.502
+      },
+      "to": {
+        "name": "Surat Thani",
+        "code": "URT",
+        "country": "TH",
+        "lat": 9.139,
+        "lon": 99.333
+      },
+      "mode": "train",
+      "minutes": 630,
+      "priceEur": [
+        18,
+        26
+      ],
+      "both": true,
+      "operator": "State Railway of Thailand (SRT)",
+      "book": "https://12go.asia/en/travel/bangkok/surat-thani",
+      "note": "Overnight sleepers such as No. 85 (19:50 to 06:23) to Phun Phin station, 14 km from Surat Thani town. Lower berths sell out in Dec to Feb.",
+      "sources": [
+        "https://www.visitthailandtoday.com/guides/bangkok-to-koh-samui",
+        "https://www.train36.com/train-from-bangkok-to-surat-thani.html",
+        "https://www.seat61.com/Thailand.htm"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Bangkok",
+        "code": "BKK",
+        "country": "TH",
+        "lat": 13.756,
+        "lon": 100.502
+      },
+      "to": {
+        "name": "Koh Tao",
+        "code": null,
+        "country": "TH",
+        "lat": 10.092,
+        "lon": 99.838
+      },
+      "mode": "coach",
+      "minutes": 645,
+      "priceEur": [
+        22,
+        33
+      ],
+      "both": true,
+      "operator": "Lomprayah",
+      "book": "https://www.lomprayah.com/",
+      "note": "Bus + boat joint ticket: night bus from Khao San to Chumphon, then catamaran or slower ferry to Mae Haad. A day bus also runs. 20 THB island entry fee.",
+      "sources": [
+        "https://www.ticket2attraction.com/thailand-ferry/lomprayah/",
+        "https://www.visitthailandtoday.com/guides/bangkok-to-koh-tao"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Surat Thani",
+        "code": "URT",
+        "country": "TH",
+        "lat": 9.139,
+        "lon": 99.333
+      },
+      "to": {
+        "name": "Koh Samui",
+        "code": "USM",
+        "country": "TH",
+        "lat": 9.535,
+        "lon": 99.936
+      },
+      "mode": "ferry",
+      "minutes": 180,
+      "priceEur": [
+        11,
+        20
+      ],
+      "both": true,
+      "operator": "Seatran, Raja Ferry, Lomprayah, Phantip",
+      "book": "https://www.phuketferry.com/route-surat-thani-samui-island.html",
+      "note": "Bus + boat via Donsak pier from Phun Phin station, town or airport. The car ferry alone (about 1 h 30) is 170 to 220 THB. Last combos leave around 16:00.",
+      "sources": [
+        "https://www.phuketferry.com/route-surat-thani-samui-island.html",
+        "https://www.visitthailandtoday.com/guides/bangkok-to-koh-samui",
+        "https://www.rajaferryport.com/"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Koh Samui",
+        "code": "USM",
+        "country": "TH",
+        "lat": 9.535,
+        "lon": 99.936
+      },
+      "to": {
+        "name": "Koh Phangan",
+        "code": null,
+        "country": "TH",
+        "lat": 9.712,
+        "lon": 100.009
+      },
+      "mode": "ferry",
+      "minutes": 30,
+      "priceEur": [
+        7,
+        9
+      ],
+      "both": true,
+      "operator": "Lomprayah, Seatran, Songserm",
+      "book": "https://www.lomprayah.com/",
+      "note": "Many boats a day from Bangrak, Nathon and Pralarn piers to Thong Sala. Catamarans and speedboats take 20 to 45 min, the Songserm slow boat about 1h.",
+      "sources": [
+        "https://www.ticket2attraction.com/thailand-ferry/lomprayah/",
+        "https://themanduls.com/how-to-get-from-koh-phangan-to-koh-samui/"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Koh Phangan",
+        "code": null,
+        "country": "TH",
+        "lat": 9.712,
+        "lon": 100.009
+      },
+      "to": {
+        "name": "Koh Tao",
+        "code": null,
+        "country": "TH",
+        "lat": 10.092,
+        "lon": 99.838
+      },
+      "mode": "ferry",
+      "minutes": 70,
+      "priceEur": [
+        16,
+        18
+      ],
+      "both": true,
+      "operator": "Lomprayah and other speedboat lines",
+      "book": "https://www.lomprayah.com/",
+      "note": "Catamarans and speedboats from Thong Sala to Mae Haad several times a day, 1h to 1h30. Koh Tao charges a 20 THB entry fee.",
+      "sources": [
+        "https://www.ticket2attraction.com/thailand-ferry/lomprayah/"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Phuket",
+        "code": "HKT",
+        "country": "TH",
+        "lat": 7.884,
+        "lon": 98.388
+      },
+      "to": {
+        "name": "Koh Phi Phi",
+        "code": null,
+        "country": "TH",
+        "lat": 7.74,
+        "lon": 98.77
+      },
+      "mode": "ferry",
+      "minutes": 120,
+      "priceEur": [
+        11,
+        16
+      ],
+      "both": true,
+      "operator": "Phi Phi Cruiser, Andaman Wave Master, Chaokoh and others",
+      "book": "https://www.phuketferry.com/route-phuket-koh-phi-phi.html",
+      "note": "Ferries from Rassada pier to Tonsai pier several times a day, about 2h. Speedboats take about 1h for 650 to 900 THB. Phi Phi charges a 20 THB landing fee.",
+      "sources": [
+        "https://www.phuketferry.com/route-phuket-koh-phi-phi.html",
+        "https://geckoroutes.com/thailand/phuket-to-koh-phi-phi/"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Krabi",
+        "code": "KBV",
+        "country": "TH",
+        "lat": 8.086,
+        "lon": 98.906
+      },
+      "to": {
+        "name": "Koh Phi Phi",
+        "code": null,
+        "country": "TH",
+        "lat": 7.74,
+        "lon": 98.77
+      },
+      "mode": "ferry",
+      "minutes": 90,
+      "priceEur": [
+        8,
+        16
+      ],
+      "both": true,
+      "operator": "Andaman Wave Master, U-Rip Tour, PP Cabana and others",
+      "book": "https://www.phuketferry.com/route-krabi-koh-phi-phi.html",
+      "note": "Ferries from Klong Jilad pier in Krabi town to Tonsai pier, 1h to 2h, plus speedboats of 45 to 60 min. Phi Phi charges a 20 THB landing fee.",
+      "sources": [
+        "https://www.phuketferry.com/route-krabi-koh-phi-phi.html"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Koh Phi Phi",
+        "code": null,
+        "country": "TH",
+        "lat": 7.74,
+        "lon": 98.77
+      },
+      "to": {
+        "name": "Koh Lanta",
+        "code": null,
+        "country": "TH",
+        "lat": 7.629,
+        "lon": 99.044
+      },
+      "mode": "ferry",
+      "minutes": 60,
+      "priceEur": [
+        11,
+        16
+      ],
+      "both": true,
+      "operator": "Lanta Petpailin, Chaokoh and speedboat lines",
+      "book": "https://www.phuketferry.com/route-koh-phi-phi-koh-lanta.html",
+      "note": "Tonsai pier to Saladan pier. Ferry about 1h, speedboats 30 min. Most speedboats stop in the low season. 20 THB Tonsai pier fee is extra.",
+      "sources": [
+        "https://www.phuketferry.com/route-koh-phi-phi-koh-lanta.html"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Hat Yai",
+        "code": "HDY",
+        "country": "TH",
+        "lat": 7.008,
+        "lon": 100.475
+      },
+      "to": {
+        "name": "Penang (George Town)",
+        "code": "PEN",
+        "country": "MY",
+        "lat": 5.414,
+        "lon": 100.329
+      },
+      "mode": "van",
+      "minutes": 240,
+      "priceEur": [
+        13,
+        21
+      ],
+      "both": true,
+      "operator": "minivans (KST Travel, New Asian Travel and others)",
+      "book": "https://12go.asia/en/travel/hat-yai/penang",
+      "note": "Vans cross at Sadao / Bukit Kayu Hitam, everyone gets off at both posts, drop at Komtar or hotels. Malaysia is 1 h ahead. The train via Padang Besar is cheaper.",
+      "sources": [
+        "https://geckoroutes.com/malaysia/hat-yai-to-penang/",
+        "https://goasia.cc/en/thailand/hat-yai-to-penang"
+      ],
+      "confidence": "medium"
+    },
+    {
+      "from": {
+        "name": "Bangkok",
+        "code": "BKK",
+        "country": "TH",
+        "lat": 13.756,
+        "lon": 100.502
+      },
+      "to": {
+        "name": "Koh Chang",
+        "code": null,
+        "country": "TH",
+        "lat": 12.054,
+        "lon": 102.335
+      },
+      "mode": "coach",
+      "minutes": 360,
+      "priceEur": [
+        11,
+        24
+      ],
+      "both": true,
+      "operator": "Transport Co. (999 bus) + Ferry Koh Chang, minibus operators",
+      "book": "https://12go.asia/en/travel/bangkok/koh-chang",
+      "note": "Bus + boat. 999 bus from Ekkamai (07:45) or Suvarnabhumi to Ao Thammachat pier, then 25 to 35 min ferry (90 THB) to Ao Sapparot. Minibuses to hotels cost 700 to 900 THB.",
+      "sources": [
+        "https://www.visitthailandtoday.com/guides/bangkok-to-koh-chang"
+      ],
+      "confidence": "medium"
+    },
+    {
+      "from": {
+        "name": "Kuala Lumpur",
+        "code": "KUL",
+        "country": "MY",
+        "lat": 3.139,
+        "lon": 101.687
+      },
+      "to": {
+        "name": "Singapore",
+        "code": "SIN",
+        "country": "SG",
+        "lat": 1.29,
+        "lon": 103.852
+      },
+      "mode": "coach",
+      "minutes": 310,
+      "priceEur": [
+        12,
+        19
+      ],
+      "both": true,
+      "operator": "KKKL, Transtar, StarMart, Billion Stars, Aeroline (several companies)",
+      "book": "https://www.baolau.com/en/s/Kuala-Lumpur/Singapore/",
+      "note": "Most coaches leave TBS or Berjaya Times Square. The Johor Bahru to Woodlands border can add hours at weekends. The RTS Link is not open yet (expected 2027).",
+      "sources": [
+        "https://www.baolau.com/en/s/Kuala-Lumpur/Singapore/",
+        "https://north-vietnam.com/kuala-lumpur-to-singapore-bus-schedule/"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Kuala Lumpur",
+        "code": "KUL",
+        "country": "MY",
+        "lat": 3.139,
+        "lon": 101.687
+      },
+      "to": {
+        "name": "Penang (George Town)",
+        "code": "PEN",
+        "country": "MY",
+        "lat": 5.414,
+        "lon": 100.329
+      },
+      "mode": "train",
+      "minutes": 255,
+      "priceEur": [
+        13,
+        20
+      ],
+      "both": true,
+      "operator": "KTM ETS + Penang Port ferry",
+      "book": "https://www.ktmb.com.my/",
+      "note": "ETS from KL Sentral to Butterworth (3 h 35 to 4 h 05), then the 10 min RM2 ferry to George Town. Direct coaches to Sungai Nibong take about 5 h 10.",
+      "sources": [
+        "https://www.seat61.com/Malaysia.htm",
+        "https://www.baolau.com/en/s/Kuala-Lumpur/Penang/",
+        "https://www.businesstoday.com.my/2023/09/07/new-penang-ferry-fares-rm2-for-pedestrians-rm2-50-for-motorcyclist/"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Kuala Lumpur",
+        "code": "KUL",
+        "country": "MY",
+        "lat": 3.139,
+        "lon": 101.687
+      },
+      "to": {
+        "name": "Malacca",
+        "code": "MKZ",
+        "country": "MY",
+        "lat": 2.19,
+        "lon": 102.25
+      },
+      "mode": "coach",
+      "minutes": 132,
+      "priceEur": [
+        5,
+        6
+      ],
+      "both": true,
+      "operator": "Billion Stars, KKKL, Transnasional, Maraliner (several companies)",
+      "book": "https://www.baolau.com/en/s/Kuala-Lumpur/Malacca/",
+      "note": "Frequent coaches from TBS (Bandar Tasik Selatan) to Melaka Sentral, a short taxi or bus ride from the old town.",
+      "sources": [
+        "https://www.baolau.com/en/s/Kuala-Lumpur/Malacca/"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Kuala Lumpur",
+        "code": "KUL",
+        "country": "MY",
+        "lat": 3.139,
+        "lon": 101.687
+      },
+      "to": {
+        "name": "Cameron Highlands (Tanah Rata)",
+        "code": null,
+        "country": "MY",
+        "lat": 4.471,
+        "lon": 101.377
+      },
+      "mode": "coach",
+      "minutes": 287,
+      "priceEur": [
+        9,
+        11
+      ],
+      "both": true,
+      "operator": "Unititi, Perak Transit, CS Travel (several companies)",
+      "book": "https://www.baolau.com/en/s/kuala-lumpur/cameron-highlands/",
+      "note": "TBS (Bandar Tasik Selatan) to Tanah Rata bus terminal, last stretch on a winding mountain road; about 5 departures a day.",
+      "sources": [
+        "https://www.baolau.com/en/s/kuala-lumpur/cameron-highlands/",
+        "https://vps.geckoroutes.com/malaysia/cameron-highlands-to-kuala-lumpur/"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Cameron Highlands (Tanah Rata)",
+        "code": null,
+        "country": "MY",
+        "lat": 4.471,
+        "lon": 101.377
+      },
+      "to": {
+        "name": "Penang (George Town)",
+        "code": "PEN",
+        "country": "MY",
+        "lat": 5.414,
+        "lon": 100.329
+      },
+      "mode": "coach",
+      "minutes": 270,
+      "priceEur": [
+        8,
+        9
+      ],
+      "both": true,
+      "operator": "Unititi",
+      "book": "https://www.baolau.com/en/s/Cameron-Highlands/Penang/",
+      "note": "Tanah Rata to Sungai Nibong terminal (Gelugor, south of George Town), about 3 departures a day. Agent minivans with hotel pickup cost more.",
+      "sources": [
+        "https://www.baolau.com/en/s/Cameron-Highlands/Penang/"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Jakarta",
+        "code": "JKT",
+        "country": "ID",
+        "lat": -6.175,
+        "lon": 106.827
+      },
+      "to": {
+        "name": "Yogyakarta",
+        "code": "JOG",
+        "country": "ID",
+        "lat": -7.797,
+        "lon": 110.369
+      },
+      "mode": "train",
+      "minutes": 365,
+      "priceEur": [
+        12,
+        38
+      ],
+      "both": true,
+      "operator": "KAI",
+      "book": "https://booking.kai.id/",
+      "note": "Taksaka, Argo Dwipangga and Argo Lawu (executive) from Gambir, about 6h, day and night runs; economy trains are cheaper. Book on KAI Access or kai.id.",
+      "sources": [
+        "https://www.seat61.com/Indonesia.htm",
+        "https://dealls.com/pengembangan-karir/rute-ka-taksaka"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Jakarta",
+        "code": "JKT",
+        "country": "ID",
+        "lat": -6.175,
+        "lon": 106.827
+      },
+      "to": {
+        "name": "Bandung",
+        "code": "BDO",
+        "country": "ID",
+        "lat": -6.917,
+        "lon": 107.619
+      },
+      "mode": "train",
+      "minutes": 46,
+      "priceEur": [
+        8,
+        18
+      ],
+      "both": true,
+      "operator": "Whoosh high-speed rail (KCIC)",
+      "book": "https://ticket.kcic.co.id/",
+      "note": "Whoosh from Halim to Padalarang or Tegalluar, then the KA Feeder into Bandung station (about 20 min). Dynamic fares. KAI Parahyangan from Gambir takes about 3 h.",
+      "sources": [
+        "https://www.seat61.com/Indonesia.htm",
+        "https://sg.trip.com/guide/transport/whoosh-train.html"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Yogyakarta",
+        "code": "JOG",
+        "country": "ID",
+        "lat": -7.797,
+        "lon": 110.369
+      },
+      "to": {
+        "name": "Surabaya",
+        "code": "SUB",
+        "country": "ID",
+        "lat": -7.257,
+        "lon": 112.752
+      },
+      "mode": "train",
+      "minutes": 240,
+      "priceEur": [
+        5,
+        18
+      ],
+      "both": true,
+      "operator": "KAI",
+      "book": "https://booking.kai.id/",
+      "note": "Argo Semeru and Sancaka take about 3h45 to 4h; the Sri Tanjung economy train from Lempuyangan is cheapest (about Rp88k) but takes about 5.5h.",
+      "sources": [
+        "https://www.seat61.com/Indonesia.htm",
+        "https://www.tiket.com/kereta-api/rute/yogyakarta-ke-surabaya"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Surabaya",
+        "code": "SUB",
+        "country": "ID",
+        "lat": -7.257,
+        "lon": 112.752
+      },
+      "to": {
+        "name": "Banyuwangi",
+        "code": "BWX",
+        "country": "ID",
+        "lat": -8.219,
+        "lon": 114.369
+      },
+      "mode": "train",
+      "minutes": 375,
+      "priceEur": [
+        2.9,
+        16
+      ],
+      "both": true,
+      "operator": "KAI",
+      "book": "https://booking.kai.id/",
+      "note": "Trains end at Ketapang station beside the Bali ferry. Probowangi economy (Rp56k) is cheapest and stops at Probolinggo for Bromo; executive class costs more.",
+      "sources": [
+        "https://www.detik.com/jatim/berita/d-8036500/jadwal-rute-dan-harga-tiket-ka-surabaya-banyuwangi-agustus-2025/amp",
+        "https://dealls.com/pengembangan-karir/rute-ka-probowangi"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Banyuwangi",
+        "code": "BWX",
+        "country": "ID",
+        "lat": -8.219,
+        "lon": 114.369
+      },
+      "to": {
+        "name": "Bali (Denpasar)",
+        "code": "DPS",
+        "country": "ID",
+        "lat": -8.65,
+        "lon": 115.217
+      },
+      "mode": "coach",
+      "minutes": 345,
+      "priceEur": [
+        8,
+        17
+      ],
+      "both": true,
+      "operator": "through buses (several companies) + ASDP ferry",
+      "book": "https://12go.asia/en/travel/banyuwangi/denpasar",
+      "note": "Bus + boat: through buses take the Ketapang to Gilimanuk ferry (45 min) and continue to Ubung or Mengwi. Long queues at Gilimanuk on holidays.",
+      "sources": [
+        "https://goasia.cc/en/indonesia/bali-to-banyuwangi",
+        "https://www.rome2rio.com/s/Banyuwangi/Denpasar",
+        "https://www.seat61.com/Indonesia.htm"
+      ],
+      "confidence": "medium"
+    },
+    {
+      "from": {
+        "name": "Padang Bai",
+        "code": null,
+        "country": "ID",
+        "lat": -8.531,
+        "lon": 115.508
+      },
+      "to": {
+        "name": "Gili Trawangan",
+        "code": null,
+        "country": "ID",
+        "lat": -8.351,
+        "lon": 116.039
+      },
+      "mode": "ferry",
+      "minutes": 100,
+      "priceEur": [
+        16,
+        29
+      ],
+      "both": true,
+      "operator": "fast boats (Eka Jaya, BlueWater, Gili Gili, Wahana and others)",
+      "book": "https://12go.asia/en/travel/padang-bai/gili-trawangan",
+      "note": "Fast boats leave Padang Bai between about 08:00 and 13:45; harbour fees of Rp10k to 20k are often paid on top.",
+      "sources": [
+        "https://goasia.cc/en/indonesia/bali-to-gili-trawangan",
+        "https://www.ferryscanner.com/en/ferry-routes/ferry-padang-bai-port-bali-gili-trawangan-ferry-terminal"
+      ],
+      "confidence": "medium"
+    },
+    {
+      "from": {
+        "name": "Padang Bai",
+        "code": null,
+        "country": "ID",
+        "lat": -8.531,
+        "lon": 115.508
+      },
+      "to": {
+        "name": "Lombok (Mataram)",
+        "code": "LOP",
+        "country": "ID",
+        "lat": -8.583,
+        "lon": 116.116
+      },
+      "mode": "ferry",
+      "minutes": 270,
+      "priceEur": [
+        3.1,
+        3.4
+      ],
+      "both": true,
+      "operator": "ASDP public ferry",
+      "book": "https://www.ferizy.com/",
+      "note": "Slow car ferry to Lembar port, about 25 km south of Mataram; at least 13 ships a day, crossing about 4.5h. Buy on Ferizy.",
+      "sources": [
+        "https://www.detik.com/bali/bisnis/d-8268075/asdp-pastikan-armada-siap-layani-penyeberangan-lembar-padangbai-saat-nataru",
+        "https://www.jawapos.com/wisata-dan-kuliner/2607130478/jadwal-7-kapal-feri-lembar-padangbai-hari-ini-cek-jam-berangkat-dan-harga-tiket"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Sanur",
+        "code": null,
+        "country": "ID",
+        "lat": -8.693,
+        "lon": 115.262
+      },
+      "to": {
+        "name": "Nusa Penida",
+        "code": null,
+        "country": "ID",
+        "lat": -8.678,
+        "lon": 115.553
+      },
+      "mode": "ferry",
+      "minutes": 45,
+      "priceEur": [
+        9,
+        11
+      ],
+      "both": true,
+      "operator": "fast boats (Maruti, Angel Billabong, Semabu Hills and others)",
+      "book": "https://12go.asia/en/travel/sanur/nusa-penida",
+      "note": "Most boats land at Banjar Nyuh (Toyapakeh), some at Sampalan; walk-up booth prices reach Rp250k. Fares rose in summer 2026 with fuel costs.",
+      "sources": [
+        "https://nusapenida.org/how-to-get-to-nusa-penida/"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Tirana",
+        "code": "TIA",
+        "country": "AL",
+        "lat": 41.328,
+        "lon": 19.819
+      },
+      "to": {
+        "name": "Shkoder",
+        "code": null,
+        "country": "AL",
+        "lat": 42.068,
+        "lon": 19.513
+      },
+      "mode": "coach",
+      "minutes": 120,
+      "priceEur": [
+        5,
+        6
+      ],
+      "both": true,
+      "operator": "Elalba, Rozafa, Kopliku and others",
+      "book": "https://travel.gjirafa.com/en/bus/tirane-ne-shkoder",
+      "note": "About 25 buses and minibuses a day, 05:20 to 17:30. Cash fare around 500 lek; tourist express vans cost more.",
+      "sources": [
+        "https://travel.gjirafa.com/en/bus/tirane-ne-shkoder",
+        "https://adventurealbania.com/?p=3001"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Shkoder",
+        "code": null,
+        "country": "AL",
+        "lat": 42.068,
+        "lon": 19.513
+      },
+      "to": {
+        "name": "Podgorica",
+        "code": "TGD",
+        "country": "ME",
+        "lat": 42.441,
+        "lon": 19.263
+      },
+      "mode": "coach",
+      "minutes": 100,
+      "priceEur": [
+        10,
+        18
+      ],
+      "both": true,
+      "operator": "Drita Travel, MS Tours, Old Town Travel, Vetoni",
+      "book": "https://travel.gjirafa.com/en/bus/shkoder-ne-podgorice",
+      "note": "About 6 buses a day, 07:50 to 22:00, crossing at Hani i Hotit. Pickup points vary by operator (Buna Bridge, Rozafa Hotel, bus station).",
+      "sources": [
+        "https://travel.gjirafa.com/en/bus/shkoder-ne-podgorice",
+        "https://www.bookaway.com/routes/albania/shkoder-to-podgorica"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Tirana",
+        "code": "TIA",
+        "country": "AL",
+        "lat": 41.328,
+        "lon": 19.819
+      },
+      "to": {
+        "name": "Kotor",
+        "code": null,
+        "country": "ME",
+        "lat": 42.425,
+        "lon": 18.771
+      },
+      "mode": "coach",
+      "minutes": 360,
+      "priceEur": [
+        27,
+        40
+      ],
+      "both": true,
+      "operator": "Diamant Travel, Old Town Travel, Jadran Ekspres",
+      "book": "https://travel.gjirafa.com/en/bus/tirane-ne-kotor",
+      "note": "About 3 morning departures from Tirana East Terminal (Terminali Lindor), via Shkoder, the Hani i Hotit border, Podgorica and Budva. 4.5 to 7.75 hours.",
+      "sources": [
+        "https://travel.gjirafa.com/en/bus/tirane-ne-kotor",
+        "https://www.bookaway.com/routes/albania/tirana-to-kotor"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Kotor",
+        "code": null,
+        "country": "ME",
+        "lat": 42.425,
+        "lon": 18.771
+      },
+      "to": {
+        "name": "Dubrovnik",
+        "code": "DBV",
+        "country": "HR",
+        "lat": 42.65,
+        "lon": 18.094
+      },
+      "mode": "coach",
+      "minutes": 150,
+      "priceEur": [
+        28,
+        38
+      ],
+      "both": true,
+      "operator": "Bozur, FlixBus and others",
+      "book": "https://www.flixbus.com/bus-routes/bus-kotor-dubrovnik",
+      "note": "Several buses a day, 07:10 to 18:00. Crosses Debeli Brijeg to Karasovici into Schengen with EES biometric checks; summer weekend queues can add several hours.",
+      "sources": [
+        "https://www.bookaway.com/routes/montenegro/kotor-to-dubrovnik",
+        "https://www.flixbus.com/bus-routes/bus-kotor-dubrovnik"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Dubrovnik",
+        "code": "DBV",
+        "country": "HR",
+        "lat": 42.65,
+        "lon": 18.094
+      },
+      "to": {
+        "name": "Mostar",
+        "code": "OMO",
+        "country": "BA",
+        "lat": 43.343,
+        "lon": 17.808
+      },
+      "mode": "coach",
+      "minutes": 195,
+      "priceEur": [
+        22,
+        31
+      ],
+      "both": true,
+      "operator": "Globtour, Autotrans (Arriva)",
+      "book": "https://www.bookaway.com/routes/croatia/dubrovnik-to-mostar",
+      "note": "A few buses a day, 08:00 to 17:15. Leaves Schengen Croatia for Bosnia and Herzegovina, so passport and EES exit checks.",
+      "sources": [
+        "https://www.bookaway.com/routes/croatia/dubrovnik-to-mostar"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Mostar",
+        "code": "OMO",
+        "country": "BA",
+        "lat": 43.343,
+        "lon": 17.808
+      },
+      "to": {
+        "name": "Sarajevo",
+        "code": "SJJ",
+        "country": "BA",
+        "lat": 43.856,
+        "lon": 18.413
+      },
+      "mode": "train",
+      "minutes": 120,
+      "priceEur": [
+        7,
+        7
+      ],
+      "both": true,
+      "operator": "Zeljeznice FBiH (ZFBH) Talgo",
+      "book": "https://www.zfbh.ba",
+      "note": "Two Talgo trains each way daily, 2nd class 14.10 KM. Line reopened Feb 2025 after flood damage. Collect online tickets at the station. Buses run about hourly.",
+      "sources": [
+        "https://www.seat61.com/trains-and-routes/sarajevo-to-mostar-by-train.htm",
+        "https://www.seat61.com/Bosnia.htm",
+        "https://n1info.ba/english/news/passenger-train-service-between-sarajevo-and-capljina-to-resume-on-february-10"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Sarajevo",
+        "code": "SJJ",
+        "country": "BA",
+        "lat": 43.856,
+        "lon": 18.413
+      },
+      "to": {
+        "name": "Belgrade",
+        "code": "BEG",
+        "country": "RS",
+        "lat": 44.817,
+        "lon": 20.457
+      },
+      "mode": "coach",
+      "minutes": 420,
+      "priceEur": [
+        22,
+        40
+      ],
+      "both": true,
+      "operator": "Centrotrans, Kondor Bus, Alamanis, FlixBus",
+      "book": "https://www.bookaway.com/routes/bosnia-and-herzegovina/sarajevo-to-belgrade",
+      "note": "Day and night buses, 06:30 to 22:00. Some leave from Istocno Sarajevo station, not the main bus station. No direct train since 2012.",
+      "sources": [
+        "https://www.bookaway.com/routes/bosnia-and-herzegovina/sarajevo-to-belgrade",
+        "https://www.flixbus.com/bus-routes/bus-sarajevo-belgrade"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Belgrade",
+        "code": "BEG",
+        "country": "RS",
+        "lat": 44.817,
+        "lon": 20.457
+      },
+      "to": {
+        "name": "Skopje",
+        "code": "SKP",
+        "country": "MK",
+        "lat": 41.997,
+        "lon": 21.428
+      },
+      "mode": "coach",
+      "minutes": 420,
+      "priceEur": [
+        24,
+        35
+      ],
+      "both": true,
+      "operator": "Fudeks, Nis Ekspres, FlixBus, Galeb",
+      "book": "https://www.flixbus.com/bus-routes/bus-belgrade-skopje",
+      "note": "About 6 buses a day including overnight ones, via Nis and the Presevo to Tabanovce border. Skopje station adds a 50 MKD entry fee.",
+      "sources": [
+        "https://www.bookaway.com/routes/serbia/belgrade-to-skopje",
+        "https://www.flixbus.com/bus-routes/bus-belgrade-skopje"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Tirana",
+        "code": "TIA",
+        "country": "AL",
+        "lat": 41.328,
+        "lon": 19.819
+      },
+      "to": {
+        "name": "Ohrid",
+        "code": "OHD",
+        "country": "MK",
+        "lat": 41.117,
+        "lon": 20.802
+      },
+      "mode": "coach",
+      "minutes": 170,
+      "priceEur": [
+        15,
+        17
+      ],
+      "both": true,
+      "operator": "Eurobus, Classic Company, Nela Travel",
+      "book": "https://travel.gjirafa.com/en/bus/tirane-ne-oher",
+      "note": "About 5 to 7 buses a day, 08:00 to 17:00, from Tirana East Terminal or Shatervan, via Elbasan and the Qafe Thane border, stopping in Struga.",
+      "sources": [
+        "https://travel.gjirafa.com/en/bus/tirane-ne-oher",
+        "https://www.bookaway.com/routes/albania/tirana-to-ohrid"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Skopje",
+        "code": "SKP",
+        "country": "MK",
+        "lat": 41.997,
+        "lon": 21.428
+      },
+      "to": {
+        "name": "Ohrid",
+        "code": "OHD",
+        "country": "MK",
+        "lat": 41.117,
+        "lon": 20.802
+      },
+      "mode": "coach",
+      "minutes": 195,
+      "priceEur": [
+        13,
+        16
+      ],
+      "both": true,
+      "operator": "Galeb, Classic Company, Makedonija Soobrakaj",
+      "book": "https://travel.gjirafa.com/en/bus/shkup-ne-oher",
+      "note": "About 12 buses a day, 06:30 to 20:30, domestic route. Some services stop at operator offices rather than Ohrid bus station.",
+      "sources": [
+        "https://travel.gjirafa.com/en/bus/shkup-ne-oher"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Tirana",
+        "code": "TIA",
+        "country": "AL",
+        "lat": 41.328,
+        "lon": 19.819
+      },
+      "to": {
+        "name": "Skopje",
+        "code": "SKP",
+        "country": "MK",
+        "lat": 41.997,
+        "lon": 21.428
+      },
+      "mode": "coach",
+      "minutes": 360,
+      "priceEur": [
+        19,
+        24
+      ],
+      "both": true,
+      "operator": "Drita Travel, Ido Tours, Amalfi, Diamant Travel",
+      "book": "https://travel.gjirafa.com/en/bus/tirane-ne-shkup",
+      "note": "About 6 buses a day including night buses, mostly from Tirana East Terminal (Terminali Lindor). Scheduled 4 to 7 hours depending on routing.",
+      "sources": [
+        "https://travel.gjirafa.com/en/bus/tirane-ne-shkup",
+        "https://www.bookaway.com/routes/albania/tirana-to-skopje"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Tirana",
+        "code": "TIA",
+        "country": "AL",
+        "lat": 41.328,
+        "lon": 19.819
+      },
+      "to": {
+        "name": "Pristina",
+        "code": "PRN",
+        "country": "XK",
+        "lat": 42.663,
+        "lon": 21.165
+      },
+      "mode": "coach",
+      "minutes": 240,
+      "priceEur": [
+        19,
+        21
+      ],
+      "both": true,
+      "operator": "Arbeni Tours, Kabashi Tours, Albani Tours, Amalfi and others",
+      "book": "https://travel.gjirafa.com/en/bus/tirane-ne-prishtine",
+      "note": "About 25 departures a day, 01:00 to 22:30, from Tirana East Terminal, via the motorway and the Morine to Vermica border.",
+      "sources": [
+        "https://travel.gjirafa.com/en/bus/tirane-ne-prishtine",
+        "https://www.bookaway.com/routes/albania/tirana-to-pristina"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Skopje",
+        "code": "SKP",
+        "country": "MK",
+        "lat": 41.997,
+        "lon": 21.428
+      },
+      "to": {
+        "name": "Pristina",
+        "code": "PRN",
+        "country": "XK",
+        "lat": 42.663,
+        "lon": 21.165
+      },
+      "mode": "coach",
+      "minutes": 120,
+      "priceEur": [
+        9,
+        10
+      ],
+      "both": true,
+      "operator": "Albus Travel, Gazmend Turist, Amalfi, Motoja",
+      "book": "https://travel.gjirafa.com/en/bus/shkup-ne-prishtine",
+      "note": "About 9 buses a day, 08:00 to 22:00, border at Blace to Hani i Elezit.",
+      "sources": [
+        "https://travel.gjirafa.com/en/bus/shkup-ne-prishtine"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Skopje",
+        "code": "SKP",
+        "country": "MK",
+        "lat": 41.997,
+        "lon": 21.428
+      },
+      "to": {
+        "name": "Sofia",
+        "code": "SOF",
+        "country": "BG",
+        "lat": 42.698,
+        "lon": 23.322
+      },
+      "mode": "coach",
+      "minutes": 285,
+      "priceEur": [
+        24,
+        29
+      ],
+      "both": true,
+      "operator": "Matpu, Transkop, Kaleia, FlixBus",
+      "book": "https://www.bookaway.com/routes/north-macedonia/skopje-to-sofia",
+      "note": "A few buses a day, 07:00 to 17:30, border at Deve Bair to Gyueshevo, a Schengen entry with EES checks. Scheduled 3.25 to 5.75 hours.",
+      "sources": [
+        "https://www.bookaway.com/routes/north-macedonia/skopje-to-sofia",
+        "https://www.flixbus.com/bus-routes/bus-skopje-sofia"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Skopje",
+        "code": "SKP",
+        "country": "MK",
+        "lat": 41.997,
+        "lon": 21.428
+      },
+      "to": {
+        "name": "Thessaloniki",
+        "code": "SKG",
+        "country": "GR",
+        "lat": 40.64,
+        "lon": 22.944
+      },
+      "mode": "coach",
+      "minutes": 225,
+      "priceEur": [
+        34,
+        37
+      ],
+      "both": true,
+      "operator": "Simeonidis Tours, Rule Turs, FlixBus",
+      "book": "https://www.bookaway.com/routes/north-macedonia/skopje-to-thessaloniki",
+      "note": "One to three buses a day, 08:30 to 15:30, border at Bogorodica to Evzoni (Schengen, EES). Arrives by Thessaloniki train station.",
+      "sources": [
+        "https://www.bookaway.com/routes/north-macedonia/skopje-to-thessaloniki",
+        "https://www.flixbus.com/bus-routes/bus-skopje-thessaloniki"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Tirana",
+        "code": "TIA",
+        "country": "AL",
+        "lat": 41.328,
+        "lon": 19.819
+      },
+      "to": {
+        "name": "Berat",
+        "code": null,
+        "country": "AL",
+        "lat": 40.705,
+        "lon": 19.952
+      },
+      "mode": "coach",
+      "minutes": 135,
+      "priceEur": [
+        4.1,
+        7
+      ],
+      "both": true,
+      "operator": "Tibe, Mangalemi and others",
+      "book": "https://travel.gjirafa.com/en/bus/tirane-ne-berat",
+      "note": "About 20 buses a day, 05:30 to 17:00, from the South and North Terminal. Cash fare 400 to 500 lek. Berat station is outside the old town.",
+      "sources": [
+        "https://travel.gjirafa.com/en/bus/tirane-ne-berat",
+        "https://adventurealbania.com/bus-tirana-berat/"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Tirana",
+        "code": "TIA",
+        "country": "AL",
+        "lat": 41.328,
+        "lon": 19.819
+      },
+      "to": {
+        "name": "Saranda",
+        "code": null,
+        "country": "AL",
+        "lat": 39.876,
+        "lon": 20.005
+      },
+      "mode": "coach",
+      "minutes": 300,
+      "priceEur": [
+        15,
+        17
+      ],
+      "both": true,
+      "operator": "Tisa Travel, Olgeno Travel, Transbus Saranda",
+      "book": "https://travel.gjirafa.com/en/bus/tirane-ne-sarande",
+      "note": "About 9 buses a day, 07:00 to 22:00 including a night bus, from the South and North Terminal. 5 to 6.5 hours depending on operator.",
+      "sources": [
+        "https://travel.gjirafa.com/en/bus/tirane-ne-sarande",
+        "https://adventurealbania.com/?p=3001"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Saranda",
+        "code": null,
+        "country": "AL",
+        "lat": 39.876,
+        "lon": 20.005
+      },
+      "to": {
+        "name": "Corfu",
+        "code": "CFU",
+        "country": "GR",
+        "lat": 39.624,
+        "lon": 19.922
+      },
+      "mode": "ferry",
+      "minutes": 30,
+      "priceEur": [
+        20,
+        40
+      ],
+      "both": true,
+      "operator": "Finikas Lines / Ionian Seaways",
+      "book": "https://www.finikas-lines.com/",
+      "note": "Hydrofoil about 30 min, car ferries 50 to 70 min. Near hourly June to mid October, one a day in winter. Corfu is 1 h ahead; Schengen entry with EES.",
+      "sources": [
+        "https://albaniatourguide.com/saranda-to-corfu-ferry-timetable-prices-booking-how-long-day-trip-with-car-cheapest-ferry/",
+        "https://www.finikas-lines.com/"
+      ],
+      "confidence": "medium"
+    },
+    {
+      "from": {
+        "name": "Istanbul",
+        "code": "IST",
+        "country": "TR",
+        "lat": 41.008,
+        "lon": 28.978
+      },
+      "to": {
+        "name": "Goreme (Cappadocia)",
+        "code": "NAV",
+        "country": "TR",
+        "lat": 38.643,
+        "lon": 34.829
+      },
+      "mode": "coach",
+      "minutes": 620,
+      "priceEur": [
+        30,
+        34
+      ],
+      "both": true,
+      "operator": "Metro, Kamil Koç, Nevşehir Seyahat, Kapadokya VIP",
+      "book": "https://www.obilet.com/en/bus-ticket/istanbul-goreme",
+      "note": "Mostly overnight buses from Esenler, Alibeyköy or the Asian side terminals. Check the ticket ends in Göreme, not Nevşehir. Fares seen on obilet in October 2026.",
+      "sources": [
+        "https://www.obilet.com/en/bus-ticket/istanbul-goreme"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Istanbul",
+        "code": "IST",
+        "country": "TR",
+        "lat": 41.008,
+        "lon": 28.978
+      },
+      "to": {
+        "name": "Ankara",
+        "code": "ANK",
+        "country": "TR",
+        "lat": 39.933,
+        "lon": 32.86
+      },
+      "mode": "train",
+      "minutes": 255,
+      "priceEur": [
+        21,
+        21
+      ],
+      "both": true,
+      "operator": "TCDD Taşımacılık (YHT)",
+      "book": "https://ebilet.tcddtasimacilik.gov.tr",
+      "note": "YHT high-speed, about 20 a day, mostly from Söğütlüçeşme on the Asian side. Economy 990 TL since the 17 Aug 2026 fare rise.",
+      "sources": [
+        "https://www.seat61.com/Turkey2.htm",
+        "https://medyascope.tv/2026/08/17/yht-biletlerine-zam-geldi-ankara-istanbul-bileti-990-lira-oldu/"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Goreme (Cappadocia)",
+        "code": "NAV",
+        "country": "TR",
+        "lat": 38.643,
+        "lon": 34.829
+      },
+      "to": {
+        "name": "Denizli (for Pamukkale)",
+        "code": "DNZ",
+        "country": "TR",
+        "lat": 37.787,
+        "lon": 29.087
+      },
+      "mode": "coach",
+      "minutes": 558,
+      "priceEur": [
+        19,
+        25
+      ],
+      "both": true,
+      "operator": "coaches (several companies)",
+      "book": "https://www.enuygun.com/otobus-bileti/goreme-denizli/",
+      "note": "About 12 buses a day, many overnight. Pamukkale is a short dolmuş ride from Denizli otogar. October 2026 fares 900 to 1,200 TL.",
+      "sources": [
+        "https://www.enuygun.com/otobus-bileti/goreme-denizli/"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Trabzon",
+        "code": "TZX",
+        "country": "TR",
+        "lat": 41.003,
+        "lon": 39.717
+      },
+      "to": {
+        "name": "Batumi",
+        "code": "BUS",
+        "country": "GE",
+        "lat": 41.617,
+        "lon": 41.637
+      },
+      "mode": "coach",
+      "minutes": 260,
+      "priceEur": [
+        18,
+        27
+      ],
+      "both": true,
+      "operator": "Lüks Karadeniz, Metro Turizm and others",
+      "book": "https://www.obilet.com/en/bus-ticket/trabzon-batumi",
+      "note": "About 11 buses a day via the Sarp / Sarpi border, where passengers walk through passport control. 3 h 45 to 6 h 50 depending on the queue.",
+      "sources": [
+        "https://www.obilet.com/en/bus-ticket/trabzon-batumi"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Tbilisi",
+        "code": "TBS",
+        "country": "GE",
+        "lat": 41.715,
+        "lon": 44.827
+      },
+      "to": {
+        "name": "Yerevan",
+        "code": "EVN",
+        "country": "AM",
+        "lat": 40.187,
+        "lon": 44.515
+      },
+      "mode": "van",
+      "minutes": 360,
+      "priceEur": [
+        13,
+        16
+      ],
+      "both": true,
+      "operator": "marshrutkas (several companies)",
+      "book": "https://www.rome2rio.com/s/Tbilisi/Yerevan",
+      "note": "Marshrutka from Avlabari (50 GEL) or Ortachala (40 GEL), about 6 h with the border. An overnight sleeper train also runs every second night, about 35 to 47 EUR.",
+      "sources": [
+        "https://wander-lush.org/train-from-tbilisi-to-yerevan/",
+        "https://www.seat61.com/Caucasus.htm"
+      ],
+      "confidence": "medium"
+    },
+    {
+      "from": {
+        "name": "Tbilisi",
+        "code": "TBS",
+        "country": "GE",
+        "lat": 41.715,
+        "lon": 44.827
+      },
+      "to": {
+        "name": "Kazbegi (Stepantsminda)",
+        "code": null,
+        "country": "GE",
+        "lat": 42.657,
+        "lon": 44.643
+      },
+      "mode": "van",
+      "minutes": 195,
+      "priceEur": [
+        4.8,
+        6
+      ],
+      "both": true,
+      "operator": "marshrutkas from Didube",
+      "book": "https://www.rome2rio.com/s/Tbilisi/Stepantsminda",
+      "note": "Marshrutka from Didube, roughly hourly from the morning, cash to the driver, about 20 GEL since May 2026. Fewer in winter; snow can close the road.",
+      "sources": [
+        "https://wander-lush.org/didube-bus-station-tbilisi/"
+      ],
+      "confidence": "medium"
+    },
+    {
+      "from": {
+        "name": "Tbilisi",
+        "code": "TBS",
+        "country": "GE",
+        "lat": 41.715,
+        "lon": 44.827
+      },
+      "to": {
+        "name": "Batumi",
+        "code": "BUS",
+        "country": "GE",
+        "lat": 41.617,
+        "lon": 41.637
+      },
+      "mode": "train",
+      "minutes": 245,
+      "priceEur": [
+        11,
+        11
+      ],
+      "both": true,
+      "operator": "Georgian Railway",
+      "book": "https://www.railway.ge/en/",
+      "note": "Stadler double-deck trains, about 4 a day, about 4 h since Aug 2026 track works. 2nd class about 35 GEL. Book with passport details; summer trains sell out.",
+      "sources": [
+        "https://www.seat61.com/Caucasus.htm",
+        "https://gbc.ge/en/news/Economics-news/tbilisi-batumi-train-travel-time-reduced-to-4-hours-lasha-abashidze"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Tashkent",
+        "code": "TAS",
+        "country": "UZ",
+        "lat": 41.3,
+        "lon": 69.24
+      },
+      "to": {
+        "name": "Samarkand",
+        "code": "SKD",
+        "country": "UZ",
+        "lat": 39.627,
+        "lon": 66.975
+      },
+      "mode": "train",
+      "minutes": 135,
+      "priceEur": [
+        14,
+        21
+      ],
+      "both": true,
+      "operator": "Uzbekistan Railways (Afrosiyob, Sharq)",
+      "book": "https://eticket.railway.uz/en/home",
+      "note": "Afrosiyob high-speed about 2 h 15 (economy 311,000 UZS since Feb 2026), Sharq about 3 h 30 and cheaper. Passport needed; sells out May to October.",
+      "sources": [
+        "https://www.seat61.com/Uzbekistan.htm",
+        "https://kun.uz/en/news/2026/01/16/uzbekistan-railways-raises-train-fares-again-from-february-1"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Samarkand",
+        "code": "SKD",
+        "country": "UZ",
+        "lat": 39.627,
+        "lon": 66.975
+      },
+      "to": {
+        "name": "Bukhara",
+        "code": "BHK",
+        "country": "UZ",
+        "lat": 39.768,
+        "lon": 64.456
+      },
+      "mode": "train",
+      "minutes": 100,
+      "priceEur": [
+        11,
+        14
+      ],
+      "both": true,
+      "operator": "Uzbekistan Railways (Afrosiyob, Sharq)",
+      "book": "https://eticket.railway.uz/en/home",
+      "note": "Afrosiyob 1 h 40 to 1 h 50, Sharq about 2 h 25. Fares from 2025 listings; prices rose about 15% in Feb 2026, so expect the top of the range.",
+      "sources": [
+        "https://12go.asia/en/train/Samarkand/Bukhara/?z=15648926",
+        "https://pixidia.com/?p=74812",
+        "https://www.advantour.com/uzbekistan/trains/samarkand-bukhara.htm"
+      ],
+      "confidence": "medium"
+    },
+    {
+      "from": {
+        "name": "Bukhara",
+        "code": "BHK",
+        "country": "UZ",
+        "lat": 39.768,
+        "lon": 64.456
+      },
+      "to": {
+        "name": "Khiva",
+        "code": null,
+        "country": "UZ",
+        "lat": 41.378,
+        "lon": 60.364
+      },
+      "mode": "train",
+      "minutes": 277,
+      "priceEur": [
+        11,
+        19
+      ],
+      "both": true,
+      "operator": "Uzbekistan Railways",
+      "book": "https://eticket.railway.uz/en/home",
+      "note": "New electric train since 9 Sep 2026, economy 270,800 UZS, about 4 h 40, runs six days a week. Older sleeper trains take 6 to 7 h and cost less.",
+      "sources": [
+        "https://www.spot.uz/en/2026/09/08/electric-train/",
+        "https://gov.uz/en/uzbektourism/news/view/216088",
+        "https://12go.asia/en/travel/Bukhara/Khiva/?z=3212691"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Almaty",
+        "code": "ALA",
+        "country": "KZ",
+        "lat": 43.238,
+        "lon": 76.946
+      },
+      "to": {
+        "name": "Bishkek",
+        "code": "BSZ",
+        "country": "KG",
+        "lat": 42.875,
+        "lon": 74.57
+      },
+      "mode": "coach",
+      "minutes": 300,
+      "priceEur": [
+        5,
+        6
+      ],
+      "both": true,
+      "operator": "buses from Sayran bus station",
+      "book": "https://ma-sairan.kz",
+      "note": "Buses from Almaty Sayran station (not Sayakhat) five times a day via the Korday border, about 3,000 KZT. Arrives at the new Bishkek bus station outside the centre.",
+      "sources": [
+        "https://www.journalofnomads.com/how-to-get-from-almaty-to-bishkek/",
+        "https://backpackmoments.com/how-to-get-from-almaty-to-bishkek-by-bus/"
+      ],
+      "confidence": "medium"
+    },
+    {
+      "from": {
+        "name": "Marrakech",
+        "code": "RAK",
+        "country": "MA",
+        "lat": 31.63,
+        "lon": -7.981
+      },
+      "to": {
+        "name": "Essaouira",
+        "code": "ESU",
+        "country": "MA",
+        "lat": 31.513,
+        "lon": -9.77
+      },
+      "mode": "coach",
+      "minutes": 180,
+      "priceEur": [
+        9,
+        12
+      ],
+      "both": true,
+      "operator": "Supratours / CTM",
+      "book": "https://www.supratours.ma",
+      "note": "Supratours runs about 6 buses a day (100 to 125 MAD), CTM about 1 a day (105 MAD). Small fee for checked luggage.",
+      "sources": [
+        "https://www.asiaodysseytravel.com/morocco/marrakech-to-essaouira.html",
+        "https://www.seat61.com/train-travel-in-morocco.htm"
+      ],
+      "confidence": "medium"
+    },
+    {
+      "from": {
+        "name": "Fes",
+        "code": "FEZ",
+        "country": "MA",
+        "lat": 34.033,
+        "lon": -5
+      },
+      "to": {
+        "name": "Chefchaouen",
+        "code": null,
+        "country": "MA",
+        "lat": 35.171,
+        "lon": -5.27
+      },
+      "mode": "coach",
+      "minutes": 260,
+      "priceEur": [
+        7,
+        10
+      ],
+      "both": true,
+      "operator": "CTM",
+      "book": "https://www.ctm.ma",
+      "note": "CTM, 4 buses a day from the Fes CTM station in the Ville Nouvelle, 4 h 10 to 4 h 50. Sells out, so book ahead with passport details.",
+      "sources": [
+        "https://malika-in-morocco.com/?p=1493"
+      ],
+      "confidence": "medium"
+    },
+    {
+      "from": {
+        "name": "Marrakech",
+        "code": "RAK",
+        "country": "MA",
+        "lat": 31.63,
+        "lon": -7.981
+      },
+      "to": {
+        "name": "Fes",
+        "code": "FEZ",
+        "country": "MA",
+        "lat": 34.033,
+        "lon": -5
+      },
+      "mode": "train",
+      "minutes": 390,
+      "priceEur": [
+        20,
+        30
+      ],
+      "both": true,
+      "operator": "ONCF (Al Atlas)",
+      "book": "https://www.oncf-voyages.ma",
+      "note": "Direct Al Atlas trains via Casablanca and Rabat, about 6 h 30. High-speed line works until end 2027 can change timetables; check ONCF.",
+      "sources": [
+        "https://www.rome2rio.com/Train/Marrakesh/F%C3%A8s"
+      ],
+      "confidence": "medium"
+    },
+    {
+      "from": {
+        "name": "Casablanca",
+        "code": "CMN",
+        "country": "MA",
+        "lat": 33.573,
+        "lon": -7.59
+      },
+      "to": {
+        "name": "Marrakech",
+        "code": "RAK",
+        "country": "MA",
+        "lat": 31.63,
+        "lon": -7.981
+      },
+      "mode": "train",
+      "minutes": 159,
+      "priceEur": [
+        9,
+        12
+      ],
+      "both": true,
+      "operator": "ONCF (Al Atlas)",
+      "book": "https://www.oncf-voyages.ma",
+      "note": "Al Atlas from Casa Voyageurs, roughly hourly, about 2 h 40. Dynamic fares, from about 49 MAD booked early. Line works until 2027 can shift times.",
+      "sources": [
+        "https://www.rome2rio.com/Train/Casablanca/Marrakesh",
+        "https://www.andybtravels.com/?p=33993"
+      ],
+      "confidence": "medium"
+    },
+    {
+      "from": {
+        "name": "Tangier",
+        "code": "TNG",
+        "country": "MA",
+        "lat": 35.76,
+        "lon": -5.834
+      },
+      "to": {
+        "name": "Casablanca",
+        "code": "CMN",
+        "country": "MA",
+        "lat": 33.573,
+        "lon": -7.59
+      },
+      "mode": "train",
+      "minutes": 130,
+      "priceEur": [
+        9,
+        21
+      ],
+      "both": true,
+      "operator": "ONCF (Al Boraq)",
+      "book": "https://www.oncf-voyages.ma",
+      "note": "Al Boraq high-speed, hourly from 06:00, Tanger Ville to Casa Voyageurs. 2nd class 99 to 224 MAD. Booking opens 3 months ahead.",
+      "sources": [
+        "https://www.seat61.com/train-travel-in-morocco.htm",
+        "https://www.rome2rio.com/Train/Tangier/Casablanca"
+      ],
+      "confidence": "high"
+    },
+    {
+      "from": {
+        "name": "Tangier",
+        "code": "TNG",
+        "country": "MA",
+        "lat": 35.76,
+        "lon": -5.834
+      },
+      "to": {
+        "name": "Tarifa",
+        "code": null,
+        "country": "ES",
+        "lat": 36.013,
+        "lon": -5.604
+      },
+      "mode": "ferry",
+      "minutes": 60,
+      "priceEur": [
+        27,
+        42
+      ],
+      "both": true,
+      "operator": "Baleària / AML (Africa Morocco Link)",
+      "book": "https://www.ferryhopper.com/es/ferry-routes/direct/ferry-tarifa-tanger",
+      "note": "Fast ferry from Tanger Ville port in the city centre, near hourly in high season. Baleària replaced FRS in May 2025 and AML replaced Inter Shipping.",
+      "sources": [
+        "https://www.ferryhopper.com/es/ferry-routes/direct/ferry-tarifa-tanger",
+        "https://www.aferry.com/es-es/tarifa-tangier/",
+        "https://andalucia.com/node/9682"
+      ],
+      "confidence": "high"
+    }
+  ]
+}

@@ -18,6 +18,7 @@
 // says where its price came from and when it was seen, and ground legs are marked estimated. A
 // caller confirms the winners live before anyone books.
 import citiesJson from "@/public/data/cities.json";
+import { OVERLAND, OVERLAND_GENERATED, overlandArrival, overlandTown } from "./overland";
 import countriesJson from "@/public/data/countries.json";
 import { head } from "@vercel/blob";
 import postgres from "postgres";
@@ -109,7 +110,7 @@ const COUNTRIES = countriesJson as unknown as Record<string, CountryInfo>;
 const unsafe = (cc: string) => COUNTRIES[cc]?.advisory?.warning === true;
 
 /** One flight edge in memory: the stored fields, the two cities, the day numbers, where the price came from. */
-export type FlightEdge = RawEdge & { fc: string; tc: string; dn: number; an: number; src: "graph" | "memory" | "tp"; /** A Travelpayouts fare moved this many days off the day it was seen (an estimate for this day). */ flex?: number };
+export type FlightEdge = RawEdge & { fc: string; tc: string; dn: number; an: number; src: "graph" | "memory" | "tp" | "overland"; /** A Travelpayouts fare moved this many days off the day it was seen (an estimate for this day). */ flex?: number; /** An overland link (lib/overland.ts): how it goes. */ mode?: "train" | "coach" | "ferry" };
 export type FlightGraph = {
   edges: FlightEdge[];
   /** `${from city}|${day number}` → edge indexes, cheapest first. */
@@ -121,6 +122,8 @@ export type FlightGraph = {
   fromMemory: number;
   /** Travelpayouts' cached fares (the breadth), with their one-day-either-side estimates. */
   fromTp: number;
+  /** Overland links where no timetable is public (lib/overland.ts), one a day. */
+  fromOverland: number;
   loadedAt: string;
   loadMs: number;
   /** No manifest, no shard, or a shard that could not be read: kept a minute, not ten, so a Blob hiccup heals. */
@@ -131,6 +134,8 @@ const CACHE_MS = 10 * 60_000;
 /** The nightly Travelpayouts map (scripts/ingest/tp-edges.ts) and what a fare costs a day off the day it was seen. */
 const TP_LATEST = "graph/tp/latest.json";
 const TP_FLEX_EURO = 4;
+/** Days ahead the overland links are laid out for, every day. */
+const OVERLAND_DAYS = 100;
 const THIN_CACHE_MS = 60_000;
 const graphCache = new TtlLru<FlightGraph>(2, CACHE_MS);
 const graphLoads = new InFlight<FlightGraph>();
@@ -302,8 +307,19 @@ async function buildGraph(root: string): Promise<FlightGraph> {
       }
     }
   }
-  const edges = [...best.values()];
-  for (const e of edges) e.src === "graph" ? fromGraph++ : e.src === "memory" ? fromMemory++ : fromTp++;
+  // Overland links (lib/overland.ts): every day of the map, a typical fare (the middle of the range), never over
+  // anything else; kept under keys of their own, so a bus and a flight between the same two cities both stay.
+  const ovEdges: FlightEdge[] = [];
+  for (let n = todayN; n <= todayN + OVERLAND_DAYS; n++) {
+    const d = dayIso(n);
+    for (const l of OVERLAND) {
+      const an = overlandArrival(l, n);
+      ovEdges.push({ f: l.from, t: l.to, d, h: l.overnight ? "20:00" : "", a: dayIso(an), p: l.price, m: l.minutes, s: 0, c: l.operator, u: l.book, w: OVERLAND_GENERATED, fc: l.from, tc: l.to, dn: n, an, src: "overland", mode: l.mode });
+    }
+  }
+  const edges = [...best.values(), ...ovEdges];
+  let fromOverland = 0;
+  for (const e of edges) e.src === "graph" ? fromGraph++ : e.src === "memory" ? fromMemory++ : e.src === "tp" ? fromTp++ : fromOverland++;
   edges.sort((a, b) => a.p - b.p);
   const byFromDay = new Map<string, number[]>();
   edges.forEach((e, i) => {
@@ -321,11 +337,12 @@ async function buildGraph(root: string): Promise<FlightGraph> {
     fromGraph,
     fromMemory,
     fromTp,
+    fromOverland,
     loadedAt: new Date().toISOString(),
     loadMs: Date.now() - t0,
     thin: !manifest || !shards.length || shards.length < entries.length,
   };
-  console.log(`flight graph: ${edges.length} edges (${fromGraph} graph from ${shards.length} shards of ${date || "none"}, ${fromMemory} memory, ${fromTp} Travelpayouts), ${(g.bytes / 1024).toFixed(0)} KB, ${g.loadMs} ms`);
+  console.log(`flight graph: ${edges.length} edges (${fromGraph} graph from ${shards.length} shards of ${date || "none"}, ${fromMemory} memory, ${fromTp} Travelpayouts, ${fromOverland} overland), ${(g.bytes / 1024).toFixed(0)} KB, ${g.loadMs} ms`);
   return g;
 }
 
@@ -351,6 +368,8 @@ export async function loadFlightGraph(root = process.env.FLIGHT_GRAPH_PREFIX?.tr
 export function placeOf(code: string): { code: string; name: string; country: string; lat: number; lon: number } | null {
   const c = CITIES[code];
   if (c) return { code, name: c.name, country: c.country, lat: c.lat, lon: c.lon };
+  const t = overlandTown(code);
+  if (t) return t;
   const g = resolveGateway(code);
   return g ? { code, name: g.label, country: g.country, lat: g.lat, lon: g.lon } : null;
 }
@@ -475,7 +494,7 @@ export type GraphLeg = {
   carrier?: string;
   url?: string;
   stops?: number;
-  source: "graph" | "memory" | "tp" | "ground";
+  source: "graph" | "memory" | "tp" | "overland" | "ground";
   /** When the price was seen (flights). */
   seen?: string;
   /** A Travelpayouts fare seen this many days away from this leg's day: an estimate for this day. */
@@ -719,7 +738,7 @@ function alternativesTo(g: FlightGraph, i: number): NonNullable<GraphLeg["altern
 }
 
 const flightLeg = (e: FlightEdge): GraphLeg => ({
-  kind: "fly",
+  kind: e.mode ?? "fly",
   from: e.f,
   fromName: placeOf(e.fc)?.name ?? e.f,
   to: e.t,
@@ -735,7 +754,7 @@ const flightLeg = (e: FlightEdge): GraphLeg => ({
   source: e.src,
   seen: e.w,
   // A cached Aviasales fare is not a live quote: shown with a ~, and Search confirms it live before calling it found.
-  ...(e.src === "tp" ? { estimated: true } : {}),
+  ...(e.src === "tp" || e.src === "overland" ? { estimated: true } : {}),
   ...(e.flex ? { offDay: e.flex } : {}),
 });
 const groundLeg = (from: string, to: string, day: number, link: { minutes: number; mode: string; km: number }): GraphLeg => ({
@@ -751,6 +770,19 @@ const groundLeg = (from: string, to: string, day: number, link: { minutes: numbe
   estimated: true,
   source: "ground",
 });
+/**
+ * The home end of an edge: a home airport for a flight; for an overland link (a bus, a train, a ferry), the home city
+ * it leaves from or reaches, its centre reached by road from the door (a coach leaves from a town, not an airport).
+ */
+function homeEndOf(code: string, mode: FlightEdge["mode"], homeByCode: Map<string, HomeAirport>, homeCitySet: Set<string>, origin: { lat: number; lon: number }): HomeAirport | undefined {
+  if (!mode) return homeByCode.get(code);
+  if (!homeCitySet.has(code)) return undefined;
+  const p = placeOf(code);
+  if (!p) return undefined;
+  const km = haversineKm(origin.lat, origin.lon, p.lat, p.lon);
+  return { code, city: code, name: `${p.name} centre`, minutes: km < 3 ? 10 : driveMinutes(km), km: Math.round(km), price: km < 15 ? Math.max(1, Math.round(km * EURO_PER_KM)) : groundPrice(km) };
+}
+
 const doorLeg = (h: HomeAirport, label: string, out: boolean, day: number): GraphLeg => ({
   kind: "ground",
   from: out ? "HOME" : h.code,
@@ -808,6 +840,7 @@ export function cheapestTripsIn(g: FlightGraph, q: TripsQuery): TripsResult {
 
   const homeByCode = new Map(homes.map((h) => [h.code, h]));
   const homeCities = [...new Set(homes.map((h) => h.city))];
+  const homeCitySet = new Set(homeCities);
   /** The door's own city: a train or coach that reaches it closes the trip. */
   const doorCity = nearestCity(q.origin.lat, q.origin.lon, 40);
   // A*: every label is ordered by its cost plus the cheapest way home its city could possibly have (relaxedHome).
@@ -878,7 +911,7 @@ export function cheapestTripsIn(g: FlightGraph, q: TripsQuery): TripsResult {
     for (let d = fromN; d <= toN - minNights; d++) {
       for (const i of g.byFromDay.get(`${city}|${d}`) ?? []) {
         const e = g.edges[i];
-        const h = homeByCode.get(e.f);
+        const h = homeEndOf(e.f, e.mode, homeByCode, homeCitySet, q.origin);
         if (!h || !landable(e.tc, []) || e.an + lo > toN) continue;
         const euros = h.price + e.p;
         const minutes = h.minutes + e.m;
@@ -937,12 +970,15 @@ export function cheapestTripsIn(g: FlightGraph, q: TripsQuery): TripsResult {
     // Flights out of here today: home, or on to a new place.
     for (const i of g.byFromDay.get(`${l.city}|${l.day}`) ?? []) {
       const e = g.edges[i];
-      const h = homeByCode.get(e.t);
+      if (e.mode && groundMax <= 0) continue;
+      const h = homeEndOf(e.t, e.mode, homeByCode, homeCitySet, q.origin);
       if (h) {
         const flown = e.an - l.start;
         if (flown >= minNights && flown <= maxNights && e.an <= toN) finish(li, [flightLeg(e), doorLeg(h, q.origin.label, false, e.an)], e.an);
         continue;
       }
+      // An overland link is a train, coach or ferry: off with them when the traveller wants flights only.
+      if (e.mode && groundMax <= 0) continue;
       if (l.places >= maxPlaces || !landable(e.tc, l.visited)) continue;
       if (e.an + lo > toN || e.an + lo - l.start > maxNights) continue;
       const euros = l.euros + e.p;
@@ -991,15 +1027,16 @@ export function cheapestTripsIn(g: FlightGraph, q: TripsQuery): TripsResult {
       }
     }
     legs.push(...d.close);
-    const flights = legs.filter((x) => x.kind === "fly").reduce((a, x) => a + x.price, 0);
-    const ground = legs.filter((x) => x.kind !== "fly").reduce((a, x) => a + x.price, 0);
+    const flights = legs.filter((x) => x.kind === "fly" || x.source === "overland").reduce((a, x) => a + x.price, 0);
+    const ground = legs.filter((x) => x.kind !== "fly" && x.source !== "overland").reduce((a, x) => a + x.price, 0);
+    const overland = legs.filter((x) => x.source === "overland").length;
     const start = chain[0]?.start ?? fromN;
     const flown = legs.filter((x) => x.kind === "fly");
     const memory = flown.filter((x) => x.source === "memory").length;
     const tpLegs = flown.filter((x) => x.source === "tp").length;
     const oldest = flown.map((x) => x.seen ?? "").sort()[0];
     const why = [
-      `${flights} euro in ${flown.length} flight${flown.length === 1 ? "" : "s"}, about ${ground} euro by land (estimated at 0.10 euro per km)`,
+      `${flights} euro in tickets (${flown.length} flight${flown.length === 1 ? "" : "s"}${overland ? `, ${overland} bus, train or ferry at a typical fare` : ""}), about ${ground} euro by land to and from them (estimated at 0.10 euro per km)`,
       `${stops.map((s) => `${s.name} ${s.nights}`).join(", ")} night${stops.length === 1 && stops[0]?.nights === 1 ? "" : "s"}`,
       `prices from the ${memory === flown.length ? "fare memory" : memory ? "nightly graph and the fare memory" : "nightly graph"}, the oldest seen ${seenAgo(oldest)}; confirm live before booking`,
       ...(tpLegs ? [`${tpLegs} of the flights ${tpLegs === 1 ? "is a recent Aviasales fare" : "are recent Aviasales fares"} (an estimate, not checked live)`] : []),
@@ -1096,6 +1133,7 @@ export function everywhereIn(g: FlightGraph, q: EverywhereQuery): EverywhereResu
   if (!homes.length) return result([], `no airport of ${home} within ${HOME_GROUND_MAX_MIN / 60} h of ${q.origin.label} by land`);
   const homeByCode = new Map(homes.map((h) => [h.code, h]));
   const homeCities = [...new Set(homes.map((h) => h.city))];
+  const homeCitySet = new Set(homeCities);
 
   // The way out: per destination city and landing day, the cheapest flight from a home airport plus its door
   // leg. Kept per landing day, not per city, because with flex the way home must leave after the way out lands.
@@ -1105,7 +1143,7 @@ export function everywhereIn(g: FlightGraph, q: EverywhereQuery): EverywhereResu
     for (let d = dep - flex; d <= dep + flex; d++)
       for (const i of g.byFromDay.get(`${city}|${d}`) ?? []) {
         const e = g.edges[i];
-        const h = homeByCode.get(e.f);
+        const h = homeEndOf(e.f, e.mode, homeByCode, homeCitySet, q.origin);
         if (!h) continue;
         const p = placeOf(e.tc);
         if (!p || p.country === home || !countryAllowed(p.country, exclude) || avoid.countries.has(p.country) || avoid.cities.has(e.tc) || unsafe(p.country)) continue;
@@ -1124,7 +1162,7 @@ export function everywhereIn(g: FlightGraph, q: EverywhereQuery): EverywhereResu
       let best: Way | null = null;
       for (const i of g.byFromDay.get(`${city}|${d}`) ?? []) {
         const e = g.edges[i];
-        const h = homeByCode.get(e.t);
+        const h = homeEndOf(e.t, e.mode, homeByCode, homeCitySet, q.origin);
         if (!h) continue;
         const price = e.p + h.price;
         if (!best || price < best.price) best = { legs: [flightLeg(e), doorLeg(h, q.origin.label, false, e.an)], price, day: d };
@@ -1151,7 +1189,7 @@ export function everywhereIn(g: FlightGraph, q: EverywhereQuery): EverywhereResu
     for (let d = back - flex; d <= back + flex; d++)
       for (const [k, list] of g.byFromDay) {
         if (!k.endsWith(`|${d}`)) continue;
-        if (list.some((i) => homeByCode.has(g.edges[i].t))) homeBound.add(k.slice(0, k.indexOf("|")));
+        if (list.some((i) => !!homeEndOf(g.edges[i].t, g.edges[i].mode, homeByCode, homeCitySet, q.origin))) homeBound.add(k.slice(0, k.indexOf("|")));
       }
 
   const cities: EverywhereCity[] = [];

@@ -27,6 +27,7 @@ import { driveMinutes, flightMinutes, haversineKm } from "./geo";
 import { reachFrom } from "./ground";
 import { kiwiDate, kiwiStats, kiwiThrottled, searchFlight, THROTTLED_MESSAGE, type KiwiItinerary } from "./kiwi";
 import { TtlLru } from "./memo";
+import { overlandFrom, overlandTown } from "./overland";
 import { currentRun, roughly, step } from "./run-log";
 import type { Airport, City, CityPlaces, CountryInfo, HeritageRow } from "./types";
 import { findCityCode, REGIONS, resolveCountries, wishTilt } from "./wild";
@@ -392,7 +393,7 @@ function nearestCity(lat: number, lon: number, maxKm = 25): string | null {
   return best;
 }
 
-type GroundLink = { code: string; minutes: number; mode: string };
+type GroundLink = { code: string; minutes: number; mode: string; /** Overland links (lib/overland.ts): a typical fare, overnight or not, where to book. */ price?: number; overnight?: boolean; book?: string; operator?: string };
 /** Ground reaches across requests: a five-hour Dijkstra over 16,000 stations is ~40 ms, and the cheap cities repeat. */
 const reachMemo = new TtlLru<GroundLink[]>(128, 30 * 60_000);
 function groundFrom(lat: number, lon: number, maxMinutes: number, own: string | null): GroundLink[] {
@@ -619,7 +620,12 @@ export async function walkTrips(p: WalkParams): Promise<WalkResult> {
     return all.filter((l) => l.code !== own);
   };
   /** The ground graph's reach, or nothing when ground is off; the named towns join the cities. */
-  const ground = (lat: number, lon: number, own: string | null): GroundLink[] => (groundOff ? [] : [...groundFrom(lat, lon, maxGroundMin, own), ...townLinks(lat, lon, own)]);
+  const ground = (lat: number, lon: number, own: string | null): GroundLink[] => (groundOff ? [] : [...groundFrom(lat, lon, maxGroundMin, own), ...townLinks(lat, lon, own), ...overlandLinks(own)]);
+  /** The overland links out of a stop (lib/overland.ts): sleeper buses, trains and ferries where no timetable is public, at their typical fare; not held to maxGroundMin, since an overnight bus is the point. */
+  function overlandLinks(own: string | null): GroundLink[] {
+    if (!own) return [];
+    return overlandFrom(own).map((l) => ({ code: l.to, minutes: l.minutes, mode: l.mode === "train" ? "rail" : l.mode, price: l.price, overnight: l.overnight, book: l.book, operator: l.operator }));
+  }
   /** The longest flight allowed, in minutes door to door (Infinity without a cap). */
   const maxFlyMin = p.maxFlightHours && Number.isFinite(p.maxFlightHours) && p.maxFlightHours > 0 ? p.maxFlightHours * 60 : Infinity;
   const tradeoff: Tradeoff = p.tradeoff ?? "price";
@@ -632,7 +638,7 @@ export async function walkTrips(p: WalkParams): Promise<WalkResult> {
   const spot = (code: string): Spot | undefined => {
     const c = CITIES[code];
     if (c) return c;
-    const t = towns.get(code);
+    const t = towns.get(code) ?? overlandTown(code);
     return t ? { name: t.name, country: t.country, lat: t.lat, lon: t.lon, airports: [], town: true } : undefined;
   };
   const townCode = (s: string): string | undefined => {
@@ -1495,8 +1501,8 @@ export async function walkTrips(p: WalkParams): Promise<WalkResult> {
         .filter((g) => landable(g.code, s, true))
         .map((g) => {
           const c = spot(g.code)!;
-          const leg: WalkLeg = { kind: kindOfMode(g.mode), from: s.city, fromName: s.name, to: g.code, toName: c.name, date: a, minutes: g.minutes, price: groundPrice(haversineKm(s.lat, s.lon, c.lat, c.lon)), estimated: true, source: "ground" };
-          return { edge: { to: g.code, leg, arrive: a } as Edge, cost: leg.price + hv * chargedHours(leg.kind, g.minutes) - bonus(g.code, s), must: must.includes(g.code) };
+          const leg: WalkLeg = { kind: kindOfMode(g.mode), from: s.city, fromName: s.name, to: g.code, toName: c.name, date: a, minutes: g.minutes, price: g.price ?? groundPrice(haversineKm(s.lat, s.lon, c.lat, c.lon)), estimated: true, source: "ground", ...(g.book ? { url: g.book } : {}), ...(g.operator ? { carrier: g.operator } : {}) };
+          return { edge: { to: g.code, leg, arrive: g.overnight ? addDays(a, 1) : a } as Edge, cost: leg.price + hv * chargedHours(leg.kind, g.minutes) - bonus(g.code, s), must: must.includes(g.code) };
         })
         .sort((x, y) => x.cost - y.cost);
       let groundUsed = 0;
