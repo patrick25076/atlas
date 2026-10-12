@@ -3815,3 +3815,191 @@ textarea.search.wishes {
 .savedsearch .meta .iconbtn:focus-visible {
   opacity: 1;
 }
+
+/* ---------- phones and touch screens: sizes for a thumb, no zoom, the notch, the keyboard ----------
+   Last in the file so it wins over the earlier phone rules it refines. dvh is the height Safari
+   shows (vh counts the space under its address bar); --kb is the on-screen keyboard (Globe.tsx). */
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+@media (pointer: coarse), (max-width: 720px) {
+  html,
+  body {
+    -webkit-tap-highlight-color: transparent;
+    overscroll-behavior: none;
+  }
+  button,
+  a,
+  summary,
+  label,
+  [role="button"],
+  [role="tab"],
+  [role="option"] {
+    touch-action: manipulation;
+  }
+  /* iOS zooms into any field under 16px when it gets focus, and stays zoomed. */
+  input:not([type="range"]):not([type="checkbox"]):not([type="radio"]),
+  textarea,
+  select {
+    font-size: 16px !important;
+  }
+  .tab {
+    min-height: 44px;
+  }
+  .chip {
+    min-height: 38px;
+    display: inline-flex;
+    align-items: center;
+  }
+  .iconbtn {
+    width: 40px;
+    height: 40px;
+  }
+  .stepper button {
+    width: 40px;
+    height: 40px;
+  }
+  .popover .opt {
+    min-height: 44px;
+  }
+  .guidenav a {
+    min-height: 36px;
+    display: inline-flex;
+    align-items: center;
+  }
+  .linkbtn {
+    min-height: 32px;
+  }
+  .prefs .switch button {
+    min-height: 40px;
+  }
+}
+@media (max-width: 720px) {
+  .topbar {
+    top: max(10px, env(safe-area-inset-top));
+    left: max(10px, env(safe-area-inset-left));
+    right: max(10px, env(safe-area-inset-right));
+  }
+  .cmdbar {
+    top: calc(54px + env(safe-area-inset-top));
+    left: max(10px, env(safe-area-inset-left));
+    right: max(10px, env(safe-area-inset-right));
+    height: 44px;
+  }
+  .askbar input {
+    align-self: stretch;
+  }
+  .askbar button {
+    height: 36px;
+    padding: 0 16px;
+    font-size: 14px;
+  }
+  .panel {
+    height: 60vh;
+    height: calc(60dvh - var(--kb, 0px) * 0.4);
+    bottom: var(--kb, 0px);
+    padding-bottom: max(12px, env(safe-area-inset-bottom));
+    will-change: height;
+  }
+  .panel.peek {
+    height: calc(150px + env(safe-area-inset-bottom));
+  }
+  .panel.full {
+    height: calc(100vh - var(--topbar) - 8px);
+    height: calc(100dvh - var(--topbar) - 8px - env(safe-area-inset-top) - var(--kb, 0px));
+  }
+  /* The handle: a strip as wide as the sheet to grab, the bar drawn in the middle of it. */
+  .handle {
+    position: relative;
+    width: 100%;
+    height: 24px;
+    margin: -4px 0 0;
+    background: transparent;
+    cursor: grab;
+    touch-action: none;
+  }
+  .handle::after {
+    content: "";
+    position: absolute;
+    left: 50%;
+    top: 8px;
+    width: 52px;
+    height: 6px;
+    margin-left: -26px;
+    border-radius: 6px;
+    background: rgba(255, 255, 255, 0.32);
+  }
+  /* Menus from the top bar: solid enough to read over the sheet, scrolling inside themselves. */
+  .popover,
+  .pillwrap .popover,
+  .pillwrap .popover.prefspop {
+    top: calc(100px + env(safe-area-inset-top));
+    max-height: calc(100vh - 112px);
+    max-height: calc(100dvh - 112px - env(safe-area-inset-top) - var(--kb, 0px));
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    background: #0a0d18;
+  }
+  .cmdlist {
+    max-height: calc(100dvh - 120px - env(safe-area-inset-top) - var(--kb, 0px));
+    overscroll-behavior: contain;
+  }
+  .guide {
+    padding-top: env(safe-area-inset-top);
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  .mapcards {
+    bottom: calc(60dvh + 8px);
+  }
+  .mapcardbody {
+    max-height: 34dvh;
+  }
+}
+@media (pointer: coarse) {
+  /* A price tag on the globe is small; a margin around it takes the tap too. */
+  .tag::before {
+    content: "";
+    position: absolute;
+    inset: -8px -4px;
+  }
+}
+/* A phone on its side: the desktop layout, but only ~390px tall. The command line (the Search
+   tab does the same) gives its row back to the panel, and the top row tightens. */
+@media (max-height: 520px) and (min-width: 721px) and (pointer: coarse) {
+  :root {
+    --topbar: 52px;
+  }
+  .topbar {
+    top: max(6px, env(safe-area-inset-top));
+    height: 44px;
+  }
+  .cmdbar {
+    display: none;
+  }
+  .panel {
+    top: calc(var(--topbar) + 6px);
+    bottom: max(8px, env(safe-area-inset-bottom));
+    left: max(12px, env(safe-area-inset-left));
+    padding: 10px 12px;
+    gap: 8px;
+  }
+  .provenance {
+    display: none;
+  }
+}
+@media (pointer: coarse) {
+  .maplibregl-ctrl-group button {
+    width: 40px;
+    height: 40px;
+  }
+  .askbar {
+    height: 44px;
+  }
+  .askbar input {
+    align-self: stretch;
+  }
+  .askbar button {
+    height: 36px;
+  }
+}

@@ -25,6 +25,8 @@ export const viewport: Viewport = {
   initialScale: 1,
   maximumScale: 1,
   viewportFit: "cover",
+  // Android shrinks the page above the keyboard, so the sheet's input stays in view (iOS: --kb in globals.css).
+  interactiveWidget: "resizes-content",
 };
 
 // Travelpayouts Drive: verifies the site and turns outbound booking links into commission

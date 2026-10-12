@@ -142,6 +142,10 @@ export default function CommandBar({ onRun, busy, onHelp }: { onRun: (c: Command
         aria-controls="cmdlist"
         aria-autocomplete="list"
         role="combobox"
+        enterKeyHint="search"
+        autoComplete="off"
+        autoCorrect="off"
+        spellCheck={false}
         onChange={(e) => {
           setText(e.target.value);
           setOpen(true);

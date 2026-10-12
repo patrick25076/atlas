@@ -37,9 +37,9 @@ const SECTIONS: Section[] = [
     title: "The list and the globe",
     body: [
       "Results arrive as they are found, cheapest first (your trip style can switch to balanced or comfort). Each card shows the price, the route with its planes and trains, the dates, the nights in each place and the hours of travel.",
-      "The globe shows the same list as price tags. Hover a card or a tag to see that trip's route; the chips under the bar (direct only, shorter legs, cities, trains, events on, new countries, a price cap) filter at once, without a new search.",
+      "The globe shows the same list as price tags. Hover a card or a tag (on a phone, tap it) to see that trip's route; the chips under the bar (direct only, shorter legs, cities, trains, events on, new countries, a price cap) filter at once, without a new search.",
     ],
-    tryText: "Hover a card, then a price tag on the globe.",
+    tryText: "Hover or tap a card, then a price tag on the globe.",
   },
   {
     id: "trip",

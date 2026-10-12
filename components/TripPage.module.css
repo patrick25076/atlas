@@ -1010,3 +1010,55 @@ a.eventName:hover {
     transition: none;
   }
 }
+
+/* Phones and touch screens: thumb-sized controls, readable small print. */
+@media (pointer: coarse), (max-width: 720px) {
+  .back {
+    height: 40px;
+    padding: 0 14px 0 8px;
+  }
+  .book {
+    height: 36px;
+    padding: 0 14px;
+    font-size: 13.5px;
+  }
+  .chip {
+    height: 38px;
+    line-height: 36px;
+  }
+  .suggest {
+    padding: 10px 14px;
+  }
+  .linkBtn,
+  .more {
+    display: inline-block;
+    padding: 8px 0;
+  }
+  .homeAirports summary {
+    padding: 8px 0;
+  }
+  .kicker,
+  .stripNights,
+  .tightTag,
+  .dayWk,
+  .dayNone,
+  .eventDate small,
+  .hotelBody small,
+  .credit {
+    font-size: 12px;
+  }
+  .badge,
+  .same,
+  .legend,
+  .cheaper,
+  .dearer,
+  .dockNote {
+    font-size: 12.5px;
+  }
+  .dayYours {
+    font-size: 11px;
+  }
+  .dock {
+    padding-bottom: max(10px, env(safe-area-inset-bottom));
+  }
+}

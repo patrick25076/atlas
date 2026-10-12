@@ -1490,3 +1490,49 @@ a.hop:hover {
     margin: 16mm 14mm;
   }
 }
+
+/* Phones and touch screens: thumb-sized controls, readable small print. */
+@media (pointer: coarse), (max-width: 720px) {
+  .close {
+    width: 40px;
+    height: 40px;
+  }
+  .myDelete {
+    min-width: 36px;
+    height: 36px;
+  }
+  .kicker,
+  .wishes small,
+  .bSource,
+  .stats small,
+  .chipRow > span,
+  .slot,
+  .costsHead small,
+  .myHead {
+    font-size: 12px;
+  }
+  .chipNights,
+  .hop,
+  .sources {
+    font-size: 12.5px;
+  }
+  .dayNum small {
+    font-size: 11px;
+  }
+  .tool {
+    min-height: 40px;
+    padding: 9px 14px;
+  }
+  .iconOnly {
+    min-width: 40px;
+    justify-content: center;
+  }
+  a.hop {
+    min-height: 34px;
+    padding: 6px 10px;
+  }
+  .bTitle a {
+    display: inline-block;
+    padding: 4px 0;
+  }
+}

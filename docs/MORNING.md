@@ -24,6 +24,11 @@ access code._
    nights in November, direct, a train between two cities") and refine it ("cheaper", "a
    week later"). Its cards are the same cards.
 6. **My trips.** Saved plans and searches.
+7. **On a phone.** The panel is a sheet: drag its handle (or flick it) between a peek, half and
+   full; tap the handle to open it fully. The filter chips swipe sideways. Fields no longer
+   make iOS zoom in, every button is thumb-sized, the sheet stays above the keyboard and clear
+   of the notch and the home bar, and the globe draws at 30 frames a second to save battery.
+   On its side the phone gets the wide layout without the command line.
 
 **What changed under it.** The Deals, Explore and Trips tabs and their modes are gone; old
 links land on Search. Two-city trips and loops now come out of the price graph properly: a

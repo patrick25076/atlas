@@ -1673,6 +1673,7 @@ export default function ChatPanel(p: Props) {
           rows={1}
           // The chat route refuses a message past 4,000 characters (app/api/chat/route.ts); the box stops there first.
           maxLength={4000}
+          enterKeyHint="send"
           placeholder={listening ? "Listening…" : busy ? "Searching… you can type the next thing" : "Where, when, how long, in any order"}
           value={draft}
           onChange={(e) => {

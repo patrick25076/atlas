@@ -626,9 +626,10 @@ export default function TripPage({ trip: given, query, onBack, onFocus, onItiner
         <div className={s.dockPrice}>
           <b>
             {totalIsUpper ? "at most " : ""}
-            {euro(total)}
+            {euro(Math.round(total + groundExtra))}
           </b>
           <small>
+            {groundExtra > 0 ? "door to door, " : ""}
             {shownNights} night{shownNights === 1 ? "" : "s"}, {trip.stops.length} place{trip.stops.length === 1 ? "" : "s"}
           </small>
         </div>

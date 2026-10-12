@@ -1079,3 +1079,56 @@
     height: 52px;
   }
 }
+
+/* Phones and touch screens: every control a thumb can hit, labels readable at arm's length. */
+@media (pointer: coarse), (max-width: 720px) {
+  .chip {
+    min-height: 40px;
+  }
+  .filters .chip {
+    min-height: 38px;
+  }
+  .clearBtn,
+  .combo .clearBtn,
+  .stepper button {
+    width: 40px;
+    height: 40px;
+  }
+  .advToggle {
+    min-height: 40px;
+  }
+  .sortBtn {
+    min-height: 36px;
+  }
+  /* The switch keeps its size; an invisible margin around it takes the tap. */
+  .switch::before {
+    content: "";
+    position: absolute;
+    inset: -9px -6px;
+  }
+  .fieldLabel,
+  .cardGround,
+  .badge,
+  .source {
+    font-size: 12.5px;
+  }
+}
+/* Phones (and a phone on its side): the filter chips are one row that swipes sideways, so the first trips stay in view. */
+@media (max-width: 720px), (max-height: 520px) and (pointer: coarse) {
+  .filters > .chips {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    scrollbar-width: none;
+    margin: 0 -8px;
+    padding: 2px 8px;
+    -webkit-mask-image: linear-gradient(90deg, #000 88%, transparent);
+    mask-image: linear-gradient(90deg, #000 88%, transparent);
+  }
+  .filters > .chips::-webkit-scrollbar {
+    display: none;
+  }
+  .filters > .chips > * {
+    flex: 0 0 auto;
+  }
+}

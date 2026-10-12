@@ -85,6 +85,7 @@ export default function SearchTab({ from: fromProp, prefs, been, run, active, on
     if (!sortPicked.current) setSortState(sortForTradeoff(prefs.tradeoff));
   }, [prefs.tradeoff]);
   const [collapsed, setCollapsed] = useState(false);
+  const rootRef = useRef<HTMLDivElement | null>(null);
   const [advOpen, setAdvOpen] = useState(() => !!run?.query && advancedCount(run.query) > 0);
   const [opened, setOpened] = useState<string | null>(null);
   const { state: stream, run: runStream } = useSearchStream();
@@ -136,6 +137,9 @@ export default function SearchTab({ from: fromProp, prefs, been, run, active, on
       const chips = external && raw.filters !== undefined ? raw.filters : filtersRef.current;
       if (external && raw.filters !== undefined) setFilters(raw.filters);
       setCollapsed(true);
+      // The bar folds to a summary line: start the list from the top, not from wherever the
+      // form was scrolled to (on a phone that left the chips half under the tabs).
+      requestAnimationFrame(() => rootRef.current?.closest(".searchwrap")?.scrollTo({ top: 0, behavior: "smooth" }));
       const key = runKey(q);
       if (key === lastKey.current && !opts.force) return;
       lastKey.current = key;
@@ -205,7 +209,7 @@ export default function SearchTab({ from: fromProp, prefs, been, run, active, on
 
   const idle = stream.status === "idle";
   return (
-    <div className={s.tab}>
+    <div className={s.tab} ref={rootRef}>
       <SearchBar value={draft} onChange={setDraft} onSubmit={(q) => go(q ?? draft, { force: true })} waiting={waiting} busy={!!ran && runKey(draft) === runKey(barQuery(ran))} collapsed={collapsed} onExpand={() => setCollapsed(false)} />
       {!collapsed && <AdvancedDrawer value={draft} onChange={setDraft} prefs={prefs} open={advOpen} onToggle={() => setAdvOpen((o) => !o)} />}
       {!idle && <FilterChips value={filters} onChange={setFilters} been={beenList} priceRange={priceRange} />}

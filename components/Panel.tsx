@@ -230,7 +230,9 @@ const TABS: { key: Tab; label: string }[] = [
 ];
 
 export default function Panel(p: Props) {
-  const touchY = useRef<number | null>(null);
+  const panelRef = useRef<HTMLElement | null>(null);
+  /** A drag of the sheet on a phone: where the finger and the sheet started, and the last move for its speed. */
+  const drag = useRef<{ y0: number; h0: number; y: number; t: number; v: number } | null>(null);
   // A page in front of the tabs: the itinerary, a place page, the trip page. The tabs stay mounted underneath.
   const covered = !!p.front || !!p.placePage || !!p.trip;
   const step = (dir: 1 | -1) => {
@@ -238,22 +240,62 @@ export default function Panel(p: Props) {
     const i = order.indexOf(p.sheet);
     p.onSheet(order[Math.max(0, Math.min(2, i + dir))]);
   };
+  // The sheet follows the finger and, on release, settles on the nearest of its three heights,
+  // or on the next one in the direction of a quick flick. Its CSS transition does the settling.
+  const sheetHeights = (): Record<Sheet, number> => {
+    const vh = window.visualViewport?.height ?? window.innerHeight;
+    const top = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--topbar")) || 56;
+    return { peek: 150, half: Math.round(vh * 0.6), full: Math.round(vh - top - 8) };
+  };
+  const onDragStart = (e: React.TouchEvent) => {
+    const el = panelRef.current;
+    if (!el) return;
+    const y = e.touches[0].clientY;
+    drag.current = { y0: y, h0: el.getBoundingClientRect().height, y, t: performance.now(), v: 0 };
+    el.style.transition = "none";
+  };
+  const onDragMove = (e: React.TouchEvent) => {
+    const d = drag.current;
+    const el = panelRef.current;
+    if (!d || !el) return;
+    const y = e.touches[0].clientY;
+    const now = performance.now();
+    // The speed, smoothed over the last moves so one jittery sample does not decide a flick.
+    d.v = 0.6 * ((y - d.y) / Math.max(1, now - d.t)) + 0.4 * d.v;
+    d.y = y;
+    d.t = now;
+    const hs = sheetHeights();
+    el.style.height = `${Math.round(Math.max(hs.peek - 30, Math.min(hs.full + 10, d.h0 - (y - d.y0))))}px`;
+  };
+  const onDragEnd = () => {
+    const d = drag.current;
+    const el = panelRef.current;
+    drag.current = null;
+    if (!d || !el) return;
+    const moved = d.y - d.y0;
+    el.style.transition = "";
+    el.style.height = "";
+    // A tap on the handle opens the sheet fully, or brings a full one back to half.
+    if (Math.abs(moved) < 8) return p.onSheet(p.sheet === "full" ? "half" : "full");
+    const hs = sheetHeights();
+    const h = d.h0 - moved;
+    const order: Sheet[] = ["peek", "half", "full"];
+    // A finger that stopped before lifting is a placement, not a flick.
+    const v = performance.now() - d.t > 100 ? 0 : d.v;
+    if (Math.abs(v) > 0.45) {
+      // A flick: one step past the height the drag is nearest to, in the flick's direction.
+      const nearest = order.reduce((a, b) => (Math.abs(hs[b] - h) < Math.abs(hs[a] - h) ? b : a));
+      const i = order.indexOf(nearest);
+      const up = v < 0;
+      const target = up ? (hs[nearest] > h ? nearest : order[Math.min(2, i + 1)]) : hs[nearest] < h ? nearest : order[Math.max(0, i - 1)];
+      return p.onSheet(target);
+    }
+    p.onSheet(order.reduce((a, b) => (Math.abs(hs[b] - h) < Math.abs(hs[a] - h) ? b : a)));
+  };
 
   return (
-    <aside className={`panel ${p.sheet}`}>
-      <div
-        className="handle"
-        onTouchStart={(e) => (touchY.current = e.touches[0].clientY)}
-        onTouchEnd={(e) => {
-          const y0 = touchY.current;
-          touchY.current = null;
-          if (y0 == null) return;
-          const dy = e.changedTouches[0].clientY - y0;
-          if (dy < -30) step(1);
-          else if (dy > 30) step(-1);
-          else p.onSheet(p.sheet === "full" ? "half" : "full");
-        }}
-      />
+    <aside className={`panel ${p.sheet}`} ref={panelRef}>
+      <div className="handle" role="button" aria-label={p.sheet === "full" ? "Show more of the globe" : "Open the panel"} tabIndex={-1} onTouchStart={onDragStart} onTouchMove={onDragMove} onTouchEnd={onDragEnd} onTouchCancel={onDragEnd} onClick={(e) => e.detail === 0 && step(p.sheet === "full" ? -1 : 1)} />
 
       {!covered && (
         <div className="tabs" role="tablist" aria-label="Atlas">

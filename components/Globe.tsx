@@ -292,6 +292,31 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
   tabRef.current = tab;
   const [sheet, setSheet] = useState<Sheet>("half");
   sheetRef.current = sheet;
+  // The on-screen keyboard, as CSS can use it: --kb is how much of the bottom it covers (iOS
+  // keeps the layout viewport and slides the keyboard over it, so the sheet's input would hide
+  // behind it), --vvh the height still visible. Phones only use them (globals.css).
+  useEffect(() => {
+    const vv = window.visualViewport;
+    if (!vv) return;
+    const root = document.documentElement;
+    let frame = 0;
+    const update = () => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => {
+        const kb = Math.max(0, Math.round(window.innerHeight - vv.height - vv.offsetTop));
+        root.style.setProperty("--kb", `${kb > 80 ? kb : 0}px`);
+        root.style.setProperty("--vvh", `${Math.round(vv.height)}px`);
+      });
+    };
+    update();
+    vv.addEventListener("resize", update);
+    vv.addEventListener("scroll", update);
+    return () => {
+      cancelAnimationFrame(frame);
+      vv.removeEventListener("resize", update);
+      vv.removeEventListener("scroll", update);
+    };
+  }, []);
   const [copied, setCopied] = useState(false);
   // A one-line note on the map (a command that could not run, a place not found); clears itself.
   const [notice, setNotice] = useState<string | null>(null);
@@ -1879,13 +1904,22 @@ export default function Globe({ hint }: { hint?: LocationHint | null }) {
     });
     map.on("zoom", () => setLowZoom(map.getZoom() < 3.4));
     let raf = 0;
-    const frame = () => {
+    // The animation loop (the spin, the pulse where you are, a trip's trail, the walk as it
+    // thinks). On a phone it draws at most 30 times a second: the pulses look the same and the
+    // battery, the scroll of the sheet and the touch on the globe get the rest. The spin turns
+    // by the time passed, so it keeps its speed at any frame rate (2.4 degrees a second).
+    const minGap = isPhone() ? 32 : 0;
+    let last = 0;
+    const frame = (now: number) => {
+      raf = requestAnimationFrame(frame);
+      if (now - last < minGap) return;
+      const dt = last ? Math.min(100, now - last) : 16;
+      last = now;
       if (spinRef.current) {
         const c = map.getCenter();
-        map.setCenter([c.lng + 0.04, c.lat]);
+        map.setCenter([c.lng + 0.0024 * dt, c.lat]);
       }
       render();
-      raf = requestAnimationFrame(frame);
     };
     raf = requestAnimationFrame(frame);
     mapRef.current = map;

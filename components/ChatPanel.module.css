@@ -872,3 +872,44 @@
 a.mini {
   text-decoration: none;
 }
+
+/* Phones and touch screens: thumb-sized controls, a 16px box so iOS does not zoom (globals.css). */
+@media (pointer: coarse), (max-width: 720px) {
+  .threadBtn {
+    min-height: 40px;
+  }
+  .iconBtn {
+    width: 40px;
+    height: 40px;
+  }
+  .send {
+    height: 40px;
+    padding: 0 18px;
+    font-size: 15px;
+  }
+  .chip {
+    min-height: 38px;
+    padding: 8px 14px;
+  }
+  .followups .chip {
+    font-size: 13.5px;
+    padding: 8px 12px;
+  }
+  .styleBtn {
+    min-height: 32px;
+  }
+  .textarea::placeholder {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .threadRow small,
+  .calendar th,
+  .dayHead,
+  .hopKind {
+    font-size: 12.5px;
+  }
+  .month {
+    font-size: 12px;
+  }
+}
