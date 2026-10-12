@@ -148,3 +148,21 @@ round. The model put eight Central American countries in to and "Peru and Bolivi
 several countries. San Francisco to Peru and Bolivia with Machu Picchu, Lake Titicaca and the salt flats answered in
 one search: La Paz, Uyuni by overnight coach, Puno, Cusco, Aguas Calientes, 1,208 euro. Lima to Cusco offers the
 22 h coach (26 to 66 euro) beside the 55 euro flight.
+
+## Two searches that found nothing, debugged (13 October)
+
+How: the engine room's Live tab keeps each run's question exactly as the server got it ("The question as the server
+got it") and every step. Reading the stored input, then running the same query on the dev server and the price map's
+search directly (cheapestTripsIn, with and without each rule), found these.
+
+| Search | What the engine room showed | The cause | Fixed |
+| --- | --- | --- | --- |
+| Southeast Asia, 12 to 30 nights | graph 0 trips in 18 ms; the walk "58 to 60 nights" | the Wild drawer still held 59 nights while the bar said 12 to 30, and the drawer won, silently: 58 nights do not fit the map's 35 days | the bar's range wins, the loop's nights are kept inside it and the note says so; the bar and the drawer now move together; 20 trips |
+| Anywhere, 20 to 31 October including the 26th: why not Warsaw and Gdansk | 16 trips, none to Gdansk | the map keeps one trip per sequence of cities and the day to include was checked after it: Warsaw and Gdansk on 20 to 24 October took the slot and was dropped, so 24 to 31 October was never seen | the day is a rule inside the search: 59 trips; Warsaw 3 nights and Gdansk 4 by train, 97 euro, among them |
+| (the same) | | 97 euro needs 4 nights in Warsaw, past the style's 2 to 3 a place | a short trip of several places may take one night more, at a small taste cost |
+| (the same) | | it still came 25th of a run that answers 20, below Katowice and Ostrava: the map ranks euros and hours, not what a place is worth | a run answers 30; permutations of the same places count once. Open: a place's worth in the map's ranking |
+| Georgia and Armenia | the cheapest 20 all Armenia | several countries meant "in any of them" | a stay in each (falls back, said, when no trip can) |
+
+Also: a graph step with 0 trips now says why; an empty answer is no longer cached for the hour; a mended query is
+cached under the question as asked. A regression caught by the benchmark on the way: a place's country made any stop
+in Peru count as Machu Picchu (0 trips), fixed before it shipped.

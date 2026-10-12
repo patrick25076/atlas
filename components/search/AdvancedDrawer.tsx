@@ -157,7 +157,9 @@ export default function AdvancedDrawer({ value: q, onChange, prefs, open, onTogg
     if (adv.wild) return onChange(withAdvanced(q, {}, ["wild"]));
     const fromTo = q.to.kind === "region" ? q.to.key : "";
     const region = WILD_REGIONS.some((r) => r.key === fromTo) ? fromTo : WILD_REGIONS[0].key;
-    onChange({ ...wildRegion(region, 14), shape: q.shape === "long" ? undefined : q.shape });
+    // The loop starts from the bar's most nights (two weeks when the bar's are shorter than a loop), and the bar follows.
+    const n = Math.min(WILD_NIGHTS.max, Math.max(q.nights?.[1] ?? 14, 7));
+    onChange({ ...wildRegion(region, n), nights: [Math.min(q.nights?.[0] ?? n, n), n], shape: q.shape === "long" ? undefined : q.shape });
   };
   const toggleGroup = () => {
     if (adv.group) {
@@ -237,7 +239,12 @@ export default function AdvancedDrawer({ value: q, onChange, prefs, open, onTogg
                     max={WILD_NIGHTS.max}
                     value={adv.wild.nights}
                     aria-label="Nights of the wild loop"
-                    onChange={(e) => onChange(withAdvanced(q, { wild: { region: adv.wild?.region ?? WILD_REGIONS[0].key, nights: Number(e.target.value) } }))}
+                    onChange={(e) => {
+                      // The bar's nights follow the loop's: one number for the trip, never two (a 59 here and 12 to 30 in
+                      // the bar walked 59 nights and found nothing).
+                      const n = Number(e.target.value);
+                      onChange({ ...withAdvanced(q, { wild: { region: adv.wild?.region ?? WILD_REGIONS[0].key, nights: n } }), nights: [n, n] });
+                    }}
                   />
                 </label>
               </div>

@@ -2,7 +2,7 @@
 
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import type { SearchQuery } from "@/lib/trip-result";
-import { WILD_REGIONS } from "@/lib/ui-types";
+import { WILD_NIGHTS, WILD_REGIONS } from "@/lib/ui-types";
 import { addDays, countryName, dateRange, monthLabel, monthOptions, shortDate, todayIso } from "@/lib/format";
 import s from "./search.module.css";
 
@@ -431,6 +431,11 @@ export default function SearchBar({ value: q, onChange, onSubmit, waiting, busy,
   const problem = queryProblem(q);
   const today = todayIso();
   const set = (patch: Partial<SearchQuery>) => onChange({ ...q, ...patch });
+  // New nights; with the wild loop on, its nights follow the bar's most (one number for the trip, never two).
+  const setNights = (n: [number, number]) => {
+    const wild = q.advanced?.wild;
+    set(wild ? { nights: n, advanced: { ...q.advanced, wild: { ...wild, nights: Math.max(WILD_NIGHTS.min, n[1]) } } } : { nights: n });
+  };
   const nights = q.nights ?? DEFAULT_NIGHTS;
 
   if (collapsed) {
@@ -577,9 +582,9 @@ export default function SearchBar({ value: q, onChange, onSubmit, waiting, busy,
         {!q.oneWay && !(w.kind === "dates" && w.back) && (
           <div className={s.nights}>
             <span className={s.fieldLabel}>Nights</span>
-            <Stepper label="Fewest nights" value={nights[0]} min={NIGHTS_MIN} max={NIGHTS_MAX} onChange={(n) => set({ nights: [n, Math.max(n, nights[1])] })} />
+            <Stepper label="Fewest nights" value={nights[0]} min={NIGHTS_MIN} max={NIGHTS_MAX} onChange={(n) => setNights([n, Math.max(n, nights[1])])} />
             <span className={s.to}>to</span>
-            <Stepper label="Most nights" value={nights[1]} min={NIGHTS_MIN} max={NIGHTS_MAX} onChange={(n) => set({ nights: [Math.min(n, nights[0]), n] })} />
+            <Stepper label="Most nights" value={nights[1]} min={NIGHTS_MIN} max={NIGHTS_MAX} onChange={(n) => setNights([Math.min(n, nights[0]), n])} />
           </div>
         )}
         <button

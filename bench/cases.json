@@ -436,6 +436,78 @@
       "gold": {
         "note": "2026-10-12: Osaka, Kyoto by train, Tokyo: 910 euro checked live (Kyoto has no airport; before the overland horizon went to 200 days it had no train in March)"
       }
+    },
+    {
+      "id": "anywhere-include-day",
+      "label": "Anywhere, 3 to 7 nights in a window that must include a day (the owner's Warsaw and Gdansk search)",
+      "query": {
+        "to": {
+          "kind": "anywhere"
+        },
+        "when": {
+          "kind": "window",
+          "from": "+7d",
+          "to": "+18d",
+          "include": "+13d"
+        },
+        "nights": [
+          3,
+          7
+        ],
+        "prefs": {
+          "pace": "balanced",
+          "avoid": [],
+          "taste": "mixed",
+          "groundOk": true,
+          "tradeoff": "balanced",
+          "nightsPerPlace": [
+            2,
+            3
+          ]
+        }
+      },
+      "gold": {
+        "note": "2026-10-13: 16 trips before (the include day was checked after the search, which keeps one trip per city sequence); 59 after, Warsaw 3 and Gdansk 4 by train for 97 euro among them"
+      }
+    },
+    {
+      "id": "sea-drawer-59",
+      "label": "Southeast Asia, 12 to 30 nights in the bar, the Wild drawer still at 59 nights",
+      "query": {
+        "to": {
+          "kind": "region",
+          "key": "sea"
+        },
+        "when": {
+          "kind": "window",
+          "from": "+19d",
+          "to": "+55d"
+        },
+        "nights": [
+          12,
+          30
+        ],
+        "prefs": {
+          "pace": "balanced",
+          "avoid": [],
+          "taste": "mixed",
+          "groundOk": true,
+          "tradeoff": "balanced",
+          "nightsPerPlace": [
+            2,
+            5
+          ]
+        },
+        "advanced": {
+          "wild": {
+            "nights": 59,
+            "region": "sea"
+          }
+        }
+      },
+      "gold": {
+        "note": "2026-10-12 in production: 0 trips (the walk asked for 58 to 60 nights); 2026-10-13: the bar wins, 30 nights, 20 trips"
+      }
     }
   ]
 }

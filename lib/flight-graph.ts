@@ -602,9 +602,24 @@ export type TripsQuery = {
    * (Machu Picchu is a stay in Aguas Calientes; Ollantaytambo, 30 km off, is not). The search itself is aimed at them, not filtered afterwards, so a
    * dearer trip that reaches the place is found even when twenty cheaper ones do not.
    */
-  must?: { code?: string; lat: number; lon: number; name?: string; /** Its own radius, km (a town the stops never reach: 60). */ km?: number }[];
+  must?: {
+    code?: string;
+    lat?: number;
+    lon?: number;
+    name?: string;
+    /** Its own radius, km (a town the stops never reach: 60). */
+    km?: number;
+    /** A country: any stop in it counts ("Georgia and Armenia" is a stay in each). */
+    country?: string;
+  }[];
   /** Stops in the home country are fine (the traveller named a place there: Cusco from Lima); never the home cities. */
   allowHome?: boolean;
+  /**
+   * A day every trip must include (away on it): checked inside the search, not after it. The search keeps one trip per
+   * sequence of cities, so a filter afterwards dropped Warsaw and Gdansk on 20 to 24 October and never saw the same two
+   * on 24 to 31 October, which includes the 26th (the owner's search, 2026-10-12).
+   */
+  include?: string;
 };
 
 const kindOfMode = (mode: string): GraphLeg["kind"] => (mode === "rail" ? "train" : mode === "ferry" ? "ferry" : "coach");
@@ -681,6 +696,14 @@ type Label = {
    * to the flight home): no stay, no new place, and never two passes in a row. */
   tr?: boolean;
 };
+/**
+ * On a short trip a place may take one night more than the style's most, at a price in the cost (never in a fare):
+ * Brasov to Warsaw, 4 nights, the train to Gdansk, 3 nights, home is 97 euro on 24 to 31 October, the cheapest
+ * Warsaw and Gdansk by 50 euro, and with 2 to 3 nights a place it could not be found (the owner's trip, 2026-10-12).
+ */
+const NIGHT_SLACK = 1;
+const NIGHT_SLACK_MAX_TRIP = 14;
+const NIGHT_OVER_EURO: Record<Tradeoff, number> = { price: 6, balanced: 12, comfort: 20 };
 /** Musts at the most, and how near a stop must be to count as the place. */
 const MAX_MUST = 4;
 const MUST_KM = 20;
@@ -904,6 +927,8 @@ export function cheapestTripsIn(g: FlightGraph, q: TripsQuery): TripsResult {
   const maxNights = Math.max(minNights, Math.round(q.maxNights));
   const lo = Math.max(1, Math.round(Math.min(q.nightsPerPlace[0], q.nightsPerPlace[1])));
   const hi = Math.max(lo, Math.round(Math.max(q.nightsPerPlace[0], q.nightsPerPlace[1])));
+  // Its range of nights, with one night of slack on a short trip of several places (NIGHT_SLACK).
+  const hiSoft = Math.round(q.maxNights) <= NIGHT_SLACK_MAX_TRIP && Math.round(q.maxPlaces) > 1 ? hi + NIGHT_SLACK : hi;
   const maxPlaces = Math.max(1, Math.min(12, Math.round(q.maxPlaces)));
   const minPlaces = Math.max(1, Math.min(maxPlaces, Math.round(q.minPlaces ?? 1)));
   const top = Math.max(1, Math.min(30, Math.round(q.top ?? TOP)));
@@ -913,6 +938,7 @@ export function cheapestTripsIn(g: FlightGraph, q: TripsQuery): TripsResult {
   const exclude = (q.exclude ?? []).map((c) => c.trim().toUpperCase());
   const avoid = resolveAvoid(q.avoid);
   const homes = homeAirportsFor(q.origin, home, q.homeAirports);
+  const incN = q.include ? dayNum(q.include) : null;
   const empty = (note: string): TripsResult => ({ trips: [], explored: 0, edges: g.edges.length, graphDate: g.graphDate, homeAirports: homes, ms: Date.now() - t0, note });
   if (!Number.isFinite(fromN) || !Number.isFinite(toN) || toN < fromN) return empty("from and to must be real dates, to not before from");
   if (toN - fromN < minNights) return empty(`the window ${q.from} to ${q.to} is shorter than ${minNights} nights`);
@@ -974,7 +1000,12 @@ export function cheapestTripsIn(g: FlightGraph, q: TripsQuery): TripsResult {
       b = 0;
       const p = placeOf(city);
       musts.forEach((m, i) => {
-        if ((m.code && (m.code === city || airportCity(m.code) === city)) || (p && haversineKm(p.lat, p.lon, m.lat, m.lon) <= (m.km ?? MUST_KM))) b! |= 1 << i;
+        if (
+          (m.code && (m.code === city || airportCity(m.code) === city)) ||
+          (m.country && p?.country === m.country) ||
+          (p && m.lat != null && m.lon != null && haversineKm(p.lat, p.lon, m.lat, m.lon) <= (m.km ?? MUST_KM))
+        )
+          b! |= 1 << i;
       });
       mustMemo.set(city, b);
     }
@@ -1035,7 +1066,7 @@ export function cheapestTripsIn(g: FlightGraph, q: TripsQuery): TripsResult {
     return id;
   };
   for (const city of homeCities) {
-    for (let d = fromN; d <= toN - minNights; d++) {
+    for (let d = fromN; d <= toN - minNights && (incN == null || d <= incN); d++) {
       for (const i of g.byFromDay.get(`${city}|${d}`) ?? []) {
         const e = g.edges[i];
         const h = homeEndOf(e.f, e.mode, homeByCode, homeCitySet, q.origin);
@@ -1056,6 +1087,7 @@ export function cheapestTripsIn(g: FlightGraph, q: TripsQuery): TripsResult {
   const finish = (li: number, close: GraphLeg[], endDay: number) => {
     const l = labels[li];
     if (l.places < minPlaces || (l.mm ?? 0) !== fullMask) return;
+    if (incN != null && endDay < incN) return;
     const euros = l.euros + close.reduce((a, x) => a + x.price, 0);
     const minutes = l.minutes + close.reduce((a, x) => a + x.minutes, 0);
     const cost = costOf(euros, minutes) + (l.pen ?? 0) + close.reduce((a, x) => a + (x.kind === "fly" ? stopPen(x.stops) : 0), 0);
@@ -1084,11 +1116,12 @@ export function cheapestTripsIn(g: FlightGraph, q: TripsQuery): TripsResult {
     }
     explored++;
     if (l.kind === 0) {
-      // A stay: lo to hi nights, free.
-      for (let n = lo; n <= hi; n++) {
+      // A stay: lo to hi nights, free; on a short trip of several places one night more, at a small price in the cost.
+      for (let n = lo; n <= hiSoft; n++) {
         const leave = l.day + n;
         if (leave > toN || leave - l.start > maxNights) break;
-        push({ ...l, kind: 1, day: leave, parent: li, fe: undefined, gl: undefined, leg: undefined, nights: n });
+        const over = n > hi ? (n - hi) * NIGHT_OVER_EURO[q.tradeoff ?? "price"] : 0;
+        push({ ...l, kind: 1, day: leave, parent: li, fe: undefined, gl: undefined, leg: undefined, nights: n, ...(over ? { cost: l.cost + over, pen: (l.pen ?? 0) + over } : {}) });
       }
       continue;
     }
