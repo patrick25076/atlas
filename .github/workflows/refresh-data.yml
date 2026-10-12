@@ -19,14 +19,14 @@ on:
         description: "Which set to refresh"
         type: choice
         default: daily
-        options: [daily, weekly, monthly, boards, hotels, flights, all]
+        options: [daily, weekly, monthly, boards, hotels, flights, map, bench, all]
 
 permissions:
   contents: write
 
 jobs:
   refresh:
-    if: github.event.schedule != '0 1 * * *' && inputs.set != 'boards' && inputs.set != 'hotels' && inputs.set != 'flights'
+    if: github.event.schedule != '0 1 * * *' && inputs.set != 'boards' && inputs.set != 'hotels' && inputs.set != 'flights' && inputs.set != 'map' && inputs.set != 'bench'
     runs-on: ubuntu-latest
     timeout-minutes: 90
     concurrency:
@@ -191,3 +191,53 @@ jobs:
           BLOB_READ_WRITE_TOKEN: ${{ secrets.BLOB_READ_WRITE_TOKEN }}
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
         run: pnpm ingest:hotels
+
+  # The breadth of the price map (docs/plans/one-brain.md): Travelpayouts' cache of recent Aviasales fares for about
+  # 250 departure cities, the cheapest to every place and of every day, three months ahead, into Blob
+  # (graph/tp/latest.json). Free and outside Kiwi's limit; about 1,400 calls, five minutes.
+  tp-edges:
+    if: github.event.schedule == '0 1 * * *' || inputs.set == 'map' || inputs.set == 'all'
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.9.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Read the Travelpayouts cache into the price map
+        env:
+          TRAVELPAYOUTS_TOKEN: ${{ secrets.TRAVELPAYOUTS_TOKEN }}
+          TRAVELPAYOUTS_MARKER: ${{ secrets.TRAVELPAYOUTS_MARKER }}
+          BLOB_READ_WRITE_TOKEN: ${{ secrets.BLOB_READ_WRITE_TOKEN }}
+          TP_PRODUCTION: "1"
+        run: pnpm ingest:tp-edges
+
+  # The benchmark (scripts/bench.ts): every question of bench/cases.json through the classic engines and the one
+  # brain on tonight's map, stored prices only (no live search), scored and stored as bench/latest.json for the
+  # engine room. After the flight graph and the map so it scores tonight's data.
+  bench:
+    needs: [flight-edges, tp-edges]
+    if: ${{ !cancelled() && (github.event.schedule == '0 1 * * *' || inputs.set == 'bench' || inputs.set == 'all') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.9.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Score every brain on the benchmark
+        env:
+          BLOB_READ_WRITE_TOKEN: ${{ secrets.BLOB_READ_WRITE_TOKEN }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          TRAVELPAYOUTS_MARKER: ${{ secrets.TRAVELPAYOUTS_MARKER }}
+        run: pnpm bench

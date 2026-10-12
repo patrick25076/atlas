@@ -109,7 +109,7 @@ const COUNTRIES = countriesJson as unknown as Record<string, CountryInfo>;
 const unsafe = (cc: string) => COUNTRIES[cc]?.advisory?.warning === true;
 
 /** One flight edge in memory: the stored fields, the two cities, the day numbers, where the price came from. */
-export type FlightEdge = RawEdge & { fc: string; tc: string; dn: number; an: number; src: "graph" | "memory" };
+export type FlightEdge = RawEdge & { fc: string; tc: string; dn: number; an: number; src: "graph" | "memory" | "tp"; /** A Travelpayouts fare moved this many days off the day it was seen (an estimate for this day). */ flex?: number };
 export type FlightGraph = {
   edges: FlightEdge[];
   /** `${from city}|${day number}` → edge indexes, cheapest first. */
@@ -119,6 +119,8 @@ export type FlightGraph = {
   bytes: number;
   fromGraph: number;
   fromMemory: number;
+  /** Travelpayouts' cached fares (the breadth), with their one-day-either-side estimates. */
+  fromTp: number;
   loadedAt: string;
   loadMs: number;
   /** No manifest, no shard, or a shard that could not be read: kept a minute, not ten, so a Blob hiccup heals. */
@@ -126,6 +128,9 @@ export type FlightGraph = {
 };
 
 const CACHE_MS = 10 * 60_000;
+/** The nightly Travelpayouts map (scripts/ingest/tp-edges.ts) and what a fare costs a day off the day it was seen. */
+const TP_LATEST = "graph/tp/latest.json";
+const TP_FLEX_EURO = 4;
 const THIN_CACHE_MS = 60_000;
 const graphCache = new TtlLru<FlightGraph>(2, CACHE_MS);
 const graphLoads = new InFlight<FlightGraph>();
@@ -248,7 +253,9 @@ async function shardList(root: string): Promise<{ entries: { path: string; url?:
 
 async function buildGraph(root: string): Promise<FlightGraph> {
   const t0 = Date.now();
-  const [{ entries, date, manifest }, memory] = await Promise.all([hasStore() ? shardList(root) : Promise.resolve({ entries: [], date: "", manifest: false }), memoryEdges()]);
+  // The breadth (docs/plans/one-brain.md): Travelpayouts' nightly cache of recent Aviasales fares, for the nightly root only.
+  const tpOn = root === FLIGHT_ROOT && hasStore() && process.env.ATLAS_TP_EDGES?.trim() !== "0";
+  const [{ entries, date, manifest }, memory, tpShard] = await Promise.all([hasStore() ? shardList(root) : Promise.resolve({ entries: [], date: "", manifest: false }), memoryEdges(), tpOn ? fetchShard({ path: TP_LATEST }) : Promise.resolve(null)]);
   const shards = (await Promise.all(entries.map(fetchShard))).filter((s): s is { shard: FlightShard; bytes: number } => !!s);
   const todayN = dayNum(new Date().toISOString());
   // One edge per airport pair and day. Sightings more than 12 hours apart: the newer wins, so a fare that has
@@ -277,8 +284,26 @@ async function buildGraph(root: string): Promise<FlightGraph> {
   };
   for (const s of shards) for (const e of decodeShard(s.shard)) add(e, "graph");
   for (const e of memory) add(e, "memory");
+  // Travelpayouts never stands over a Kiwi fare of the same flight and day (Kiwi's is bookable and usually newer).
+  // A fare seen on one day is also offered a day either side, TP_FLEX_EURO dearer and marked: the cheapest month fare
+  // to a place is one day of the month, and a stay of two or three nights rarely lands on exactly that day.
+  let fromTp = 0;
+  if (tpShard) {
+    const tp = decodeShard(tpShard.shard);
+    for (const e of tp) if (!best.has(`${e.f}|${e.t}|${e.d}`)) add(e, "tp");
+    for (const e of tp) {
+      for (const off of [-1, 1]) {
+        const d = dayIso(dayNum(e.d) + off);
+        const key = `${e.f}|${e.t}|${d}`;
+        if (best.has(key)) continue;
+        add({ ...e, d, a: dayIso(dayNum(e.a || e.d) + off), p: e.p + TP_FLEX_EURO }, "tp");
+        const x = best.get(key);
+        if (x) x.flex = 1;
+      }
+    }
+  }
   const edges = [...best.values()];
-  for (const e of edges) e.src === "graph" ? fromGraph++ : fromMemory++;
+  for (const e of edges) e.src === "graph" ? fromGraph++ : e.src === "memory" ? fromMemory++ : fromTp++;
   edges.sort((a, b) => a.p - b.p);
   const byFromDay = new Map<string, number[]>();
   edges.forEach((e, i) => {
@@ -292,14 +317,15 @@ async function buildGraph(root: string): Promise<FlightGraph> {
     byFromDay,
     graphDate: date,
     shards: shards.length,
-    bytes: shards.reduce((a, s) => a + s.bytes, 0),
+    bytes: shards.reduce((a, s) => a + s.bytes, 0) + (tpShard?.bytes ?? 0),
     fromGraph,
     fromMemory,
+    fromTp,
     loadedAt: new Date().toISOString(),
     loadMs: Date.now() - t0,
     thin: !manifest || !shards.length || shards.length < entries.length,
   };
-  console.log(`flight graph: ${edges.length} edges (${fromGraph} graph from ${shards.length} shards of ${date || "none"}, ${fromMemory} memory), ${(g.bytes / 1024).toFixed(0)} KB, ${g.loadMs} ms`);
+  console.log(`flight graph: ${edges.length} edges (${fromGraph} graph from ${shards.length} shards of ${date || "none"}, ${fromMemory} memory, ${fromTp} Travelpayouts), ${(g.bytes / 1024).toFixed(0)} KB, ${g.loadMs} ms`);
   return g;
 }
 
@@ -449,15 +475,17 @@ export type GraphLeg = {
   carrier?: string;
   url?: string;
   stops?: number;
-  source: "graph" | "memory" | "ground";
+  source: "graph" | "memory" | "tp" | "ground";
   /** When the price was seen (flights). */
   seen?: string;
+  /** A Travelpayouts fare seen this many days away from this leg's day: an estimate for this day. */
+  offDay?: number;
   /** Traced trips only (TripsQuery.trace): the other flights out of the same city a day either side, cheapest first. */
   alternatives?: { to: string; toName: string; date: string; price: number; minutes: number; stops: number; same: boolean }[];
 };
 export type GraphStop = { code: string; name: string; country: string; lat: number; lon: number; arrive: string; leave: string; nights: number };
 export type GraphTrip = { legs: GraphLeg[]; stops: GraphStop[]; total: number; flights: number; ground: number; hours: number; nights: number; start: string; end: string; why: string[] };
-export type TripsResult = { trips: GraphTrip[]; explored: number; edges: number; graphDate: string; homeAirports: HomeAirport[]; ms: number; note?: string; truncated?: boolean };
+export type TripsResult = { trips: GraphTrip[]; explored: number; /** Labels made, and the ms the A* bound took (traced runs read them). */ labels?: number; boundMs?: number; edges: number; graphDate: string; homeAirports: HomeAirport[]; ms: number; note?: string; truncated?: boolean };
 
 export type TripsQuery = {
   origin: { lat: number; lon: number; label: string };
@@ -555,6 +583,81 @@ type Label = {
   pen?: number;
 };
 
+/**
+ * A lower bound on what getting home costs from every city (the A* heuristic of cheapestTripsIn): a Dijkstra run
+ * backwards from the home cities over a relaxed graph that forgets dates, nights and places. Its edges are the
+ * cheapest flight cost ever seen between two cities (fare + hours at the rate + the change-of-plane euros, as a label
+ * counts them) and every train or coach a city pair could have (0.10 euro a straight-line km, what groundLeg charges,
+ * hours not counted). Forgetting a constraint can only make a way home cheaper, so the bound never overestimates and
+ * the search stays exact; it is consistent too (a shortest-path distance), so a label popped is final. A city with no
+ * way home at all gets no bound: nothing that lands there can close. Kept per graph load and home.
+ */
+const relaxedMemo = new Map<string, Map<string, number>>();
+/** Straight-line km a train or coach hop may span in the relaxed graph: more than any real reach (330 min, 720 at most). */
+const RELAXED_GROUND_KM = 900;
+function relaxedHome(g: FlightGraph, targets: string[], rate: number, stopEuro: number, ground: boolean): Map<string, number> {
+  const key = `${g.loadedAt}|${g.edges.length}|${targets.join(",")}|${rate}|${stopEuro}|${ground}`;
+  const hit = relaxedMemo.get(key);
+  if (hit) return hit;
+  // Reverse adjacency: for each city, the cheapest way into it from each other city.
+  const into = new Map<string, Map<string, number>>();
+  const link = (from: string, to: string, cost: number) => {
+    let m = into.get(to);
+    if (!m) into.set(to, (m = new Map()));
+    const prev = m.get(from);
+    if (prev == null || cost < prev) m.set(from, cost);
+  };
+  for (const e of g.edges) link(e.fc, e.tc, e.p + stopEuro * (e.s || 0) + rate * e.m);
+  if (ground) {
+    const nodes = [...new Set([...g.edges.flatMap((e) => [e.fc, e.tc]), ...targets])]
+      .map((c) => ({ c, p: placeOf(c) }))
+      .filter((x): x is { c: string; p: NonNullable<ReturnType<typeof placeOf>> } => !!x.p)
+      .sort((a, b) => a.p.lat - b.p.lat);
+    const latSpan = RELAXED_GROUND_KM / 111;
+    for (let i = 0; i < nodes.length; i++) {
+      for (let j = i + 1; j < nodes.length && nodes[j].p.lat - nodes[i].p.lat <= latSpan; j++) {
+        const km = haversineKm(nodes[i].p.lat, nodes[i].p.lon, nodes[j].p.lat, nodes[j].p.lon);
+        if (km > RELAXED_GROUND_KM) continue;
+        const cost = groundPrice(km);
+        link(nodes[i].c, nodes[j].c, cost);
+        link(nodes[j].c, nodes[i].c, cost);
+      }
+    }
+  }
+  const dist = new Map<string, number>();
+  const heap = new Heap();
+  const names: string[] = [];
+  const idOf = new Map<string, number>();
+  const id = (c: string) => {
+    let n = idOf.get(c);
+    if (n == null) {
+      n = names.length;
+      names.push(c);
+      idOf.set(c, n);
+    }
+    return n;
+  };
+  for (const t of targets) {
+    dist.set(t, 0);
+    heap.push(0, id(t));
+  }
+  while (heap.size) {
+    const c = names[heap.pop()];
+    const d = dist.get(c)!;
+    for (const [from, cost] of into.get(c) ?? []) {
+      const nd = d + cost;
+      const prev = dist.get(from);
+      if (prev == null || nd < prev - 1e-9) {
+        dist.set(from, nd);
+        heap.push(nd, id(from));
+      }
+    }
+  }
+  if (relaxedMemo.size > 20) relaxedMemo.clear();
+  relaxedMemo.set(key, dist);
+  return dist;
+}
+
 class Heap {
   private k: number[] = [];
   private v: number[] = [];
@@ -631,6 +734,9 @@ const flightLeg = (e: FlightEdge): GraphLeg => ({
   stops: e.s,
   source: e.src,
   seen: e.w,
+  // A cached Aviasales fare is not a live quote: shown with a ~, and Search confirms it live before calling it found.
+  ...(e.src === "tp" ? { estimated: true } : {}),
+  ...(e.flex ? { offDay: e.flex } : {}),
 });
 const groundLeg = (from: string, to: string, day: number, link: { minutes: number; mode: string; km: number }): GraphLeg => ({
   kind: kindOfMode(link.mode),
@@ -704,6 +810,12 @@ export function cheapestTripsIn(g: FlightGraph, q: TripsQuery): TripsResult {
   const homeCities = [...new Set(homes.map((h) => h.city))];
   /** The door's own city: a train or coach that reaches it closes the trip. */
   const doorCity = nearestCity(q.origin.lat, q.origin.lon, 40);
+  // A*: every label is ordered by its cost plus the cheapest way home its city could possibly have (relaxedHome).
+  const tA = Date.now();
+  const toHome = relaxedHome(g, [...new Set([...homeCities, ...(doorCity ? [doorCity] : [])])], rate, STOP_EURO[q.tradeoff ?? "price"], groundMax > 0);
+  const boundMs = Date.now() - tA;
+  /** The A* bound of a city; Infinity where nothing known gets home (a label there can never close). */
+  const hOf = (city: string) => (city === "HOME" ? 0 : (toHome.get(city) ?? Infinity));
   const homeCityDoor = new Map<string, HomeAirport>();
   for (const h of homes) {
     const cur = homeCityDoor.get(h.city);
@@ -727,6 +839,8 @@ export function cheapestTripsIn(g: FlightGraph, q: TripsQuery): TripsResult {
       truncated = true;
       return;
     }
+    // A city with no way home known can never close a trip: no label is made for it.
+    if (hOf(l.city) === Infinity) return;
     const key = `${l.kind}|${l.city}|${l.day}|${l.places}|${l.start}`;
     const seq = l.visited.join(">");
     const slots = kept.get(key) ?? [];
@@ -743,7 +857,7 @@ export function cheapestTripsIn(g: FlightGraph, q: TripsQuery): TripsResult {
     slots.sort((a, b) => a.cost - b.cost);
     if (slots.length > PER_NODE) dead.add(slots.pop()!.id);
     kept.set(key, slots);
-    heap.push(l.cost + TIE * l.minutes, id);
+    heap.push(l.cost + hOf(l.city) + TIE * l.minutes, id);
   };
   const costOf = (euros: number, minutes: number) => euros + rate * minutes;
 
@@ -800,8 +914,8 @@ export function cheapestTripsIn(g: FlightGraph, q: TripsQuery): TripsResult {
     const li = heap.pop();
     if (dead.has(li)) continue;
     const l = labels[li];
-    // Every completion from here costs at least this label: past the tenth best, nothing better is left.
-    if (l.cost > worstTop) break;
+    // Every completion from here costs at least this label plus its cheapest way home: past the top-th best, nothing better is left.
+    if (l.cost + hOf(l.city) > worstTop) break;
     if (explored >= MAX_EXPLORED || ((explored & 1023) === 0 && Date.now() - t0 > MAX_SEARCH_MS)) {
       truncated = true;
       break;
@@ -882,11 +996,13 @@ export function cheapestTripsIn(g: FlightGraph, q: TripsQuery): TripsResult {
     const start = chain[0]?.start ?? fromN;
     const flown = legs.filter((x) => x.kind === "fly");
     const memory = flown.filter((x) => x.source === "memory").length;
+    const tpLegs = flown.filter((x) => x.source === "tp").length;
     const oldest = flown.map((x) => x.seen ?? "").sort()[0];
     const why = [
       `${flights} euro in ${flown.length} flight${flown.length === 1 ? "" : "s"}, about ${ground} euro by land (estimated at 0.10 euro per km)`,
       `${stops.map((s) => `${s.name} ${s.nights}`).join(", ")} night${stops.length === 1 && stops[0]?.nights === 1 ? "" : "s"}`,
       `prices from the ${memory === flown.length ? "fare memory" : memory ? "nightly graph and the fare memory" : "nightly graph"}, the oldest seen ${seenAgo(oldest)}; confirm live before booking`,
+      ...(tpLegs ? [`${tpLegs} of the flights ${tpLegs === 1 ? "is a recent Aviasales fare" : "are recent Aviasales fares"} (an estimate, not checked live)`] : []),
     ];
     return {
       legs,
@@ -905,6 +1021,8 @@ export function cheapestTripsIn(g: FlightGraph, q: TripsQuery): TripsResult {
     trips,
     truncated: truncated || undefined,
     explored,
+    boundMs,
+    labels: labels.length,
     edges: g.edges.length,
     graphDate: g.graphDate,
     homeAirports: homes,

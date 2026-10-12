@@ -42,6 +42,8 @@ export type SearchQuery = {
   prefs?: Prefs;
   exclude?: string[];
   budget?: number;
+  /** Which brain answers (docs/plans/one-brain.md): "one" = the price map's search and the live check only, "classic" = every engine. Left out: the server's default (ATLAS_ONE_BRAIN). */
+  engine?: "one" | "classic";
 };
 
 export type TripLeg = {
@@ -185,6 +187,18 @@ function totals(legs: TripLeg[]): { price: number; ground: number; hours: number
   const flights = legs.filter((l) => l.kind === "fly");
   const direct = flights.length > 0 && flights.every((l) => l.stops === 0);
   return { price: round(price), ground: round(ground), hours: Math.round((minutes / 60) * 10) / 10, direct, urls: uniq(legs.map((l) => l.url).filter((u): u is string => !!u)) };
+}
+
+/**
+ * A trip with some legs re-priced (Search's live check): the same id (its cities and days did not change), the
+ * tickets, ground, hours, nonstop flag and booking links counted again from the new legs, badges added.
+ */
+export function repriced(t: TripResult, legs: TripLeg[], badges: string[], source?: TripResult["source"]): TripResult {
+  const x = totals(legs);
+  const r: TripResult = { ...t, legs, price: x.price, hours: x.hours || t.hours, direct: x.direct, urls: x.urls, badges: uniq([...t.badges, ...badges]), ...(source ? { source } : {}) };
+  if (x.ground > 0) r.groundPrice = x.ground;
+  else delete r.groundPrice;
+  return r;
 }
 
 /**
@@ -448,7 +462,7 @@ function graphLegToTrip(l: GraphLeg, origin: string): TripLeg {
     ...(l.carrier ? { carrier: l.carrier } : {}),
     ...(l.stops != null ? { stops: l.stops } : {}),
     ...(l.url ? { url: l.url } : {}),
-    note: l.source === "graph" ? `price from the nightly graph${l.seen ? `, seen ${l.seen.slice(0, 10)}` : ""}; confirm before booking` : l.source === "memory" ? `a fare seen${l.seen ? ` ${l.seen.slice(0, 10)}` : " in the last three days"}; confirm before booking` : l.kind === "ground" ? "to or from the airport; fare estimated" : `${l.kind}, fare estimated from the distance`,
+    note: l.source === "tp" ? `a recent Aviasales fare${l.offDay ? " a day from this one" : ""}${l.seen ? `, seen ${l.seen.slice(0, 10)}` : ""}; an estimate, not checked live` : l.source === "graph" ? `price from the nightly graph${l.seen ? `, seen ${l.seen.slice(0, 10)}` : ""}; confirm before booking` : l.source === "memory" ? `a fare seen${l.seen ? ` ${l.seen.slice(0, 10)}` : " in the last three days"}; confirm before booking` : l.kind === "ground" ? "to or from the airport; fare estimated" : `${l.kind}, fare estimated from the distance`,
   };
 }
 function oldestSeen(legs: GraphLeg[]): string | undefined {
@@ -462,7 +476,7 @@ export function tripFromGraphTrip(t: GraphTrip, opts: ConvertOpts & { origin?: s
   const legs = t.legs.map((l) => graphLegToTrip(l, origin));
   const stops: TripStop[] = t.stops.map((s) => ({ name: s.name, code: s.code, country: s.country, lat: s.lat, lon: s.lon, arrive: s.arrive, leave: s.leave, nights: s.nights }));
   const flights = t.legs.filter((l) => l.kind === "fly");
-  const source: TripResult["source"] = flights.length && flights.every((l) => l.source === "memory") ? "memory" : "graph";
+  const source: TripResult["source"] = flights.some((l) => l.source === "tp") ? "estimate" : flights.length && flights.every((l) => l.source === "memory") ? "memory" : "graph";
   return finish({
     title: t.stops.map((s) => s.name).join(", "),
     stops,
@@ -818,6 +832,10 @@ export function parseSearchQuery(raw: unknown): Parsed {
   if (Array.isArray(q.exclude)) {
     const ex = uniq(q.exclude.map((x) => String(x ?? "").trim().toUpperCase()).filter((x) => ISO2.test(x))).slice(0, 250);
     if (ex.length) query.exclude = ex;
+  }
+  if (q.engine != null) {
+    if (q.engine !== "one" && q.engine !== "classic") return { error: "engine must be one or classic" };
+    query.engine = q.engine;
   }
   if (q.budget != null) {
     const b = num(q.budget);

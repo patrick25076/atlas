@@ -7,6 +7,7 @@ import WalkWatch from "./WalkWatch";
 import GraphView from "./GraphView";
 import GraphTrips from "./GraphTrips";
 import LiveRuns from "./LiveRuns";
+import BenchView from "./BenchView";
 
 // The engine room: how Atlas thinks. Five views:
 //   Live          what the app did for every search, chat turn, loop and way home, as it happens (the run log)
@@ -22,6 +23,7 @@ const TABS = [
   { key: "walk", label: "Watch a loop" },
   { key: "graph", label: "Price graph" },
   { key: "trips", label: "Graph trips" },
+  { key: "bench", label: "Benchmark" },
 ] as const;
 type Tab = (typeof TABS)[number]["key"];
 
@@ -50,6 +52,7 @@ export default function EngineRoom() {
         {tab === "walk" && <WalkWatch />}
         {tab === "graph" && <GraphView />}
         {tab === "trips" && <GraphTrips />}
+        {tab === "bench" && <BenchView />}
       </main>
     </div>
   );

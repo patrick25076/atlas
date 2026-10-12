@@ -5,7 +5,24 @@ edges, because we wouldn't know where to go next if there is only one edge ... w
 better, I don't understand when to use each, it feels like prechoosing destinations without seeing the cheapest and
 smartest ways ... I hope we cache everything ... it should add in the graph updated prices somehow."
 
-Status: **proposal, waiting for Patrick's yes.** The caching asked for is done (see the end).
+Status: **built 12 October (Patrick: "yes build the plan"), one brain on in production.** The engines it replaces still
+run when the map finds nothing, and with engine: classic; they come out once the nightly benchmark has a week of
+history.
+
+## What was built (12 October)
+
+| Step | Built | Measured |
+| --- | --- | --- |
+| 1. Breadth | scripts/ingest/tp-edges.ts, nightly (job tp-edges): Travelpayouts for 233 cities, 3 months, the cheapest to every place and of every day | 54,657 fares, 2,024 places, 0 failed, 4.7 min; with a day either side the map grew from 24,225 to 172,956 flights; Hanoi from 6 places to 125 |
+| 1b. A* | lib/flight-graph.ts relaxedHome: a date-free reverse Dijkstra from home bounds every city's way home; the search orders by cost plus that bound | November loop: 120,000 labels and cut off before, 20,796 and proven cheapest after (2.2 s); two cities: 33,378 to 7,073 labels (0.2 s) |
+| 2. Live check | lib/search.ts: the best 5 trips' flights priced live on their day (up to 12 searches), ranked again, written to the fare memory | November two cities, budget 12: 12 flights answered, all found on their day, 5 trips fully live; Budapest to Milan was 21 estimated, 37 live |
+| 3. One brain | SearchQuery.engine, ATLAS_ONE_BRAIN=1 in production: the map and its live check answer alone | benchmark at budget 0: both brains found the best price in 7 of 8 answered questions (mean regret 0), the one brain in 0.1 s a question against 1.5 s |
+| Benchmark | bench/cases.json (9 questions, the owner's own trips among them), scripts/bench.ts, nightly job bench, engine room Benchmark tab | Hanoi to Vientiane now 96 euro (the owner's 93, the old 157) |
+
+Open: the two-week trip to anywhere with 4 to 7 places still reaches the search's limit (flagged); Lisbon on exact
+dates finds nothing at budget 0 (the map holds no fare on those days, the live engines do); the Southeast Asia loop
+still chains small Malaysian and Thai towns (taste, waiting for the owner's own method); overland links (the curated
+list) are being researched.
 
 ## What was measured (12 October)
 

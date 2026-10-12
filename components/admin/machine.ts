@@ -29,14 +29,15 @@ export const MACHINE: Node[] = [
     name: "Search tab",
     line: "From, To, When, Nights, Advanced: one list of trips",
     how: [
-      "Reads the bar into one SearchQuery (lib/trip-result.ts).",
-      "Asks the nightly price graph first: no live search, under a second.",
-      "Then runs the live engines that fit the question, inside a budget of live searches (25 by default, 0 means stored prices only).",
+      "Reads the bar into one SearchQuery (lib/trip-result.ts); the same question within the hour is answered from the shared cache.",
+      "One brain (on in production): the price map's A* search finds the cheapest trips over every price known, no live search, about a second.",
+      "The live check prices every flight of the best five live on its own day (up to 12 searches) and ranks again.",
+      "Only long stays and groups run engines of their own; when the map finds nothing, the classic engines below run instead (engine: classic forces them).",
       "Every answer becomes the same TripResult: door-to-airport legs added, badges, the Been check, duplicates by cities and days dropped (the cheaper stays).",
       "Ranked by money door to door (tickets plus ground) plus hours at the trip style's rate (0 at Cheapest); the chips filter after, instantly.",
     ],
     file: "lib/search.ts",
-    uses: ["answers", "flightgraph", "pairs", "routefinder", "walk", "wildwalk", "scan", "longstay", "group"],
+    uses: ["answers", "flightgraph", "verify", "pairs", "routefinder", "walk", "wildwalk", "scan", "longstay", "group"],
   },
   {
     id: "trippage",
@@ -73,19 +74,35 @@ export const MACHINE: Node[] = [
   {
     id: "flightgraph",
     kind: "engine",
-    name: "Price graph trips",
-    line: "Cheapest trips over last night's flights: a Dijkstra on euros",
+    name: "Price map search (A*)",
+    line: "The cheapest trips over every price known: a Dijkstra on euros, guided home",
     how: [
-      "Nodes are (city, day). Edges are flights from the nightly graph and the fare memory, trains and coaches from the ground graph (priced at 0.10 euro a km), and stays of 2 to 3 nights.",
-      "Starts at your door, goes to every home airport, searches outward cheapest first.",
-      "Keeps up to 6 different city sequences per node, so three London airports cannot crowd out Paris.",
-      "Stops when no open label can beat the 20th best closed trip; answers the best distinct city sequences.",
+      "Nodes are (city, day). Edges are flights (Kiwi's nightly graph, the fare memory, Travelpayouts' cache with a day either side as an estimate), trains and coaches from the ground graph (0.10 euro a km), and stays of 2 to 3 nights.",
+      "Before searching, a reverse Dijkstra from the home airports over the map with dates forgotten gives every city the cheapest way home it could possibly have.",
+      "A*: half-built trips are grown in order of cost so far plus that bound, so a trip drifting far from a cheap way home waits and most never need growing; a city with no way home is never entered.",
+      "Keeps up to 6 different city sequences per node; stops when no open trip can beat the 20th best closed one. Exact over what the map holds (the bound never overestimates).",
     ],
-    algo: "Label-setting search (multi-criteria Dijkstra), exact on what the graph holds.",
+    algo: "A* over a label-setting search (multi-criteria Dijkstra), with a date-free reverse Dijkstra as the admissible heuristic.",
     cost: "euros + hours × rate (0 at Cheapest) + 12 euro per change of plane",
     spends: "0",
-    file: "lib/flight-graph.ts (cheapestTripsIn, everywhereIn)",
-    uses: ["nightly", "memory", "ground"],
+    file: "lib/flight-graph.ts (cheapestTripsIn, relaxedHome, everywhereIn)",
+    uses: ["nightly", "tp", "memory", "ground"],
+  },
+  {
+    id: "verify",
+    kind: "engine",
+    name: "Live check",
+    line: "The best trips' flights priced live before they are shown as found",
+    how: [
+      "Takes the five cheapest trips the price map made.",
+      "Every flight of them is searched live on Kiwi, a day either side of its day; a flight shared by several trips is searched once.",
+      "A price found that day replaces the estimate (an Aviasales fare, a nightly price) with its booking link and times; the trip is ranked again and says checked live, or not found live.",
+      "Every price seen lands in the fare memory, so the next search's map knows it.",
+    ],
+    algo: "One search a hop, no graph.",
+    spends: "up to 12, inside the search's budget",
+    file: "lib/search.ts (the live check)",
+    uses: ["kiwi", "memory"],
   },
   {
     id: "walk",
@@ -164,6 +181,7 @@ export const MACHINE: Node[] = [
   { id: "group", kind: "engine", name: "Group", line: "Where friends from different cities meet", spends: "about 20", file: "lib/group.ts", uses: ["kiwi"] },
 
   // ---------------- the data ----------------
+  { id: "tp", kind: "data", name: "Travelpayouts cache", line: "Recent Aviasales fares from about 250 cities, every place and every day, three months ahead: about 55,000 fares a night, estimates until checked live", file: "scripts/ingest/tp-edges.ts → Blob graph/tp/" },
   { id: "nightly", kind: "data", name: "Nightly flight graph", line: "164 airports × 14 three-day buckets, the 15 cheapest each: about 19,000 flights, six weeks ahead", file: "scripts/ingest/flight-edges.ts → Blob graph/flights/" },
   { id: "answers", kind: "data", name: "Shared answers", line: "An hour, for every visitor and server: the same search, walk or way home is read back, not run again", file: "lib/shared-cache.ts (Postgres answers)" },
   { id: "memory", kind: "data", name: "Fare memory", line: "Every live search writes its fares to Postgres; engines read the last day first", file: "lib/db.ts (fares)" },
@@ -180,7 +198,7 @@ export const MACHINE: Node[] = [
 
 /** The table the owner asked for: which feature uses which graph. */
 export const GRAPH_TABLE: { feature: string; priceGraph: string; groundGraph: string; live: string; llm: string; algorithm: string }[] = [
-  { feature: "Search: everywhere, windows, two cities, loops", priceGraph: "yes, first", groundGraph: "yes", live: "after, within 25", llm: "no", algorithm: "Dijkstra on euros over (city, day)" },
+  { feature: "Search: everywhere, windows, two cities, loops", priceGraph: "yes (Kiwi nightly + Aviasales cache + memory)", groundGraph: "yes", live: "the live check, up to 12", llm: "no", algorithm: "A* on euros over (city, day)" },
   { feature: "Search: a place on exact dates", priceGraph: "yes", groundGraph: "yes", live: "route finder, pairs", llm: "no", algorithm: "rules + Dijkstra on minutes for ground" },
   { feature: "Search Advanced: Wild loop", priceGraph: "yes, first", groundGraph: "yes", live: "the walk, targeted", llm: "no", algorithm: "beam search over lazy edges" },
   { feature: "Search Advanced: Long stay, Group", priceGraph: "no", groundGraph: "no", live: "yes", llm: "no", algorithm: "search and score" },

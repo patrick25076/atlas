@@ -21,3 +21,4 @@ data/raw/
 
 # DuckDB spill from the GTFS ingest
 .tmp/
+bench/results/

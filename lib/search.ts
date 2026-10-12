@@ -41,7 +41,7 @@ import { findDeals, isCityTarget, REGION_COUNTRIES, regionCountries } from "./fi
 import { countryGroup, walkTrips, type WalkParams } from "./graph-walk";
 import { groupTrip, GroupInputError } from "./group";
 import { haversineKm } from "./geo";
-import { BUDGET_MESSAGE, kiwiStats, kiwiThrottled, THROTTLED_MESSAGE } from "./kiwi";
+import { BUDGET_MESSAGE, kiwiDate, kiwiStats, kiwiThrottled, searchFlight, THROTTLED_MESSAGE, type KiwiItinerary } from "./kiwi";
 import { longStay, LongStayInputError } from "./longstay";
 import { TtlLru } from "./memo";
 import { AVOID_GROUPS, cleanPrefs, type Prefs } from "./prefs";
@@ -58,7 +58,9 @@ import {
   tripFromRouteOption,
   tripFromWalkLoop,
   tripFromWildTrip,
+  repriced,
   HOME_CODE,
+  type TripLeg,
   type Locate,
   type SearchQuery,
   type TripResult,
@@ -79,6 +81,9 @@ for (const [code, c] of Object.entries(CITIES)) for (const a of c.airports) if (
 
 /** Live searches one search may spend when the query does not say. */
 export const DEFAULT_BUDGET = 25;
+/** The live check (one-brain step 2): the best trips the price graph found, and the most live searches it may take. */
+const VERIFY_TRIPS = 5;
+const VERIFY_MAX_SEARCHES = 12;
 export const MAX_BUDGET = 60;
 /** Results sent at the most, after the filters. */
 export const MAX_RESULTS = 60;
@@ -674,6 +679,81 @@ async function execute(p: Plan, emit: (line: SearchLine) => void, nobodyLeft: ()
     }
   }
 
+  // 1b. The live check (docs/plans/one-brain.md, step 2): the graph's best trips, each flight priced live on its own
+  // day (one Kiwi search a hop, a day either side, shared by every trip that flies it). A live price replaces the
+  // estimate (an Aviasales fare, a nightly price) and the trip is ranked again; a flight not found that day is said so.
+  // Every price a live search sees lands in the fare memory, so the next search's map knows it.
+  let verifySpent = 0;
+  if (graphAnswered && p.budget > 0 && !kiwiThrottled() && !nobodyLeft()) {
+    const tv = Date.now();
+    const before = spent();
+    // Every trip the price map made: its cheapest trips, and its one-way and exact-date answers.
+    const cands = rank([...pool.values()].filter((t) => t.engine === "graph" || t.engine === "everywhere"), p.rate).slice(0, VERIFY_TRIPS);
+    const hops = new Map<string, { from: string; to: string; date: string }>();
+    for (const t of cands) for (const l of t.legs) if (l.kind === "fly" && l.date && /^[A-Z]{3}$/.test(l.from) && /^[A-Z]{3}$/.test(l.to)) hops.set(`${l.from}>${l.to}>${l.date}`, { from: l.from, to: l.to, date: l.date });
+    const list = [...hops.entries()].slice(0, Math.min(VERIFY_MAX_SEARCHES, p.budget));
+    if (list.length) say(`Checking the best ${cands.length} trips live: ${list.length} flight${list.length === 1 ? "" : "s"}`);
+    const live = new Map<string, KiwiItinerary | null>();
+    await Promise.all(
+      list.map(async ([k, h]) => {
+        try {
+          const r = await searchFlight({ flyFrom: h.from, flyTo: h.to, departureDate: kiwiDate(addDays(h.date, -1)), departureDateTo: kiwiDate(addDays(h.date, 1)) });
+          const same = r.itineraries.filter((it) => it.outbound.departureTime.slice(0, 10) === h.date).sort((a, b) => a.price - b.price)[0];
+          live.set(k, same ?? null);
+        } catch (err) {
+          // A search that failed or was refused checks nothing: the trip keeps its estimate.
+          notes.push(`live check ${h.from} to ${h.to}: ${err instanceof Error ? err.message.slice(0, 80) : "failed"}`);
+        }
+      }),
+    );
+    const hhmm = (t: string) => /T(\d{2}:\d{2})/.exec(t)?.[1];
+    const updated: TripResult[] = [];
+    const changes: string[] = [];
+    for (const t of cands) {
+      let checked = 0;
+      let missing = 0;
+      let flights = 0;
+      const legs: TripLeg[] = t.legs.map((l) => {
+        if (l.kind !== "fly" || !l.date) return l;
+        flights++;
+        const k = `${l.from}>${l.to}>${l.date}`;
+        if (!live.has(k)) return l;
+        const it = live.get(k);
+        if (!it) {
+          missing++;
+          return { ...l, note: "not found live on this day: the fare may be gone; check the link" };
+        }
+        checked++;
+        if (Math.round(it.price) !== l.price) changes.push(`${l.fromName} to ${l.toName} ${l.date}: ${l.price ?? "?"} → ${Math.round(it.price)} euro`);
+        const dep = hhmm(it.outbound.departureTime);
+        const arr = hhmm(it.outbound.arrivalTime);
+        return {
+          ...l,
+          price: Math.round(it.price),
+          estimated: false,
+          url: it.bookingUrl,
+          carrier: [...new Set(it.outbound.segments.map((x) => x.carrierName || x.carrier))].join(", ") || l.carrier,
+          ...(dep ? { depart: dep } : {}),
+          ...(arr ? { arrive: arr } : {}),
+          minutes: Math.round(it.outbound.durationSeconds / 60),
+          stops: it.outbound.stops,
+          note: "checked live just now",
+        };
+      });
+      if (!checked && !missing) continue;
+      const all = checked === flights;
+      const r = repriced(t, legs, all ? ["checked live"] : missing ? ["not found live"] : [], all ? "live" : t.source);
+      pool.set(r.id, r);
+      updated.push(r);
+    }
+    verifySpent = spent() - before;
+    if (updated.length) emit({ results: rank(updated, p.rate) });
+    step("verify", `Live check: ${live.size} of ${list.length} flights answered, ${[...live.values()].filter(Boolean).length} found on their day; ${updated.filter((x) => x.badges.includes("checked live")).length} of ${cands.length} trips now fully live`, {
+      ms: Date.now() - tv,
+      data: { hops: list.map(([k]) => k), found: [...live.entries()].map(([k, v]) => `${k}: ${v ? Math.round(v.price) + " euro" : "not that day"}`), changes, spentAbout: verifySpent, trips: rank(updated, p.rate).map(tripLine) },
+    });
+  }
+
   // 2. The live engines, within the budget.
   if (kiwiThrottled()) {
     refused = true;
@@ -682,8 +762,14 @@ async function execute(p: Plan, emit: (line: SearchLine) => void, nobodyLeft: ()
   // Everyone who asked has gone (a new search replaced this one): no live search is spent on it.
   abandoned = nobodyLeft();
   if (abandoned) notes.push("the search was left before the live engines ran");
-  const tasks = abandoned ? [] : liveTasks(p, { graphCount, graphCountries });
-  let left = kiwiThrottled() ? 0 : p.budget;
+  // One brain (docs/plans/one-brain.md, step 3): the price map's search and its live check answer alone; only long
+  // stays and groups (not trips the map can make) keep their engines, and when the map found nothing the classic
+  // engines still run, so nobody is left with an empty list.
+  const oneBrain = p.q.engine === "one" || (p.q.engine !== "classic" && process.env.ATLAS_ONE_BRAIN?.trim() === "1");
+  const allTasks = abandoned ? [] : liveTasks(p, { graphCount, graphCountries });
+  const tasks = oneBrain && graphAnswered ? allTasks.filter((t) => t.engine === "longstay" || t.engine === "group") : allTasks;
+  if (oneBrain) step("brain", graphAnswered ? `One brain: the price map and its live check answered; ${allTasks.length - tasks.length} other engine${allTasks.length - tasks.length === 1 ? "" : "s"} not run` : "One brain: the price map found nothing, so the classic engines run");
+  let left = kiwiThrottled() ? 0 : Math.max(0, p.budget - verifySpent);
   const chosen: { task: LiveTask; budget: number }[] = [];
   for (const task of tasks) {
     // An engine that only answers from memory at budget 0 (the walks, the route finder) still runs at 0.

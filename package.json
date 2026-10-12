@@ -34,7 +34,9 @@
     "ingest:costs": "tsx scripts/ingest/costs.ts",
     "check:tp": "tsx scripts/check-travelpayouts.ts",
     "check:tools": "node --env-file=.env.local node_modules/tsx/dist/cli.mjs scripts/check-tools.ts",
-    "atlas": "node --env-file=.env.local node_modules/tsx/dist/cli.mjs scripts/atlas.ts"
+    "atlas": "node --env-file=.env.local node_modules/tsx/dist/cli.mjs scripts/atlas.ts",
+    "ingest:tp-edges": "tsx scripts/ingest/tp-edges.ts",
+    "bench": "tsx scripts/bench.ts"
   },
   "dependencies": {
     "@ai-sdk/amazon-bedrock": "^5.0.113",
