@@ -10,10 +10,12 @@ export const ADMIN_MAX_AGE_S = 90 * 24 * 3600;
 
 const dev = () => process.env.NODE_ENV !== "production";
 const key = () => process.env.ATLAS_ADMIN_KEY?.trim() || "";
+/** The shortest key that opens anything (the owner chose a short one; shorter than this counts as not set). */
+const MIN_KEY = 6;
 
 /** Whether this deployment has an engine room at all: always under dev, with a key elsewhere. */
 export function adminExists(): boolean {
-  return dev() || key().length >= 12;
+  return dev() || key().length >= MIN_KEY;
 }
 
 const sign = (ts: string) => createHmac("sha256", key()).update(`atlas-admin:${ts}`).digest("hex");
@@ -32,7 +34,7 @@ export function signAdmin(now = Date.now()): string {
 /** Whether the typed key is the owner's (constant time). */
 export function adminKeyMatches(typed: unknown): boolean {
   const k = key();
-  return k.length >= 12 && typeof typed === "string" && typed.length <= 200 && same(typed.trim(), k);
+  return k.length >= MIN_KEY && typeof typed === "string" && typed.length <= 200 && same(typed.trim(), k);
 }
 
 /** Whether a cookie header carries a valid owner cookie (or this is the dev server). */
