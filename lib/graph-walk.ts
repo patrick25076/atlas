@@ -23,7 +23,7 @@ import { countryAllowed } from "./been";
 import { countryLabel, hubDegree, resolveGateway } from "./board";
 import { dealsFor } from "./deals-source";
 import { FAME_FLOOR, isGem } from "./gems";
-import { driveMinutes, haversineKm } from "./geo";
+import { driveMinutes, flightMinutes, haversineKm } from "./geo";
 import { reachFrom } from "./ground";
 import { kiwiDate, kiwiStats, kiwiThrottled, searchFlight, THROTTLED_MESSAGE, type KiwiItinerary } from "./kiwi";
 import { TtlLru } from "./memo";
@@ -88,12 +88,27 @@ export type WalkParams = {
    * "off the beaten path", "underrated") weights hidden gems and smaller cities up and the 25 biggest hubs down,
    * so "cheap but unique" is not answered with Milan and Rome. */
   style?: string;
+  /**
+   * The traveller's own first flight, chosen or booked (2026-10-12: the owner had found Brasov to Warsaw on the
+   * 24th and the walk answered with a loop that started Bucharest to Gdansk). The walk then starts at the city that
+   * flight lands in, on its day, with that leg kept as given: priced when a price is passed, unpriced otherwise. No
+   * search is spent on the way out. from and to are airport or city codes; date is YYYY-MM-DD.
+   */
+  fixedOut?: { from: string; to: string; date: string; price?: number; minutes?: number; carrier?: string; url?: string; depart?: string; arrive?: string };
+  /**
+   * Towns without an airport that the traveller named (Torun, Sopot, Malbork): a stop reached by train or coach
+   * only, flights never land there and never leave from there. A mustInclude entry may be a town's code.
+   */
+  towns?: WalkTown[];
   /** When it aborts (the client went away), no more live searches are spent and the walk answers from what it has. */
   signal?: AbortSignal;
   onEvent?: (e: WalkEvent) => void;
 };
 
-export type WalkLeg = { kind: "fly" | "train" | "coach" | "ferry" | "road"; from: string; fromName: string; to: string; toName: string; date: string; depart?: string; arrive?: string; minutes: number; price: number; estimated?: boolean; carrier?: string; url?: string; source: "live" | "memory" | "boards" | "ground"; /** Flights: changes on the ticket, and the airports it passes (live itineraries only). */ stops?: number; route?: string[] };
+/** A town the walk may stop in by ground only (WalkParams.towns). The code is the caller's own (never three letters). */
+export type WalkTown = { code: string; name: string; country: string; lat: number; lon: number };
+/** "given": the traveller's own flight (WalkParams.fixedOut), kept as they gave it. */
+export type WalkLeg = { kind: "fly" | "train" | "coach" | "ferry" | "road"; from: string; fromName: string; to: string; toName: string; date: string; depart?: string; arrive?: string; minutes: number; price: number; estimated?: boolean; carrier?: string; url?: string; source: "live" | "memory" | "boards" | "ground" | "given"; /** Flights: changes on the ticket, and the airports it passes (live itineraries only). */ stops?: number; route?: string[] };
 export type WalkStop = { code: string; name: string; country: string; lat: number; lon: number; arrive: string; leave: string; nights: number; worth: number; img?: string };
 export type WalkLoop = { id: string; title: string; stops: WalkStop[]; legs: WalkLeg[]; /** The home airport the loop flies out of, else the one it flies back into, else HOME (ground both ways). */ home: string; start: string; end: string; nights: number; flights: number; ground: number; total: number; hours: number; score: number; why: string[] };
 export type WalkEvent =
@@ -492,6 +507,10 @@ type State = {
 };
 
 type Edge = { to: string; leg: WalkLeg; arrive: string; img?: string };
+/** A place the walk can stop in: a city of cities.json, or a named town reached by ground only (town: true). */
+type Spot = { name: string; country: string; lat: number; lon: number; airports: string[]; town?: true };
+/** A town counts as reached by a station of the ground graph this close to it. */
+const TOWN_STATION_KM = 12;
 
 export async function walkTrips(p: WalkParams): Promise<WalkResult> {
   const t0 = Date.now();
@@ -534,20 +553,57 @@ export async function walkTrips(p: WalkParams): Promise<WalkResult> {
   /** No trains or coaches at all (the traveller turned them off): flights only, no ground way home. */
   const groundOff = p.maxGroundMin != null && Math.round(p.maxGroundMin) <= 0;
   const maxGroundMin = groundOff ? 0 : Math.max(30, Math.min(720, Math.round(p.maxGroundMin ?? DEFAULT_GROUND_MIN)));
-  /** The ground graph's reach, or nothing when ground is off. */
-  const ground = (lat: number, lon: number, own: string | null): GroundLink[] => (groundOff ? [] : groundFrom(lat, lon, maxGroundMin, own));
+  /** The towns a train or coach reaches from a point: a station of the graph within TOWN_STATION_KM of the town. */
+  const townMemo = new Map<string, GroundLink[]>();
+  const townLinks = (lat: number, lon: number, own: string | null): GroundLink[] => {
+    if (!towns.size) return [];
+    const key = `${lat.toFixed(3)},${lon.toFixed(3)}`;
+    let all = townMemo.get(key);
+    if (!all) {
+      all = [];
+      try {
+        const reached = reachFrom(lat, lon, maxGroundMin, 20).reached;
+        for (const [code, t] of towns) {
+          let best: GroundLink | null = null;
+          for (const s of reached) if (haversineKm(s.lat, s.lon, t.lat, t.lon) <= TOWN_STATION_KM && (!best || s.minutes < best.minutes)) best = { code, minutes: s.minutes, mode: s.mode };
+          if (best) all.push(best);
+        }
+      } catch {
+        // the graph is optional: no town is reachable then
+      }
+      townMemo.set(key, all);
+    }
+    return all.filter((l) => l.code !== own);
+  };
+  /** The ground graph's reach, or nothing when ground is off; the named towns join the cities. */
+  const ground = (lat: number, lon: number, own: string | null): GroundLink[] => (groundOff ? [] : [...groundFrom(lat, lon, maxGroundMin, own), ...townLinks(lat, lon, own)]);
   /** The longest flight allowed, in minutes door to door (Infinity without a cap). */
   const maxFlyMin = p.maxFlightHours && Number.isFinite(p.maxFlightHours) && p.maxFlightHours > 0 ? p.maxFlightHours * 60 : Infinity;
   const tradeoff: Tradeoff = p.tradeoff ?? "price";
   const [hIn, hHop, hHome] = HOUR_VALUE[tradeoff];
   const stopsPenalty = (stops: number) => (tradeoff === "comfort" ? stops * 60 : tradeoff === "balanced" ? stops * 20 : 0);
   const exclude = (p.exclude ?? []).map((c) => c.trim().toUpperCase()).filter((c) => /^[A-Z]{2}$/.test(c));
+  // Towns without an airport (WalkParams.towns): a place like any city for the walk, but reached and left by
+  // ground only. `spot` reads a city or a town the same way, so the rest of the walk needs no second path.
+  const towns = new Map((p.towns ?? []).filter((t) => t && t.code && !CITIES[t.code] && Number.isFinite(t.lat) && Number.isFinite(t.lon)).map((t) => [t.code, t]));
+  const spot = (code: string): Spot | undefined => {
+    const c = CITIES[code];
+    if (c) return c;
+    const t = towns.get(code);
+    return t ? { name: t.name, country: t.country, lat: t.lat, lon: t.lon, airports: [], town: true } : undefined;
+  };
+  const townCode = (s: string): string | undefined => {
+    if (towns.has(s)) return s;
+    const k = foldWords(s);
+    for (const [code, t] of towns) if (foldWords(t.name) === k) return code;
+    return undefined;
+  };
   // Must cities: waypoints. Unknown names are the traveller's mistake, named.
   const must: string[] = [];
   for (const raw of p.mustInclude ?? []) {
     const s = String(raw ?? "").trim();
     if (!s) continue;
-    const code = findCityCode(s);
+    const code = findCityCode(s) ?? townCode(s);
     if (!code) return fail(`unknown city to pass through: ${s.slice(0, 40)} (a city name such as Gdansk or a code such as GDN)`);
     if (!must.includes(code)) must.push(code);
   }
@@ -591,7 +647,7 @@ export async function walkTrips(p: WalkParams): Promise<WalkResult> {
   const allowed = allowedList.length ? new Set(resolveCountries(allowedList).codes) : null;
   if (allowedList.length && !allowed?.size) return fail(`none of those is a country we know: ${allowedList.join(", ")}`);
   // A city the traveller must pass through is a stop, so its country is allowed even outside the region.
-  if (allowed) for (const m of must) if (CITIES[m]) allowed.add(CITIES[m].country);
+  if (allowed) for (const m of must) if (spot(m)) allowed.add(spot(m)!.country);
   /** Targeted: the flight hops search the region's hubs instead of "anywhere" (see allowedCountries). */
   const targeted = !!allowed;
   // Countries that can actually be a stop. When the trip needs more stops than that (each at its most nights),
@@ -737,8 +793,10 @@ export async function walkTrips(p: WalkParams): Promise<WalkResult> {
   // the country it is in (Warsaw to Gdansk is how people see Poland), never one left earlier.
   // The home country is never a stop.
   const landable = (code: string, s: State, byGround = false): boolean => {
-    const c = CITIES[code];
+    const c = spot(code);
     if (!c) return false;
+    // A town has no airport: a flight never lands there.
+    if (c.town && !byGround) return false;
     if (c.country === home || s.cities.includes(code)) return false;
     if (s.countries.has(c.country) && !(byGround && c.country === s.country && s.city !== HOME) && !(revisit && s.city !== HOME)) return false;
     if (!countryAllowed(c.country, exclude) || avoidCountries.has(c.country) || avoidCities.has(code) || unsafe(c.country)) return false;
@@ -780,7 +838,7 @@ export async function walkTrips(p: WalkParams): Promise<WalkResult> {
   };
   /** What a stop is worth, in euros taken off its edge: fame and listings, variety, the traveller's wishes. */
   const bonus = (code: string, s: State): number => {
-    const c = CITIES[code];
+    const c = spot(code)!;
     let v = worth(code);
     if (!s.countries.has(c.country)) v += 15 + (unique ? UNIQUE_NEW_COUNTRY : 0);
     if (s.depth > 0 && isHub(s.city) && !isHub(code)) v += 25;
@@ -856,13 +914,13 @@ export async function walkTrips(p: WalkParams): Promise<WalkResult> {
   });
   const flyFromMemory = (from: string, f: MemFare): WalkLeg => ({ kind: "fly", from: f.src, fromName: from === HOME ? airportName(f.src) : (CITIES[from]?.name ?? airportName(f.src)), to: f.dst, toName: airportName(f.dst), date: f.out, minutes: Math.round(f.hours * 60), price: Math.round(f.price), carrier: f.carriers.join(", ") || undefined, url: f.url, source: "memory", stops: f.stops });
   const edgeEvent = (s: State, e: Edge): Extract<WalkEvent, { type: "edge" }> => {
-    const c = CITIES[e.to];
+    const c = spot(e.to);
     return { type: "edge", from: s.city, to: e.to, toName: c?.name ?? e.leg.toName, lat: c?.lat ?? 0, lon: c?.lon ?? 0, kind: e.leg.kind, price: e.leg.price, minutes: e.leg.minutes, source: e.leg.source };
   };
 
   /** The child state after an edge: stops copied, the parent stop's leave day set, the new stop opened. */
   const child = (s: State, e: Edge, hv: number, stopsOnTicket: number): State => {
-    const c = CITIES[e.to];
+    const c = spot(e.to)!;
     const legs = [...s.legs];
     if (s.city === HOME) {
       const road = roadLeg(e.leg.from, true, e.leg.date);
@@ -916,7 +974,8 @@ export async function walkTrips(p: WalkParams): Promise<WalkResult> {
     }
     for (const l of legs) {
       if (l.kind === "road") continue;
-      if (l === leg) why.push(l.kind === "fly" ? `home from ${l.fromName} to ${l.toName} for ${l.price} euro${l.source === "memory" ? " (seen in the last day)" : ""}` : `home by ${kindWord[l.kind]} from ${l.fromName} to ${l.toName}, ${r1(l.minutes / 60)} h, about ${l.price} euro (estimated)`);
+      if (l.source === "given") why.push(`your own flight ${l.fromName} to ${l.toName} on ${l.date}${l.price ? ` for ${l.price} euro, as you gave it` : ", not priced here (add what you paid)"}`);
+      else if (l === leg) why.push(l.kind === "fly" ? `home from ${l.fromName} to ${l.toName} for ${l.price} euro${l.source === "memory" ? " (seen in the last day)" : ""}` : `home by ${kindWord[l.kind]} from ${l.fromName} to ${l.toName}, ${r1(l.minutes / 60)} h, about ${l.price} euro (estimated)`);
       else if (l.kind === "fly") why.push(`fly ${l.fromName} to ${l.toName} for ${l.price} euro${l.source === "memory" ? " (seen in the last day)" : l.source === "boards" ? " (about half a return on tonight's board, estimated)" : ""}`);
       else why.push(`${kindWord[l.kind]} ${l.fromName} to ${l.toName} ${r1(l.minutes / 60)} h${l.from === HOME ? " as the way out" : " instead of a flight"}`);
     }
@@ -1015,7 +1074,7 @@ export async function walkTrips(p: WalkParams): Promise<WalkResult> {
     for (const g of ground(s.lat, s.lon, s.city)) {
       if (!landable(g.code, s, true)) continue;
       if (must.some((m) => m !== g.code && !s.cities.includes(m))) continue;
-      const c = CITIES[g.code];
+      const c = spot(g.code)!;
       const home = knownHome(g.code, c.lat, c.lon, earliest, latest, closable);
       if (home == null) continue;
       const via = groundPrice(haversineKm(s.lat, s.lon, c.lat, c.lon)) + hHop * chargedHours(kindOfMode(g.mode), g.minutes) + home;
@@ -1122,8 +1181,31 @@ export async function walkTrips(p: WalkParams): Promise<WalkResult> {
     return picked;
   };
 
+  // The traveller's own way out (fixedOut): its landing city is the first stop, on its day, and the walk starts
+  // there (depth 1). The way out is never searched and never replaced.
+  let firstDepth = 0;
+  if (p.fixedOut) {
+    const f = p.fixedOut;
+    const fromRaw = String(f.from ?? "").trim().toUpperCase();
+    const toRaw = String(f.to ?? "").trim().toUpperCase();
+    const toCity = CITIES[toRaw] ? toRaw : cityOf.get(toRaw);
+    if (!toCity) return fail(`the flight out lands at ${toRaw || "(nothing)"}, which is no airport or city we know; give its airport code (WAW, GDN)`);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(f.date ?? "") || !Number.isFinite(Date.parse(f.date))) return fail("the flight out needs its day as YYYY-MM-DD");
+    const toAirport = airportByIata.has(toRaw) ? toRaw : (CITIES[toCity].airports[0] ?? toRaw);
+    const fromAirport = airportByIata.has(fromRaw) ? fromRaw : (CITIES[fromRaw]?.airports[0] ?? gwCodes[0]);
+    const a = pointOf(fromAirport);
+    const b = pointOf(toAirport) ?? { lat: CITIES[toCity].lat, lon: CITIES[toCity].lon };
+    const minutes = Number.isFinite(f.minutes) && f.minutes! > 0 ? Math.round(f.minutes!) : a ? flightMinutes(haversineKm(a.lat, a.lon, b.lat, b.lon)) : 120;
+    const priced = Number.isFinite(f.price) && f.price! >= 0;
+    const leg: WalkLeg = { kind: "fly", from: fromAirport, fromName: airportName(fromAirport), to: toAirport, toName: airportName(toAirport), date: f.date, ...(f.depart ? { depart: f.depart } : {}), ...(f.arrive ? { arrive: f.arrive } : {}), minutes, price: priced ? Math.round(f.price!) : 0, ...(f.carrier ? { carrier: f.carrier } : {}), ...(f.url ? { url: f.url } : {}), source: "given" };
+    if (!landable(toCity, origin)) return fail(`${CITIES[toCity].name}, where the flight out lands, cannot be a stop (the home country, or on the avoid or been list)`);
+    push(child(origin, { to: toCity, leg, arrive: landingDay(f.date, minutes, a?.lon, b.lon) }, hIn, 0));
+    if (!levels[1]?.length) return fail(`${CITIES[toCity].name} leaves too few stops for the cities to pass through`);
+    firstDepth = 1;
+    considered.push(`the way out is the traveller's own: ${leg.fromName} to ${leg.toName} on ${f.date}${priced ? ` for ${leg.price} euro, as given` : ", not priced (their own ticket)"}; the walk starts in ${CITIES[toCity].name}`);
+  }
   // 6. The walk, depth by depth.
-  walk: for (let depth = 0; depth <= maxStops; depth++) {
+  walk: for (let depth = firstDepth; depth <= maxStops; depth++) {
     const level = (levels[depth] ?? []).sort((a, b) => a.priority - b.priority);
     if (!level.length) break;
     // The one-hop ground lookahead (homeAfter) for states that can still go deeper, by depth and by date; it only
@@ -1175,8 +1257,10 @@ export async function walkTrips(p: WalkParams): Promise<WalkResult> {
       expanded++;
       emit({ type: "node", code: s.city, name: s.name, lat: s.lat, lon: s.lon, date: s.date, depth: s.depth, cost: Math.round(s.cost) });
       if (s.via) emit({ ...s.via, chosen: true });
-      const srcs = s.city === HOME ? gwCodes : CITIES[s.city].airports;
+      const srcs = s.city === HOME ? gwCodes : (spot(s.city)?.airports ?? []);
       const flyFrom = s.city === HOME ? gwCodes.join(",") : s.city;
+      /** A town without an airport: no flight leaves from here, the hops and the way home are by ground. */
+      const noAirport = s.city !== HOME && !srcs.length;
 
       // 6a. Home: when this stop has had its nights (and not more than asked), the trip is inside
       // the asked range, and every must city is behind us. The last stop never swallows the rest
@@ -1193,7 +1277,7 @@ export async function walkTrips(p: WalkParams): Promise<WalkResult> {
             const leg = flyFromMemory(s.city, mem);
             emit(homeEdge(s, leg));
             close(s, leg, mem.stops);
-          } else {
+          } else if (!noAirport) {
             const its = await live({ flyFrom: s.city, flyTo: gwCodes.join(","), departureDate: kiwiDate(earliest), departureDateTo: kiwiDate(latest) });
             considered.push(`${s.name} home to ${gwCodes.join(",")} ${earliest}..${latest}: ${its ? `${its.length} fares` : "not searched"}`);
             const best = (its ?? [])
@@ -1237,7 +1321,7 @@ export async function walkTrips(p: WalkParams): Promise<WalkResult> {
       // From home the explore is always asked, it is the one question the walk is built on and a single search;
       // from a stop it is skipped only when the memory already holds an "anywhere"-sized answer, because what the
       // memory holds is whatever other features searched (a pair, a country), not the cheapest places overall.
-      const mem = await memoryFrom(srcs, a, b);
+      const mem = noAirport ? null : await memoryFrom(srcs, a, b);
       let known = 0;
       for (const f of mem ?? []) {
         const to = cityOf.get(f.dst);
@@ -1249,7 +1333,9 @@ export async function walkTrips(p: WalkParams): Promise<WalkResult> {
       // remembered ones are as good as the search. Open: the explore, skipped only for an "anywhere"-sized memory.
       const target = targeted ? hubsFor(s) : null;
       const where = target ? target.names.join(", ") || "the region" : "anywhere";
-      if (s.city !== HOME && known >= (target ? TARGET_HUBS : KNOWN_ENOUGH)) {
+      if (noAirport) {
+        considered.push(`${s.name} has no airport: on by train or coach only`);
+      } else if (s.city !== HOME && known >= (target ? TARGET_HUBS : KNOWN_ENOUGH)) {
         fromMemory++;
         considered.push(`${s.name} to ${where} ${a}..${b}: ${known} fares from memory, no live search`);
       } else if (target && !target.airports) {
@@ -1288,7 +1374,7 @@ export async function walkTrips(p: WalkParams): Promise<WalkResult> {
       const links = ground(s.lat, s.lon, s.city === HOME ? null : s.city)
         .filter((g) => landable(g.code, s, true))
         .map((g) => {
-          const c = CITIES[g.code];
+          const c = spot(g.code)!;
           const leg: WalkLeg = { kind: kindOfMode(g.mode), from: s.city, fromName: s.name, to: g.code, toName: c.name, date: a, minutes: g.minutes, price: groundPrice(haversineKm(s.lat, s.lon, c.lat, c.lon)), estimated: true, source: "ground" };
           return { edge: { to: g.code, leg, arrive: a } as Edge, cost: leg.price + hv * chargedHours(leg.kind, g.minutes) - bonus(g.code, s), must: must.includes(g.code) };
         })

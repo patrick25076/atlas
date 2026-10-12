@@ -5,6 +5,7 @@
 import { generateObject, jsonSchema } from "ai";
 import { createAmazonBedrock } from "@ai-sdk/amazon-bedrock";
 import type { Judge, WildTrip } from "./wild";
+import { allowUsage } from "./usage-caps";
 
 export function hasJudge(): boolean {
   return !!process.env.AWS_BEARER_TOKEN_BEDROCK;
@@ -33,6 +34,8 @@ export async function judgeTrip(trip: WildTrip): Promise<Judge | null> {
     note: "Flight hours are door to door including layovers. Living costs are per night, estimated from the country's price level, for hotel, food, local transport and one activity.",
   };
   for (let attempt = 0; attempt < 2; attempt++) {
+    // The daily model cap (lib/usage-caps.ts): past it the trip ships unjudged, as it does without a key.
+    if (!(await allowUsage("model_call")).ok) return null;
     const r = await judgeOnce(model, brief).catch((err: unknown) => {
       console.log(`judge: ${err instanceof Error ? err.message.slice(0, 300) : err}`);
       return null;

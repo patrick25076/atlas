@@ -51,19 +51,24 @@ type ScanOut = { to: string; nights: string; oneWay: boolean; searched: number; 
 type BaseOut = { base: string; country: string; flightIn: string; flightOut: string; rentPerMonth: number; livingPerMonth: number; total: number; perDay: number; why: string[]; sideTrips: string[]; visa?: string | null; urlIn?: string; urlOut?: string };
 type GroupOut = { windows: { dates: string; nights: number; everyone: boolean; compromises: string[] }[]; options: { city: string; country: string; dates: string; nights: number; everyone: boolean; total: number; perMember: { name: string; price: number; from: string; out: string; back: string; url: string; note?: string }[] }[] };
 type Itin = { price: number; out: string; back?: string; nights: number | null; stops: number; via?: string[]; carriers: string[]; hours: number; url: string };
-type InsightOut = { route: string; month: string; typical: number | null; samples: number; low: number | null; verdict: string; note?: string };
+type InsightOut = { route: string; month?: string; date?: string; typical: number | null; samples: number; low: number | null; verdict: string; basis?: string; note?: string };
+/** way_home's answer: a flight home per day (the cheapest, and the cheapest direct), the best direct, the cheapest. */
+type HomeFlight = { day?: string; from: string; to: string; depart: string; arrive: string; price: number; direct?: boolean; stops?: number; hours: number; carrier: string; url: string; first?: string; last?: string; doorToDoor?: number };
+type WayHomeOut = { from: string; window: string; bestDirect: HomeFlight | null; cheapest: HomeFlight | null; calendar: { day: string; cheapest: HomeFlight | null; direct: HomeFlight | null }[]; placeNote?: string };
+/** events_worth_travelling_for with a city: what is on there, dated, with links; web items say to check them. */
+type LocalEventsOut = { local: { city: string; country: string; events: { date: string | null; end?: string; name: string; venue?: string; url?: string; from: string; check?: string }[] }[] };
 type MonthsOut = { city: string; best: string[]; months: { month: string; highC: number; rainMm: number; score: number }[] };
 /** One option of cheapest_way as the tool compacts it (the legs are one line each). */
 type RouteOptOut = { kind: string; title: string; total: number; hours: number; stops: number; nonstop?: boolean; why: string; legs: string[]; back?: string[]; backTotal?: number; urls: string[]; cheapest?: boolean; fastest?: boolean };
 type RouteOut = { from: string; to: string; depart?: string; flex?: number; nights: number | null; searched: number; source?: string; considered?: string[]; note?: string; cheapest: RouteOptOut | null; fastest: RouteOptOut | null; options: RouteOptOut[]; raw?: RouteResult };
 /** One day of make_itinerary as the tool compacts it. */
 type ItinDayOut = { day: number; date: string; where: string; title: string; plan: string; travel?: string; weather?: string };
-type ItinOut = { title: string; start: string; end: string; nights: number; stops: string[]; days: ItinDayOut[]; costs?: { total: number; perDay: number; estimated: boolean }; status?: string; note?: string; skeleton?: Skeleton; wishes?: string; pace?: Pace; budget?: BudgetTier; raw?: Itinerary };
+type ItinOut = { title: string; start: string; end: string; nights: number; stops: string[]; days: ItinDayOut[]; costs?: { total: number; perDay?: number; estimated: boolean; note?: string }; status?: string; note?: string; skeleton?: Skeleton; wishes?: string; pace?: Pace; budget?: BudgetTier; raw?: Itinerary };
 type EventOut = ChatEvent & { kind?: string; note?: string; cheapestTrip: { price: number; dates?: string; from?: string; key?: string } | null };
 /** One leg and one loop of walk_trips as the tool compacts them (the names are already the traveller's words). */
 type WalkLegOut = { kind: "fly" | "train" | "coach" | "ferry" | "road"; from: string; to: string; date: string; depart?: string; minutes: number; price: number; estimated?: boolean; carrier?: string; source: string; url?: string };
 type WalkLoopOut = { title: string; route: string; start: string; end: string; nights: number; total: number; hours: number; stops: { name: string; country: string; nights: number; arrive: string }[]; legs: WalkLegOut[]; why: string[] };
-type WalkOut = { from: string; window?: string; nights?: string; nightsPerStop?: string; searched: number; source?: string; count: number; note?: string; corrected?: string; partial?: boolean; considered?: string[]; loops: WalkLoopOut[]; params?: WalkQuery; raw?: WalkResult };
+type WalkOut = { from: string; window?: string; nights?: string; nightsPerStop?: string; searched: number; source?: string; count: number; note?: string; corrected?: string; partial?: boolean; considered?: string[]; loops: WalkLoopOut[]; params?: WalkQuery; mapRerun?: false; raw?: WalkResult };
 /** walk_trips while it runs: each preliminary output is the walk's latest progress line, and its newest lines for
  * the globe (`live`, from index `at`) with the query that draws them. */
 type WalkProgress = { running: true; progress: string; lines?: string[]; loops?: number; edges?: number; searched?: number; live?: { at: number; lines: WalkLiveLine[] }; params?: WalkQuery };
@@ -357,9 +362,11 @@ function ItineraryCard({ out }: { out: ItinOut }) {
       </div>
       <span className={s.sub}>
         {out.start ? dateRange(out.start, out.end) : ""} · {out.nights} night{out.nights === 1 ? "" : "s"}
-        {out.costs ? ` · about ${euro(out.costs.perDay)} a day${out.costs.estimated ? ", estimated" : ""}` : ""}
+        {out.costs?.perDay ? ` · about ${euro(out.costs.perDay)} a day, all in` : ""}
         {out.status === "partial" ? " · partly written" : ""}
       </span>
+      {/* Which parts of the total are estimates, so a figure a day never hides what it leaves out. */}
+      {out.costs?.note && <span className={s.sub}>{out.costs.note}</span>}
       <ol className={s.days}>
         {days.slice(0, 8).map((d, i) => (
           <li key={d.day} style={{ animationDelay: `${i * 60}ms` }}>
@@ -592,6 +599,73 @@ function GroupOptions({ out }: { out: GroupOut }) {
   );
 }
 
+/** One flight home as a card: the day, the times, direct or not, the airline, the price and its link. */
+function HomeCard({ f, tag }: { f: HomeFlight; tag?: string }) {
+  return (
+    <a className={s.card} href={f.url} target="_blank" rel="noreferrer">
+      <span className={s.price}>€{f.price}</span>
+      <span className={s.body}>
+        <b>
+          {tag ? `${tag}: ` : ""}
+          {f.day ? `${f.day} · ` : ""}
+          {f.from} {f.depart} to {f.to} {f.arrive}
+        </b>
+        <span className={s.sub}>
+          {f.direct ? "direct" : `${f.stops ?? 1} stop${(f.stops ?? 1) === 1 ? "" : "s"}`} · {f.hours} h · {f.carrier}
+          {f.last ? ` · then ${f.last}` : ""}
+        </span>
+      </span>
+    </a>
+  );
+}
+
+/** way_home: the best direct and the cheapest first, then the days of the window with their cheapest and direct fares. */
+function WayHome({ out }: { out: WayHomeOut }) {
+  const days = (out.calendar ?? []).filter((d) => d.cheapest || d.direct);
+  return (
+    <div className={s.cards}>
+      {out.bestDirect && <HomeCard f={out.bestDirect} tag="Best direct" />}
+      {out.cheapest && out.cheapest.url !== out.bestDirect?.url && <HomeCard f={out.cheapest} tag="Cheapest" />}
+      {days.length > 0 && (
+        <p className={s.caption}>
+          {days.map((d) => `${d.day.slice(5)}: ${d.direct ? `direct €${d.direct.price}` : "no direct"}${d.cheapest && d.cheapest !== d.direct && d.cheapest.price !== d.direct?.price ? `, from €${d.cheapest.price}` : ""}`).join(" · ")}
+        </p>
+      )}
+      {out.placeNote && <p className={s.caption}>{out.placeNote}</p>}
+    </div>
+  );
+}
+
+/** What is on in the cities of a trip: dated items with links; the web ones carry their "check before buying". */
+function LocalEvents({ out }: { out: LocalEventsOut }) {
+  return (
+    <div className={s.cards}>
+      {out.local.map((c) => (
+        <div key={c.city}>
+          <p className={s.caption}>
+            <b>{c.city}</b>
+          </p>
+          {c.events.slice(0, 6).map((e, i) => (
+            <a key={i} className={s.card} href={e.url} target="_blank" rel="noreferrer">
+              <span className={s.body}>
+                <b>
+                  {e.date ? `${e.date.slice(5)}${e.end ? ` to ${e.end.slice(5)}` : ""} · ` : ""}
+                  {e.name}
+                </b>
+                <span className={s.sub}>
+                  {e.venue ? `${e.venue} · ` : ""}
+                  {e.from === "web" ? (e.check ?? "from the web, check before buying") : e.from === "feed" ? "the city's event feed" : "a curated event"}
+                  {e.date ? "" : " · no date in the window on the page"}
+                </span>
+              </span>
+            </a>
+          ))}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function Itineraries({ items }: { items: Itin[] }) {
   return (
     <div className={s.cards}>
@@ -631,9 +705,12 @@ function WalkCards({ out, origin, onAsk }: { out: WalkOut; origin?: ItinPlace; o
   // The compact loops are the engine's first ones, in its order, so index i is raw loop i.
   // The window of a restored walk is stale once its first day is past: /api/walk refuses it, so the button rests.
   const stale = !raw && !!out.params && String(out.params.from) < LOCAL_DAY(new Date());
+  // A walk that kept the traveller's own flight or passed through a town without an airport cannot be run again
+  // through /api/walk (it knows neither), so a restored one is not redrawn rather than redrawn wrong.
+  const rerunOk = out.mapRerun !== false;
   const show = (i: number) => {
     if (raw) dispatchAtlas("atlas:walk-result", walkResultDetail(raw, i, out.params));
-    else if (out.params && !stale) dispatchAtlas("atlas:walk", { params: { ...out.params, budget: 0 } });
+    else if (out.params && !stale && rerunOk) dispatchAtlas("atlas:walk", { params: { ...out.params, budget: 0 } });
   };
   const plan = (i: number) => {
     const loop = raw?.loops[i];
@@ -698,7 +775,7 @@ function WalkCards({ out, origin, onAsk }: { out: WalkOut; origin?: ItinPlace; o
               </ol>
             </details>
             <div className={s.actions}>
-              <button className={s.mini} onClick={() => show(i)} disabled={!raw && (!out.params || stale)} title={stale ? "These dates have passed; ask again for new ones" : undefined}>
+              <button className={s.mini} onClick={() => show(i)} disabled={!raw && (!out.params || stale || !rerunOk)} title={stale ? "These dates have passed; ask again for new ones" : !raw && !rerunOk ? "This loop keeps your own flight or a town without an airport; ask again to see it on the map" : undefined}>
                 Show on the map
               </button>
               <button className={s.mini} onClick={() => plan(i)}>
@@ -1310,11 +1387,18 @@ export default function ChatPanel(p: Props) {
               </div>
             )}
             {name === "events_worth_travelling_for" && Array.isArray(out.events) && out.events.length > 0 && <EventCards events={out.events as EventOut[]} origin={herePlace(p.context)} />}
-            {name === "price_insight" && (
-              <span className={`${s.verdict} ${s[(out as unknown as InsightOut).verdict] ?? ""}`}>
-                {(out as unknown as InsightOut).verdict === "unknown" ? "No fare history yet for this route" : `Fare memory: ${(out as unknown as InsightOut).verdict}${(out as unknown as InsightOut).typical != null ? `, usually ${euro((out as unknown as InsightOut).typical)}` : ""}${(out as unknown as InsightOut).low != null ? `, lowest seen ${euro((out as unknown as InsightOut).low)}` : ""}`}
-              </span>
-            )}
+            {name === "events_worth_travelling_for" && Array.isArray(out.local) && out.local.length > 0 && <LocalEvents out={out as unknown as LocalEventsOut} />}
+            {name === "way_home" && Array.isArray(out.calendar) && (out.bestDirect || out.cheapest) ? <WayHome out={out as unknown as WayHomeOut} /> : null}
+            {name === "price_insight" &&
+              (() => {
+                const v = out as unknown as InsightOut;
+                const known = v.verdict !== "unknown" && v.verdict !== "not enough history";
+                return (
+                  <span className={`${s.verdict} ${known ? (s[v.verdict] ?? "") : ""}`}>
+                    {v.verdict === "unknown" ? (v.typical != null && (v.samples ?? 0) >= 5 ? `Fare memory: usually ${euro(v.typical)}, based on ${v.samples} fares` : "No fare history yet for this route") : v.verdict === "not enough history" ? `Not enough fare history to judge (${v.samples} comparable fare${v.samples === 1 ? "" : "s"})` : `Fare memory: ${v.verdict}${v.typical != null ? `, usually ${euro(v.typical)}` : ""}${v.low != null ? `, lowest seen ${euro(v.low)}` : ""}${v.samples ? `, based on ${v.samples} fares` : ""}`}
+                  </span>
+                );
+              })()}
             {(name === "find_getaways" || name === "cheapest_deals") && cardDeals(out).length > 0 && <DealCards deals={cardDeals(out)} onOpen={p.onOpenDeal} origin={herePlace(p.context)} />}
           </>
         )}
@@ -1471,6 +1555,8 @@ export default function ChatPanel(p: Props) {
           ref={taRef}
           className={s.textarea}
           rows={1}
+          // The chat route refuses a message past 4,000 characters (app/api/chat/route.ts); the box stops there first.
+          maxLength={4000}
           placeholder={listening ? "Listening…" : busy ? "Searching… you can type the next thing" : "Where, when, how long, in any order"}
           value={draft}
           onChange={(e) => {

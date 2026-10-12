@@ -179,6 +179,57 @@ needs a region, dates or a place picked on the map, the globe answers `atlas:pic
 panel's Trips tab (`components/TripsPanel.tsx`) draws any trip the same way (`RouteStrip`):
 the loop as a strip of photos, the stops as cards, the legs as rows with booking links.
 
+## Security
+
+_Added 2026-10-12, when the owner asked whether the live site could be abused._
+
+**The access gate.** `proxy.ts` (Next 16's name for middleware; Node.js runtime) runs on every
+request except Next's build assets. Without a valid `atlas_access` cookie or an
+`x-atlas-access: <code>` header, a page is redirected (307) to `/access?next=<path>` and an
+API route answers 401 `{ error: "access code required" }`. Open without the code: `/access`
+and `POST /api/access`; the shared itinerary pages `/i/<id>` with their opengraph image,
+`GET /api/itinerary/<id>` and `/ics`; `GET /api/place` (the shared page's photos, a
+Wikivoyage summary); `/_next/*`, `/favicon.ico` and any non-API path ending in a file
+extension (`/data/*.json`, icons, manifest, `robots.txt`, the MapLibre worker). The rules are
+in `lib/access.ts`, which uses Web Crypto only.
+
+- The cookie is `<ms timestamp>.<HMAC-SHA256>` keyed with `ATLAS_COOKIE_SECRET` over the
+  timestamp and the code, httpOnly, secure in production, SameSite lax, 90 days. A new code
+  signs everyone out; a new secret does too.
+- The typed code and the header are compared in constant time (both sides HMAC-ed with a
+  per-process random key). A wrong code waits 600 ms, typed or in the header. `/api/access`
+  allows 10 tries a minute per address, and the proxy allows 10 wrong `x-atlas-access`
+  headers a minute per address (both in process), then 429. A wrong header answers 401
+  `{ error: "wrong code" }` on pages and APIs alike.
+- `/access` is a plain HTML form posting to `/api/access` (303 back to `next`); JSON posts
+  get `{ ok, next }` or 401. `safeNext` refuses any control character, whitespace or
+  backslash (the URL parser strips a tab, so `/<TAB>/evil.com` would become `//evil.com`),
+  then resolves the path against a dummy origin and keeps it only if it stays there.
+- No `ATLAS_ACCESS_CODE`: locally the gate is off and a warning is logged once per instance.
+  On the production deployment (`VERCEL_ENV=production`) it fails closed: everything except
+  the shared itinerary paths and static files answers 503 "not configured" (the `/access`
+  form too), unless `ATLAS_GATE_OFF=1` says a public site is meant. Under `next dev` the gate
+  is off unless `ATLAS_GATE_DEV=1`; there the header `x-atlas-gate-test: 1` turns it on for
+  one request, for testing without locking out other scripts.
+
+**Search engines.** `app/robots.ts` disallows everything and `next.config.ts` adds
+`X-Robots-Tag: noindex, nofollow` (plus `nosniff` and a referrer policy) to every response.
+
+**Daily caps** (`lib/usage-caps.ts`). `allowUsage(kind, weight)` for `chat_turn`,
+`model_call`, `tavily`, `foursquare`, `liteapi`: one row a day and kind in `usage_daily`,
+added to by one upsert that only adds while under the limit, so concurrent instances cannot
+overshoot and refused calls are not counted. Limits from `ATLAS_CAP_<KIND>` (400, 250, 250,
+250, 400; an empty value counts as unset). Without the database, or for a minute after it failed, the count is kept in
+process (fails open, so a Postgres outage never takes the site down). The GitHub jobs are
+not counted. `lib/tavily.ts` (one per search), `lib/foursquare.ts` (one per call) and
+`lib/liteapi.ts` (two per hotel lookup) check it and answer their usual empty shape with
+"daily limit reached". `chatRateLimit(ip)` allows 30 chat turns an hour per address, in
+process. The chat and model call sites use them (the agent stream wires those).
+
+**What the gate does not cover.** Kiwi has its own per-process budget (above). The caps
+per address are per instance, so a determined caller spread over many instances gets more;
+the global daily caps are the backstop.
+
 ## Costs and limits
 
 - **Kiwi**: free, no key, unpublished terms, a throttle per address after ~2,000 searches a

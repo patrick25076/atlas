@@ -27,7 +27,28 @@ export type Feed = {
    * trains needs a lower ceiling, or compressed placeholder times slip through as real ones.
    */
   maxKmh?: Partial<Record<"rail" | "coach" | "ferry" | "other", number>>;
+  /**
+   * Looks up the current download link when the publisher's catalog gives each upload a new
+   * one (Slovakia's data.slovensko.sk). `url` stays as the fallback when the lookup fails.
+   */
+  resolveUrl?: () => Promise<string>;
 };
+
+// data.slovensko.sk serves each upload of a dataset under a new download id; the dataset id is
+// stable. This is the catalog's own search call, the one its web page makes.
+async function slovakDatasetDownload(datasetId: string): Promise<string> {
+  const res = await fetch("https://data.slovensko.sk/datasets/search", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ language: "sk", page: 1, pageSize: 1, filters: { id: [datasetId] }, requiredFacets: [] }),
+  });
+  if (!res.ok) throw new Error(`data.slovensko.sk search: HTTP ${res.status}`);
+  const data = (await res.json()) as { items?: { distributions?: { downloadUrl?: string }[] }[] };
+  const url = data.items?.[0]?.distributions?.[0]?.downloadUrl;
+  // Only a download on the catalog's own host is followed: the answer is third-party data.
+  if (!url || !url.startsWith("https://data.slovensko.sk/download?id=")) throw new Error("data.slovensko.sk: no download link");
+  return url;
+}
 
 export const FEEDS: Feed[] = [
   {
@@ -102,6 +123,77 @@ export const FEEDS: Feed[] = [
     countries: ["IE"],
     mode: "rail",
   },
+  // Central and Eastern Europe (added 2026-10-12). Before these the graph had no Polish
+  // domestic trains at all: Warsaw to Gdansk came out as a 5 h coach from Modlin airport, while
+  // the PKP Intercity train takes about 3 h.
+  {
+    // Mikołaj Kuranowski's PolishTrainsGTFS, built from PKP PLK's national timetable (the
+    // infrastructure manager publishes every operator's trains): PKP Intercity, Polregio, the
+    // regional companies, RegioJet and Leo Express. It replaces his per-operator pkpic and
+    // polregio files, retired on 2026-03-31.
+    id: "pl-rail",
+    name: "Polish railways (PKP Intercity, Polregio and the regional operators)",
+    url: "https://mkuran.pl/gtfs/polish_trains.zip",
+    licence:
+      "PKP PLK and Koleje Mazowieckie public-sector re-use terms (Polish Act of 11 August 2021): free, commercial use allowed, with the source and the date stated and PKP PLK informed of the re-use",
+    attribution: "PKP Polskie Linie Kolejowe S.A. and Koleje Mazowieckie, GTFS by Mikołaj Kuranowski (mkuran.pl)",
+    countries: ["PL"],
+    mode: "rail",
+  },
+  {
+    // Správa železnic publishes the national train timetable (every operator) as CZPTT XML on
+    // portal.cisjr.cz, as Czech law and EU Regulation 2017/1926 require, but states no licence
+    // for it. This GTFS conversion is published as CC0 by its maker and is the one Transitous
+    // uses. The zip is 96 MB, three quarters of it shapes.txt, which the ingest never unpacks.
+    id: "cz-rail",
+    name: "Czech railways (České dráhy, RegioJet, Leo Express, Arriva and the regional operators)",
+    url: "https://motis.obehy.cz/get-feeds/cz-czptt-gtfs.zip",
+    licence:
+      "Správa železnic CZPTT timetable (portal.cisjr.cz, published by law, no licence stated); GTFS conversion CC0 1.0 (motis.obehy.cz)",
+    attribution: "Správa železnic, GTFS by motis.obehy.cz",
+    countries: ["CZ"],
+    mode: "rail",
+  },
+  {
+    // ŽSR (the infrastructure manager) publishes the whole train timetable on the national
+    // open data catalog; the download id changes with each upload, hence resolveUrl.
+    id: "sk-rail",
+    name: "Slovak railways (ZSSK, RegioJet, Leo Express and the other operators)",
+    url: "https://data.slovensko.sk/download?id=fb3a9724-623b-4ddf-a6b5-a19b4a346281",
+    resolveUrl: () => slovakDatasetDownload("ebeeedf1-aca2-451a-bdc0-35d536714888"),
+    licence: "CC BY 1.0 (data.slovensko.sk, dataset ebeeedf1-aca2-451a-bdc0-35d536714888)",
+    attribution: "Železnice Slovenskej republiky via data.slovensko.sk",
+    countries: ["SK"],
+    mode: "rail",
+  },
+  {
+    // Listed on data.gov.hr ("published so that the public can read the timetable and use it
+    // to build applications"), refreshed daily, with no licence field on the dataset.
+    id: "hr-rail",
+    name: "HŽ Putnički prijevoz (Croatian railways)",
+    url: "https://www.hzpp.hr/GTFS_files.zip",
+    licence: "HŽPP open data on data.gov.hr, published for building applications (no licence text stated)",
+    attribution: "HŽ Putnički prijevoz d.o.o.",
+    countries: ["HR"],
+    mode: "rail",
+  },
+  {
+    // BDZ publishes no GTFS itself; livetransport.eu builds one from BDZ's timetable and
+    // publishes it under CC BY 4.0, asking to be cited as the source.
+    id: "bg-rail",
+    name: "BDZ (Bulgarian State Railways)",
+    url: "https://gtfs.livetransport.eu/gtfs/bdz.zip",
+    licence: "CC BY 4.0 (livetransport.eu)",
+    attribution: "livetransport.eu, from BDZ timetables",
+    countries: ["BG"],
+    mode: "rail",
+  },
+  // Not added on 2026-10-12. Hungary: MÁV's GTFS (mavcsoport.hu/gtfs/gtfsMavMenetrend.zip,
+  // CC0) answers 401 without the login of a registered account; it needs Patrick to register
+  // (see the handoff). Austria: ÖBB, as below. Italy: Trenitalia has no national open feed;
+  // the BusOne rehost is free only for non-commercial use, and the Mobility Database entry
+  // (mdb-1052) is Sardinia only. Serbia, Montenegro, Greece, Ukraine, the Baltics: open feeds
+  // exist (jbb.ghsq.de, Mobility Database) and were not checked yet.
   // Outside Europe (added 2026-10-10 from the Mobility Database catalog, feeds_v2.csv). Each
   // was downloaded and opened before it was added; the licence line says what the publisher
   // states, and "no explicit licence" means a feed the operator publishes for developers

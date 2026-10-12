@@ -41,7 +41,7 @@ population (GeoNames).
 | Visa | `visa.json` (199 × 199) | Passport Index dataset (MIT), February 2026, labelled indicative | monthly | visa line per stop |
 | Fame | `fame.json` (2,549) | Wikipedia pageviews + Wikivoyage listings, CC BY-SA | monthly | hidden gems, worth of a stop |
 | Costs | `costs.json` (193 countries) | World Bank price level index (CC BY 4.0) | monthly | living cost per day, rent |
-| Ground graph | `ground-graph.json` (12,959 stations, 327k edges) | GTFS: gtfs.de long-distance (CC BY 4.0), CFR and private RO operators (OGL-ROU), SNCF (ODbL), Eurostar (Etalab 2.0), FlixBus EU (ODbL, transport.data.gouv.fr), FlixBus and Greyhound US (Flix open GTFS, gtfs.gis.flix.tech, no explicit licence: **permission pending**, ask open-data@flixbus.com, SETUP §9), Renfe, SNCB (SNCB open data), Irish Rail (NTA open data), VIA Rail Canada (VIA Rail developer terms, via the Mobility Database mdb-735), Amtrak (public GTFS, no explicit licence), KTM Malaysia (data.gov.my terms), Thailand's national feed (OTP, CC BY 4.0; intercity trains, coaches and island ferries only); the exact wording per feed is in `scripts/ingest/feeds.ts` and shown in the app; estimates, not timetables | weekly | Explore reach, combos, side trips, border hops |
+| Ground graph | `ground-graph.json` (23,435 stations, 765k edges, 17.1 MB on 2026-10-12) | GTFS: gtfs.de long-distance (CC BY 4.0), CFR and private RO operators (OGL-ROU), SNCF (ODbL), Eurostar (Etalab 2.0), FlixBus EU (ODbL, transport.data.gouv.fr), FlixBus and Greyhound US (Flix open GTFS, gtfs.gis.flix.tech, no explicit licence: **permission pending**, ask open-data@flixbus.com, SETUP §9), Renfe, SNCB (SNCB open data), Irish Rail (NTA open data), VIA Rail Canada (VIA Rail developer terms, via the Mobility Database mdb-735), Amtrak (public GTFS, no explicit licence), KTM Malaysia (data.gov.my terms), Thailand's national feed (OTP, CC BY 4.0; intercity trains, coaches and island ferries only), and since 2026-10-12 the national railways of Poland (PKP PLK re-use terms, via mkuran.pl), Czechia (Správa železnic, no licence stated; CC0 conversion by motis.obehy.cz), Slovakia (ŽSR, CC BY 1.0), Croatia (HŽPP, data.gov.hr, no licence text) and Bulgaria (BDZ, CC BY 4.0 by livetransport.eu); the exact wording per feed is in `scripts/ingest/feeds.ts` and shown in the app; estimates, not timetables | weekly | Explore reach, combos, side trips, border hops |
 | Ferries | `ferries.json` (3,564 crossings) | Overture transportation water segments, estimated crossings | monthly | Explore, ground graph |
 | Deals (fallback) | `deals.json` (2,201) | Kiwi.com, the seven Romanian airports | nightly (git) | fallback when no Blob board exists |
 | One-way fares | `oneway.json` (4,201) | Kiwi.com, Romanian airports | weekly | Trips tab loops |
@@ -64,6 +64,32 @@ population (GeoNames).
   Oceania have none, so combos, border hops and side trips there are distance estimates. Sea
   temperature exists only where MET Norway's ocean model reaches (Nordic and Baltic, 87
   cities): the Mediterranean, the tropics and every other coast say nothing.
+- **Rail in Central and Eastern Europe** (checked 2026-10-12). Added: Poland (all 13 operators
+  in PKP PLK's timetable, 2,941 new stations: Warsaw to Gdansk is now the 2 h 25 train, not a
+  5 h coach from Modlin), Czechia (2,647), Slovakia (752), Croatia (445), Bulgaria (651, named in
+  English from the feed's translations). Still missing: **Hungary**, whose MÁV GTFS (CC0)
+  needs a registered account at mavcsoport.hu (only cross-border CFR, ÖBB and FlixTrain runs
+  reach Budapest today); **Austria**, ÖBB's CC BY 4.0 feed behind a click-to-accept page
+  (SETUP §9); **Italy**, no national Trenitalia feed (the BusOne rehost is non-commercial only);
+  Slovenia, Serbia, Montenegro, Greece, Ukraine and the Baltics have open feeds listed by the
+  Mobility Database or jbb.ghsq.de that were not checked yet. Licence duties: PKP PLK asks to
+  be told of the re-use and the source and date to be stated; Czechia and Croatia publish no
+  licence text, so treat them like the Flix US feed until confirmed.
+- **Train counts per week** are counted over one 28-day window since 2026-10-12. Before, a
+  feed listing each train once per date (Poland, SNCF, CFR, Eurostar) counted a one-day
+  variant as daily and calendar.txt services counted outside their dates, so frequencies
+  were inflated (Warsaw to Gdansk 1,095 a week instead of 178, Berlin to Munich 502 instead
+  of 210) and the expected waits too short. Trains that do not run in the window make no
+  connection at all (before, 64,000 rail edges ran 0 times a week and were still routed over).
+- **How a refresh fails** (`scripts/ingest/gtfs.ts`). A feed whose download fails twice is
+  skipped, or its earlier files are reused when the machine has them. If the current graph
+  contains that feed, nothing is written and the run fails, so one host being down never
+  ships a graph without a country. A new feed that fails is left out and the run still
+  fails, so the workflow reports it. The manifest is written only after the graph, lists
+  exactly the feeds in it, and dates each feed by when its files were downloaded, not by the
+  run (PKP PLK's terms require the source date).
+- **Station names in Cyrillic** without an English translation in the feed (the Ukrainian
+  stations in the Polish feed) are romanised: Ukrainian national scheme, Bulgarian for BDZ.
 - **Climate normals** cover 1,496 of 2,805 cities (the monthly job fills the rest).
 - **Events** exist for 20 cities, all but five in Europe and North America; Asia has Taipei
   and Hong Kong (adapter written, feed exists), Oceania Brisbane, nothing in Africa, South

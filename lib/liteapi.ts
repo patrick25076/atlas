@@ -1,6 +1,10 @@
 // Server-only. Hotels with live prices from LiteAPI (LITEAPI_KEY; sandbox keys answer with
 // test rates, so prices only show on the site when LITEAPI_ENV=production). The cheapest few
-// decent hotels near a point for given nights.
+// decent hotels near a point for given nights. Each lookup is two LiteAPI calls and counts as
+// two against the daily LiteAPI cap (lib/usage-caps.ts); past it the answer is an error with
+// "daily limit reached". The nightly snapshot job runs on GitHub Actions and is not counted.
+import { allowUsage } from "./usage-caps";
+
 export type Hotel = { id: string; name: string; stars?: number; rating?: number; lat?: number; lon?: number; total?: number; perNight?: number; currency: string; image?: string };
 export type HotelsResult = { status: "ok" | "no-key" | "sandbox" | "error"; note?: string; checkin: string; checkout: string; hotels: Hotel[] };
 
@@ -29,6 +33,7 @@ type RatesRow = { hotelId: string; roomTypes?: { rates?: { retailRate?: { total?
 
 export async function hotelsNear(lat: number, lon: number, checkin: string, checkout: string, nationality = "RO"): Promise<HotelsResult> {
   if (!hasLiteApi()) return { status: "no-key", note: "LiteAPI key missing (SETUP.md §5)", checkin, checkout, hotels: [] };
+  if (!(await allowUsage("liteapi", 2)).ok) return { status: "error", note: "daily limit reached", checkin, checkout, hotels: [] };
   const list = await call<{ data?: HotelRow[] }>(`/data/hotels?latitude=${lat.toFixed(4)}&longitude=${lon.toFixed(4)}&distance=4000&limit=40`, { next: { revalidate: 86_400 } } as RequestInit);
   const rows = (list?.data ?? []).filter((h) => (h.stars ?? 3) >= 3 && (h.rating ?? 7) >= 7).slice(0, 25);
   if (!rows.length) return { status: liteApiLive() ? "ok" : "sandbox", checkin, checkout, hotels: [] };

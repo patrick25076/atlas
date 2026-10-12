@@ -481,6 +481,110 @@ route itself was posted in-process with `CHAT_TURN_SEARCHES=0` and `context.pref
 `nightsPerStop 2-3` and 5 stops. Not done through curl: the one dev server allowed per folder
 belonged to another session, with no turn cap.
 
+## The owner's conversation (2026-10-12)
+
+The owner's words: "look how bad it is, the whole experience; look at a conversation, it did
+not help me at all, a lot of tools failed". He had found Brasov to Warsaw on 24 October and
+asked how to come back, preferring Gdansk. What went wrong, and what each now does:
+
+1. **No "how do I get back from here".** walk_trips re-planned his way out (Bucharest to
+   Gdansk first) and its way home was a 9 h one-stop at 82 euro on the 29th, while a direct
+   Ryanair Gdansk to Otopeni on the 31st cost 32 and was found only after he said "direct".
+   **way_home** (new): from a city, town or airport, over a window of days (default eight,
+   at most fourteen), one Kiwi one-way search from the place's own airports and one from the
+   airports a train or coach reaches within three hours (route-finder's `gatewaysFor`), to
+   every airport of his home country within six hours of him (`countryAirports` and
+   lib/pairs.ts's `HOME_MAX_MIN`, timed on the ground graph). It answers a calendar (per day
+   the cheapest and the cheapest direct, with times, airline and link), the best direct, the
+   cheapest and the cheapest door to door, and the ground leg from each home airport to his
+   door. Never more searches than the turn has left; with live prices off it answers the
+   fare memory's cheapest one-way under the usual note. The prompt: when the traveller has
+   a chosen or booked flight out, keep it as given, call way_home from the city they prefer,
+   show the direct options first.
+2. **walk_trips takes the traveller's own flight.** `fixedOut: { from, to, date, price? }`
+   (lib/graph-walk.ts `WalkParams.fixedOut`): the walk starts at the landing city on that
+   day, at depth 1, with that leg as given (source `given`, priced when a price is passed,
+   otherwise unpriced and the loop says so). No search is spent on it and no loop replaces it.
+3. **Towns.** Every place argument (walk mustInclude and origin, cheapest_way, way_home,
+   ground_reach, events, sights, events_near) is read by `findPlace`: cities.json, then the
+   GeoNames towns file and airport names (route-finder's `resolvePlace`), then a ground graph
+   station by its name or town (Hallstatt is only its lake pier there), accents folded. A town
+   without an airport is a walk stop reached by ground only (`WalkParams.towns`; flights never
+   land there or leave from there). Torun works: the walk goes Warsaw, train to Torun, coach to
+   Gdansk, fly home.
+4. **Events.** events_worth_travelling_for takes `city` (up to three) and dates for what is on
+   locally: the city's open feed when lib/events/sources.ts has one, the curated events within
+   60 km, else ONE Tavily search "what's on in <city> <dates>" parsed into dated items with
+   links (`dateInText` reads ISO, 24.10.2026, "24 October", "Oct 24th"), each marked "from the
+   web, check before buying". A city passed as a kind becomes the city, and the answer says so.
+5. **Fare memory.** price_insight compares like with like (`fareVerdict` in lib/insights.ts):
+   the same city pair (every airport of each side), the same kind (one-way, or a return within
+   two nights of the fare's), departures within seven days of the fare's own day, sightings of
+   the last 30 days, one sample per departure day per sighting day. It says "based on N fares";
+   under five it says "not enough history", never great or high. A per-request memo keeps the
+   same route's answer the same within a turn.
+6. **Itinerary costs.** Every part is in the total: a leg without a price is estimated by its
+   distance (a flight at 25 euro plus 5 cents a km, the ground at 10 cents a km); the room is
+   LiteAPI's cheapest decent hotel at each stop when the production key is set (one lookup a
+   stop, kept a day; it counts against the LiteAPI cap in lib/liteapi.ts), else the World Bank
+   share; food and activities are estimates. `costs.note` says which parts are estimates. A
+   build cut short by time shows no figure a day. The model calls in itinerary-server, judge
+   and plan pass `allowUsage("model_call")` first; past the cap the days come from the guides,
+   the trip ships unjudged, no plan is written. The chat route asks `chatRateLimit(ip)` (30
+   turns an hour) and `allowUsage("chat_turn")` (the site's day) before the model runs.
+7. **Fewer, faster calls.** At most two web searches a turn in all (web_search refuses a third
+   with a note; the events tool makes at most one per city). Every `{ error }` ends with
+   "next:" and the one thing to do. A coach between two cities of a country whose railway the
+   ground graph lacks carries `trainHint` (the countries come from the graph's own feed ids,
+   so the Polish feed added the same day turned Warsaw to Gdansk into a 2.6 h train).
+
+Tested: the harness's new `owner` section (zero Kiwi searches) and the full harness at
+`--live-cap=0`; the conversation itself replayed through POST /api/chat on the dev server,
+four turns, at most twelve live Kiwi searches across the replay (a dev-only header,
+`x-atlas-turn-searches`, lowers a turn's cap; production ignores it). Result: turn 1 called way_home (Gdansk, 27 Oct to 3 Nov, 2 searches) and led with the direct Ryanair Gdansk to Otopeni on 31 Oct at 32 euro, the fare memory saying great based on 10 fares; turn 2 the same with direct_only (a memo hit, 0 searches); turn 3 make_itinerary (3 nights Warsaw, 4 Gdansk, hotels from LiteAPI, every part in the total) and hotels_near twice; turn 4 walk_trips with fixedOut through Torun (train Warsaw to Torun, coach to Gdansk, the 32 euro flight home; 2 searches) and the events of Warsaw, Torun and Gdansk (two web searches, the third city told so). No tool failed; 4 live Kiwi searches in all; the harness at --live-cap=0: 297 rows, 0 failed.
+
+### Review fixes (2026-10-12, evening)
+
+A review of the owner's-conversation fixes found that several of his failures could come back. What changed:
+
+1. **price_insight judges every price.** The per-turn memo keeps only the comparison (typical, lowest, samples).
+   Each call then judges its own price with `verdictFor`. Before, the second fare on the same route and day got
+   the first fare's verdict: the direct at 32 euro and the one-stop at 150 were both "great". The chip says
+   "usually 65 euro, based on 10 fares" when only the price was missing, not "no fare history".
+2. **way_home finds the direct.** One search to every home airport returns the cheapest 15 fares of the window,
+   and on a busy route those are all one-stop. When a direct is asked for, none came back, or most days are
+   empty, the same window is searched again one home airport at a time, large airports first: up to 4 more
+   searches with direct_only, 2 otherwise, within the turn's budget. An empty day says "not among the cheapest
+   fares found", never "no flight". Live, Gdansk 27 Oct to 3 Nov, direct only, 6 searches: GDN to OTP Ryanair
+   at 99 on the 30th, 32 on the 31st and 52 on 2 Nov.
+3. **No unsafe airports.** A town's airports (airportsAround) and way_home's train or coach airports drop any
+   airport in a country under a travel warning, unless the place is in that country. Sopot no longer lists
+   Kaliningrad.
+4. **Towns in itineraries, and the fares already found.** `skeletonFromStops` takes a `resolve` for names that
+   cities.json lacks (the chat passes its findPlace), so Warsaw, Torun, Gdansk becomes an itinerary.
+   make_itinerary prices the unpriced legs with the fares this conversation already found: way_home's days
+   and a walk's legs are remembered as known fares, and the model can pass `fares` for the traveller's own
+   flight. It also plans `from: "last_walk"`. A leg with no known fare is still estimated, and the note says
+   how many legs were priced from the thread.
+5. **The walk's map params.** The params the browser keeps carry town names, not the walk's internal codes
+   (T-torun), and a walk with the traveller's own flight or a town is marked `mapRerun: false`, so a restored
+   thread never re-runs it through /api/walk without the flight (the button rests with a line saying why).
+   The walk's tool wrapper stays an async generator, so this turn's walk is remembered for make_itinerary.
+6. **Event words stay kinds.** "Marathon" and "Christmas" are never read as places (Marathon, Florida;
+   Christmas Island). A word becomes a city only when it names a city with airports, or a town within 300 km
+   of a city of the same request (Torun beside Warsaw and Gdansk). The events tool makes ONE web search for
+   all the cities of a trip whose feed has little, and gives each page to the city it names. Dates in web text
+   now read ranges that began before the window ("20 to 25 October") and "26.10." without a year.
+7. **Hotel quotes.** A LiteAPI miss (the daily cap, an error) is kept five minutes, not a day; a price is kept
+   a day. A one-adult room is no longer divided by the number of travellers.
+8. **The chat's size.** The newest user message is refused past 4,000 characters (413, a plain line; the
+   input box stops there). Older user messages are cut at 4,000, and the history the model reads is kept
+   under 60 KB, oldest turns first.
+
+Tested: the harness's `owner` section, 17 rows, 0 failed, 0 Kiwi searches; `--owner-live` (the way home
+above), 6 Kiwi searches; every section but the live table at `--live-cap=0 --itin-stub`, 223 rows, 0 failed; POST /api/chat
+with a 5,000-character message answered 413.
+
 ## What cannot be guaranteed
 
 - **Kiwi's throttle.** The public search has no key, no SLA and no published terms. After a

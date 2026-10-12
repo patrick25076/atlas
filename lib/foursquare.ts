@@ -1,7 +1,10 @@
 // Server-only. Restaurants, cafés and sweet places near a point from the Foursquare Places
 // API (FOURSQUARE_API_KEY): rating out of 10, price tier 1 to 4, a tip or two. The one keyed
 // source of ratings that may be shown on a non-Google map. Cached a day per query; a 429 (no
-// credits on the Foursquare org) is reported, not thrown.
+// credits on the Foursquare org) is reported, not thrown. Every call counts against the daily
+// Foursquare cap (lib/usage-caps.ts); past it the answer is an error with "daily limit reached".
+import { allowUsage } from "./usage-caps";
+
 export type Eat = { id: string; name: string; rating?: number; price?: number; category?: string; address?: string; tip?: string; lat?: number; lon?: number; distance?: number; url?: string };
 export type EatsResult = { status: "ok" | "no-key" | "no-credits" | "error"; note?: string; places: Eat[] };
 
@@ -29,6 +32,7 @@ type Place = {
 export async function eatsNear(lat: number, lon: number, query = "restaurant", opts: { radius?: number; limit?: number; maxPrice?: number } = {}): Promise<EatsResult> {
   const key = process.env.FOURSQUARE_API_KEY?.trim();
   if (!key) return { status: "no-key", note: "Foursquare key missing (SETUP.md §13)", places: [] };
+  if (!(await allowUsage("foursquare")).ok) return { status: "error", note: "daily limit reached", places: [] };
   const q = new URLSearchParams({
     ll: `${lat.toFixed(4)},${lon.toFixed(4)}`,
     query,

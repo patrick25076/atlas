@@ -5,6 +5,7 @@
 // the plan from that grounding; it does not invent fares or dates.
 import { generateObject, jsonSchema } from "ai";
 import { createAmazonBedrock } from "@ai-sdk/amazon-bedrock";
+import { allowUsage } from "./usage-caps";
 import countriesJson from "@/public/data/countries.json";
 import costsJson from "@/public/data/costs.json";
 import { countryGuide, getSights } from "./sights";
@@ -177,6 +178,11 @@ export async function planDays(trip: WildTrip, key: string): Promise<Plan | null
     required: ["highlights", "days", "food", "monthly", "total"],
     additionalProperties: false,
   });
+  // The daily model cap (lib/usage-caps.ts): past it no plan is written today; the caller says the plan is not ready.
+  if (!(await allowUsage("model_call")).ok) {
+    console.log("plan: daily model limit reached");
+    return null;
+  }
   try {
     const { object } = await generateObject({
       model,

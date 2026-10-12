@@ -32,6 +32,8 @@ import { isoDay } from "./params";
 import { forget, readJson, writeJson } from "./boards-store";
 import { TtlLru } from "./memo";
 import { getTrip } from "./db";
+import { hasLiteApi, hotelsNear, liteApiLive } from "./liteapi";
+import { allowUsage } from "./usage-caps";
 import { ACCESS_NOTE, addDays, BUDGET_TIERS, daysBetween, dayOf, itineraryCanon, itineraryKey, PACES, type BudgetTier, type ItinBlock, type ItinCosts, type ItinDay, type ItinEvent, type ItinFood, type ItinLeg, type Itinerary, type ItinPlace, type ItinStop, type Pace, type Skeleton } from "./itinerary";
 import type { Airport, City, CountryInfo, WeatherCompact } from "./types";
 
@@ -246,24 +248,85 @@ function guessLeg(from: ItinPlace, to: ItinPlace, date: string): ItinLeg {
 }
 
 /**
- * A skeleton from place names and nights: "Lisbon 3, Porto 2" from Bucharest on 14 Nov.
- * Names resolve through cities.json (accents folded, a code in capitals works too); an
- * unknown name is a plain error. The legs between are guesses, unpriced and marked so.
+ * A fare the conversation already found (way_home's direct home, a walk's leg, one the model read out): the leg it
+ * matches is priced with it instead of the distance estimate. 2026-10-12: the 32 euro Gdansk to Otopeni direct was
+ * known, yet both flights of the plan were estimated at 25 euro plus 5 cents a km, about 50 euro too much on the way
+ * home alone, so "about 85 a day, all in" was not the trip the chat recommended. Ends are codes or names.
  */
-export function skeletonFromStops(q: { origin?: string | ItinPlace; start: string; stops: { place: string; nights: number }[] }): Skeleton {
+export type KnownFare = { from: string; to: string; date?: string; price: number; kind?: ItinLeg["kind"]; carrier?: string; url?: string; depart?: string; arrive?: string; minutes?: number };
+/** A stop and a fare's end are the same place within this distance (a city and its airport). */
+const FARE_STOP_KM = 60;
+/** The traveller's own place and the airport a flight home lands at may be further apart (Brasov and Otopeni, 140 km). */
+const FARE_HOME_KM = 200;
+/**
+ * Prices the unpriced legs of a list from known fares, in place: a fare matches a leg when its departure is within
+ * FARE_STOP_KM of the leg's start, its arrival within FARE_STOP_KM of the leg's end (FARE_HOME_KM when the leg ends
+ * at `home`), and its day within two days of the leg's (or it has no day). The closest day wins, then the cheapest.
+ * Returns how many legs were priced.
+ */
+export function priceLegsFromFares(legs: ItinLeg[], fares: KnownFare[], opts: { home?: ItinPlace; resolve?: (name: string) => ItinPlace | null } = {}): number {
+  if (!fares.length) return 0;
+  const where = (s: string): ItinPlace | null => {
+    const t = String(s ?? "").trim();
+    if (!t) return null;
+    return (/^[A-Za-z]{3}$/.test(t) ? placeByCode(t.toUpperCase()) : null) ?? findPlace(t) ?? opts.resolve?.(t) ?? null;
+  };
+  const points = fares
+    .filter((f) => Number.isFinite(f.price) && f.price > 0)
+    .map((f) => ({ f, a: where(f.from), b: where(f.to) }))
+    .filter((x): x is { f: KnownFare; a: ItinPlace; b: ItinPlace } => !!x.a && !!x.b);
+  let priced = 0;
+  for (let i = 0; i < legs.length; i++) {
+    const l = legs[i];
+    if (typeof l.price === "number") continue;
+    const toHome = !!opts.home && kmBetween(l.to, opts.home) < 1;
+    const gap = (f: KnownFare) => (f.date && l.date && isoDay(f.date) && isoDay(l.date) ? Math.abs(daysBetween(l.date, f.date)) : 0);
+    const hit = points
+      .filter(({ f, a, b }) => kmBetween(a, l.from) <= FARE_STOP_KM && kmBetween(b, l.to) <= (toHome ? FARE_HOME_KM : FARE_STOP_KM) && gap(f) <= 2)
+      .sort((x, y) => gap(x.f) - gap(y.f) || x.f.price - y.f.price)[0];
+    if (!hit) continue;
+    const f = hit.f;
+    const far = kmBetween(hit.b, l.to);
+    const notes = [f.date && l.date && f.date !== l.date ? `priced from the fare found for ${f.date}` : "", far > FARE_STOP_KM ? `lands at ${hit.b.name}, about ${Math.round(far)} km from ${l.to.name}` : ""].filter(Boolean);
+    legs[i] = {
+      ...l,
+      kind: f.kind ?? (l.kind === "train" && kmBetween(l.from, l.to) > 300 ? "fly" : l.kind),
+      price: Math.round(f.price),
+      estimated: false,
+      ...(f.carrier ? { carrier: f.carrier } : {}),
+      ...(f.url ? { url: f.url } : {}),
+      ...(f.depart ? { depart: f.depart } : {}),
+      ...(f.arrive ? { arrive: f.arrive } : {}),
+      ...(Number.isFinite(f.minutes) ? { minutes: Math.round(f.minutes!) } : {}),
+      note: notes.length ? notes.join("; ") : "the fare found in this conversation",
+    };
+    priced++;
+  }
+  return priced;
+}
+
+/**
+ * A skeleton from place names and nights: "Lisbon 3, Porto 2" from Bucharest on 14 Nov.
+ * Names resolve through cities.json (accents folded, a code in capitals works too), then through `resolve` for the
+ * places cities.json lacks (a town or a station without an airport, such as Torun: the chat passes its own lookup);
+ * an unknown name is a plain error. The legs between are guesses, unpriced and marked so, unless a known fare
+ * (`fares`) matches one.
+ */
+export function skeletonFromStops(q: { origin?: string | ItinPlace; start: string; stops: { place: string; nights: number }[]; resolve?: (name: string) => ItinPlace | null; fares?: KnownFare[] }): Skeleton {
   const start = isoDay(q.start);
   if (!start) throw new ItineraryInputError("start must be a real date, YYYY-MM-DD");
   if (!q.stops.length) throw new ItineraryInputError("name at least one place");
   if (q.stops.length > MAX_STOPS) throw new ItineraryInputError(`at most ${MAX_STOPS} places`);
+  const lookup = (name: string): ItinPlace | null => findPlace(name) ?? q.resolve?.(name) ?? null;
   let origin: ItinPlace | undefined;
   if (typeof q.origin === "string" && q.origin.trim()) {
-    const o = findPlace(q.origin);
+    const o = lookup(q.origin);
     if (!o) throw new ItineraryInputError(`we do not know a place called ${q.origin.trim().slice(0, 60)}`);
     origin = o;
   } else if (q.origin && typeof q.origin === "object") origin = place(q.origin, "origin");
   let cursor = start;
   const stops: ItinStop[] = q.stops.map((s) => {
-    const p = findPlace(s.place);
+    const p = lookup(s.place);
     if (!p) throw new ItineraryInputError(`we do not know a place called ${String(s.place).trim().slice(0, 60)}`);
     const nights = Math.max(0, Math.min(MAX_SPAN_DAYS, Math.round(Number(s.nights) || 0)));
     const stop = { ...p, arrive: cursor, leave: addDays(cursor, nights), nights };
@@ -274,6 +337,7 @@ export function skeletonFromStops(q: { origin?: string | ItinPlace; start: strin
   if (origin) legs.push(guessLeg(origin, stops[0], stops[0].arrive));
   for (let i = 1; i < stops.length; i++) legs.push(guessLeg(stops[i - 1], stops[i], stops[i].arrive));
   if (origin) legs.push(guessLeg(stops[stops.length - 1], origin, stops[stops.length - 1].leave));
+  if (q.fares?.length) priceLegsFromFares(legs, q.fares, { home: origin, resolve: q.resolve });
   const names = stops.map((s) => s.name);
   const title = names.length === 1 ? `${stops[0].nights} night${stops[0].nights === 1 ? "" : "s"} in ${names[0]}` : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
   return normaliseSkeleton({ title, origin: origin ?? stops[0], stops, legs, source: "custom" });
@@ -789,6 +853,10 @@ export async function generateItinerary(skeletonIn: Skeleton, opts: GenerateOpti
   // Each source already falls back on its own; this catch is for the unexpected, so a stop is never lost.
   const research = sk.stops.map((s) => researchStop(s, s.nights > 0 ? ranked++ : 99, guideFor).catch((): Research => ({ sights: null, guide: null, web: [], eats: [], sweets: [], curated: [], feed: [] })));
 
+  // The hotel of each stop, priced while the days are written (one LiteAPI lookup a stop, kept a day).
+  const stays = stayQuotes(sk).catch(() => [] as (StayQuote | null)[]);
+  /** True once the daily model cap refused a call: the days left are built from the guides. */
+  let capped = false;
   const cal = calendarOf(sk);
   // Entries are handed to onDay strictly in order, each as soon as it and all before it are ready.
   const days: ItinDay[] = [];
@@ -913,6 +981,12 @@ export async function generateItinerary(skeletonIn: Skeleton, opts: GenerateOpti
       try {
         await run(async () => {
           if (Date.now() > deadline) return;
+          // The daily model cap (lib/usage-caps.ts): past it the days are built from the guides, as for a call
+          // that failed, and the itinerary says so.
+          if (!(await allowUsage("model_call")).ok) {
+            capped = true;
+            return;
+          }
           const res = streamText({ model: model(), system: systemFor(pace, budget, !!wishes), prompt: JSON.stringify(brief), maxOutputTokens: 1200 + 700 * job.days.length, abortSignal: AbortSignal.timeout(callTimeout()), onError: () => {} });
           const final: ModelOut = { days: [] };
           let text = "";
@@ -970,7 +1044,7 @@ export async function generateItinerary(skeletonIn: Skeleton, opts: GenerateOpti
   const researched = await Promise.all(research);
   const food: ItinFood[] = sk.stops.map((s, i) => foodFor(i, foods.get(i), researched[i])).filter((f) => f.dishes.length || f.where.length);
   const events = eventsOf(sk.stops, researched);
-  const costs = costsOf(sk, cal, days, budget);
+  const costs = costsOf(sk, cal, days, budget, await stays);
   const weeks = cal.filter((d) => d.mode === "week").length;
   const sources = [
     ...(researched.some((r) => r.sights) ? ["Wikivoyage guides (CC BY-SA 4.0)"] : []),
@@ -984,7 +1058,7 @@ export async function generateItinerary(skeletonIn: Skeleton, opts: GenerateOpti
     "room and food are estimates from World Bank price levels for the budget chosen",
     ...((sk.travellers ?? 1) > 1 ? [`costs are per person, for ${sk.travellers} travellers`] : []),
     ...(weeks ? [`a long trip: after the first days in each place the plan goes a week at a time (${weeks} week${weeks > 1 ? "s" : ""})`] : []),
-    ...(fallbackDays ? [`${fallbackDays} day${fallbackDays > 1 ? "s" : ""} built from the guides alone (the planner did not answer in time); regenerate to try again`] : []),
+    ...(fallbackDays ? [`${fallbackDays} day${fallbackDays > 1 ? "s" : ""} built from the guides alone (${capped ? "the planner's daily limit was reached" : "the planner did not answer in time"}); regenerate to try again`] : []),
   ];
   return {
     ...sk,
@@ -1055,22 +1129,101 @@ function eventsOf(stops: ItinStop[], researched: Research[]): ItinEvent[] {
   return out.sort((a, b) => a.date.localeCompare(b.date));
 }
 
+/** The cheapest decent hotel of one stop for its nights, from LiteAPI (lib/liteapi.ts, which counts it against the
+ * daily cap): one lookup per stop, kept a day per place and dates. Null when the key is missing or a sandbox key
+ * (test prices are never shown), when the stay is in the past, or when nothing is priced. */
+type StayQuote = { total: number; perNight: number; hotel: string };
+const stayMemo = new TtlLru<StayQuote | null>(400, 24 * 3_600_000);
+/** A stop LiteAPI could not price (the daily cap, a network error, nothing rated): asked again after five minutes,
+ * never a day later, so a passing failure does not leave the estimate standing once LiteAPI is back. */
+const stayMissMemo = new TtlLru<true>(400, 5 * 60_000);
+async function stayQuote(s: ItinStop): Promise<StayQuote | null> {
+  if (!hasLiteApi() || !liteApiLive() || s.nights < 1 || (!s.lat && !s.lon)) return null;
+  const today = new Date().toISOString().slice(0, 10);
+  if (!isoDay(s.arrive) || !isoDay(s.leave) || s.arrive < today || s.leave <= s.arrive) return null;
+  const key = `${s.lat.toFixed(3)},${s.lon.toFixed(3)}|${s.arrive}|${s.leave}`;
+  const kept = stayMemo.get(key);
+  if (kept) return kept;
+  if (stayMissMemo.get(key)) return null;
+  let q: StayQuote | null = null;
+  try {
+    const r = await hotelsNear(s.lat, s.lon, s.arrive, s.leave);
+    const h = r.status === "ok" ? r.hotels.find((x) => typeof x.total === "number" && x.total > 0) : undefined;
+    if (h) q = { total: Math.round(h.total!), perNight: h.perNight ?? Math.round(h.total! / s.nights), hotel: h.name };
+  } catch {
+    // a hotel price is a nicety: the estimate stands in
+  }
+  // Only a price is kept a day; a miss is kept five minutes (see stayMissMemo).
+  if (q) stayMemo.set(key, q);
+  else stayMissMemo.set(key, true);
+  return q;
+}
+/** Every stop's quote, side by side (null where none). */
+function stayQuotes(sk: Skeleton): Promise<(StayQuote | null)[]> {
+  return Promise.all(sk.stops.map((s) => stayQuote(s)));
+}
+
+/** What a flight leg without a price is estimated at: a short-haul one-way by distance (25 euro plus 5 cents a km). */
+const flightEstimate = (km: number) => Math.round(25 + 0.05 * km);
+/** A train, coach or road leg without a price: 10 cents a km, at least 3 euro (the rate every engine uses). */
+const groundEstimate = (km: number) => Math.max(3, Math.round(km * 0.1));
+const legKm = (l: ItinLeg) => (l.from.lat || l.from.lon) && (l.to.lat || l.to.lon) ? haversine(l.from.lat, l.from.lon, l.to.lat, l.to.lon) : 0;
+function haversine(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const r = (d: number) => (d * Math.PI) / 180;
+  const a = Math.sin(r(lat2 - lat1) / 2) ** 2 + Math.cos(r(lat1)) * Math.cos(r(lat2)) * Math.sin(r(lon2 - lon1) / 2) ** 2;
+  return 6371 * 2 * Math.asin(Math.min(1, Math.sqrt(a)));
+}
+
+/** The costs with a line that says which parts are estimates (`note`); the itinerary view and the chat show it. */
+export type ItinCostsNoted = ItinCosts & { note?: string };
+
 /**
- * Per person, in euros. Flights and ground from the legs as priced (an unpriced leg adds
- * nothing and makes the total an estimate); the room from the nights and the food from the
- * days at each stop, as shares of the daily budget for the country and tier (perDayFor, World
- * Bank price levels); activities from the costed blocks that are not food or travel.
+ * Per person, in euros, and every part is in the total (2026-10-12: the owner saw "307 euro, about 38 a day" with
+ * no hotel and no transport in it). Flights and ground from the legs as priced; a leg without a price is estimated
+ * by its distance and counted. The room is LiteAPI's cheapest decent hotel at each stop when the key is live (one
+ * lookup a stop, kept a day), else a share of the daily budget for the country and tier (perDayFor, World Bank price
+ * levels). Food the same share way; activities from the costed blocks. `note` names what is an estimate, so a
+ * figure a day never hides a part that was left out.
  */
-function costsOf(sk: Skeleton, cal: CalDay[], days: ItinDay[], budget: BudgetTier): ItinCosts {
-  const priced = (l: ItinLeg) => (typeof l.price === "number" ? l.price : 0);
-  const flights = sk.legs.filter((l) => l.kind === "fly").reduce((t, l) => t + priced(l), 0);
-  const ground = sk.legs.filter((l) => l.kind !== "fly").reduce((t, l) => t + priced(l), 0);
-  const stay = Math.round(sk.stops.reduce((t, s) => t + s.nights * perDayFor(s.country ?? "", budget) * STAY_SHARE, 0));
+function costsOf(sk: Skeleton, cal: CalDay[], days: ItinDay[], budget: BudgetTier, quotes: (StayQuote | null)[] = []): ItinCostsNoted {
+  let flightsGuessed = 0;
+  let groundGuessed = 0;
+  const legCost = (l: ItinLeg): number => {
+    if (typeof l.price === "number") return l.price;
+    const km = legKm(l);
+    if (!km) return 0;
+    if (l.kind === "fly") flightsGuessed++;
+    else groundGuessed++;
+    return l.kind === "fly" ? flightEstimate(km) : l.kind === "walk" ? 0 : groundEstimate(km);
+  };
+  const flights = Math.round(sk.legs.filter((l) => l.kind === "fly").reduce((t, l) => t + legCost(l), 0));
+  const ground = Math.round(sk.legs.filter((l) => l.kind !== "fly").reduce((t, l) => t + legCost(l), 0));
+  const groundPriced = sk.legs.some((l) => l.kind !== "fly" && l.kind !== "walk" && l.estimated);
+  let hotelsPriced = 0;
+  const stay = Math.round(
+    sk.stops.reduce((t, s, i) => {
+      const q = quotes[i];
+      if (q) {
+        hotelsPriced++;
+        // LiteAPI is asked for one adult (lib/liteapi.ts), so the price is already one person's room: dividing it by
+        // the party halved the stay for two travellers.
+        return t + q.total;
+      }
+      return t + s.nights * perDayFor(s.country ?? "", budget) * STAY_SHARE;
+    }, 0),
+  );
   // Food per calendar day: a week entry counts its days.
   const food = Math.round(cal.reduce((t, d) => t + (d.mode === "week" ? (d.nTo ?? d.n) - d.n + 1 : 1) * perDayFor(sk.stops[d.stop]?.country ?? "", budget) * FOOD_SHARE, 0));
   const activities = Math.round(days.reduce((t, d) => t + d.blocks.filter((b) => b.kind !== "travel" && b.kind !== "eat" && b.kind !== "drink").reduce((s, b) => s + (b.cost ?? 0), 0), 0));
   const total = flights + ground + stay + food + activities;
-  return { flights, ground, stay, food, activities, total, perDay: Math.round(total / Math.max(1, daysBetween(sk.start, sk.end) + 1)), estimated: true };
+  const stopsWithNights = sk.stops.filter((s) => s.nights > 0).length;
+  const parts = [
+    flightsGuessed ? `${flightsGuessed} flight${flightsGuessed > 1 ? "s" : ""} not priced yet, estimated by distance` : sk.legs.some((l) => l.kind === "fly") ? "flights as priced" : "",
+    groundGuessed || groundPriced ? "trains, coaches and drives are estimates by distance" : "",
+    hotelsPriced === stopsWithNights && hotelsPriced ? "hotels from LiteAPI's cheapest decent hotel at each stop" : hotelsPriced ? `hotels priced for ${hotelsPriced} of ${stopsWithNights} stops, the rest estimated from the country's price level` : "hotels estimated from the country's price level",
+    "food and activities are estimates",
+  ].filter(Boolean);
+  return { flights, ground, stay, food, activities, total, perDay: Math.round(total / Math.max(1, daysBetween(sk.start, sk.end) + 1)), estimated: true, note: `${parts.join("; ")}; the total includes all of these` };
 }
 
 /** Days of an itinerary as a short readable list (the CLI and the tests print this). */
@@ -1171,7 +1324,8 @@ export function normaliseItinerary(raw: unknown): Itinerary {
     .filter((d): d is ItinDay => !!d)
     .slice(0, total);
   const c = (r.costs ?? {}) as Record<string, unknown>;
-  const costs: ItinCosts = { flights: num(c.flights), ground: num(c.ground), stay: num(c.stay), food: num(c.food), activities: num(c.activities), total: num(c.total), perDay: num(c.perDay), estimated: c.estimated !== false };
+  // The line saying which parts are estimates travels with a saved itinerary too.
+  const costs: ItinCostsNoted = { flights: num(c.flights), ground: num(c.ground), stay: num(c.stay), food: num(c.food), activities: num(c.activities), total: num(c.total), perDay: num(c.perDay), estimated: c.estimated !== false, ...(typeof c.note === "string" && c.note.trim() ? { note: c.note.trim().slice(0, 400) } : {}) };
   const strings = (v: unknown, n: number, max: number) => (Array.isArray(v) ? v.map((x) => str(x, max)).filter((x): x is string => !!x).slice(0, n) : []);
   const food: ItinFood[] = (Array.isArray(r.food) ? r.food : []).slice(0, MAX_STOPS).flatMap((x): ItinFood[] => {
     const f = (x ?? {}) as Record<string, unknown>;

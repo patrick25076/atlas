@@ -123,12 +123,13 @@ export const TOOL_LABEL: Record<string, string> = {
   price_insight: "Checking the fare memory",
   cheapest_way: "Finding the cheapest way",
   walk_trips: "Walking the cheapest hops",
+  way_home: "Finding the way home",
   make_itinerary: "Writing the itinerary",
   ask: "One question",
 };
 
 /** The tools that can take a while: their chip shows the seconds elapsed while they run. */
-export const LONG_TOOLS = new Set(["wild_trip", "long_stay", "group_trip", "plan_days", "find_getaways", "scan_cheapest", "cheapest_way", "walk_trips", "two_city_combos", "events_worth_travelling_for", "make_itinerary"]);
+export const LONG_TOOLS = new Set(["wild_trip", "long_stay", "group_trip", "plan_days", "find_getaways", "scan_cheapest", "cheapest_way", "walk_trips", "way_home", "two_city_combos", "events_worth_travelling_for", "make_itinerary"]);
 
 /** A short word for each kind of route option, for the badge on its card. */
 export const ROUTE_KIND_LABEL: Record<string, string> = {
@@ -186,6 +187,10 @@ export function toolProgress(name: string, input: unknown): string {
         const nps = a.nightsPerStop ? `, ${a.nightsPerStop}${a.nightsPerStopMax ? ` to ${a.nightsPerStopMax}` : ""} nights a place` : "";
         return `Walking the cheapest hops${a.origin ? ` from ${a.origin}` : ""}${must ? ` through ${must}` : ""}${a.from && a.to ? `, ${a.from} to ${a.to}` : ""}${nps}: anywhere from home, the next hop by plane, train or coach, then home${avoid ? `, not ${avoid}` : ""}${a.style === "unique" ? ", off the beaten track" : ""}`;
       }
+      case "way_home":
+        return `Pricing the way home from ${a.from ?? "there"}${a.from_date ? `, ${a.from_date}${a.to_date ? ` to ${a.to_date}` : ""}` : ""}, every day, direct first${a.direct_only ? " (direct only)" : ""}`;
+      case "events_worth_travelling_for":
+        return a.city ? `Checking what is on in ${list(a.city)}${a.from ? `, ${a.from} to ${a.to ?? ""}` : ""}` : TOOL_LABEL[name];
       case "plan_days":
         return "Planning the days (about a minute)";
       case "make_itinerary": {

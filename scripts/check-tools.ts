@@ -31,8 +31,14 @@
 //              system prompt's line, and the defaults reaching walk_trips, wild_trip (the walk
 //              engine by default, classic on request), cheapest_way, group_trip and
 //              find_getaways, all through the trace or a spent budget: zero Kiwi searches.
-// --only=command,dispatch,itinerary,walk,prefs runs just those; --only=tools just the live table.
-import { atlasTools, chatContext, chatPrefs, chatSystem, parseDay, rememberOutput, UNIQUE_WISHES, type AgentContext } from "../lib/agent-tools";
+//   owner      the owner's conversation of 2026-10-12, case by case: way_home over a window (the budget spent, a
+//              town, an unknown place), his own flight kept in a walk through Torun (fixedOut, a town without an
+//              airport), a city passed as an event kind and event words kept as kinds, one web search for three
+//              cities, price_insight like with like and two prices in one turn, dates read from web text (ranges,
+//              26.10.), an itinerary through Torun priced with a remembered way home, the walk's params for the map, no
+//              Kaliningrad from Sopot, the prompt's way-home rule. Zero Kiwi searches.
+// --only=command,dispatch,itinerary,walk,prefs,owner runs just those; --only=tools just the live table.
+import { atlasTools, chatContext, chatPrefs, chatSystem, dateInText, parseDay, rememberOutput, UNIQUE_WISHES, type AgentContext } from "../lib/agent-tools";
 import type { Prefs } from "../lib/prefs";
 import { parseCommand, type Command } from "../lib/command";
 import { WALK_PARAM_KEYS, walkQueryString, type WalkQuery } from "../lib/ui-types";
@@ -806,6 +812,123 @@ if (want("prefs")) {
   console.log("");
 }
 
+// ---------------------------------------------------------------------------------------
+// owner: the owner's conversation of 2026-10-12 (Brasov to Warsaw on the 24th, home from Gdansk), case by case, with
+// no Kiwi search: the way home over a range of days, his own flight kept in a walk, a town without an airport, cities
+// passed as event kinds, the fare memory comparing like with like, dates read from web text, and the prompt's rule.
+if (want("owner")) {
+  console.log("the owner's conversation (2026-10-12), zero Kiwi searches:");
+  const before = sent();
+  const spentCtx = (): AgentContext => ({ origin: { lat: 45.657, lon: 25.601, label: "Brasov" }, gateways: ["GHV", "SBZ", "OTP"], home: "RO", today, budget: { used: 120, max: 120 } });
+  const spent = atlasTools(spentCtx()) as unknown as Tools;
+  const run = async (t: Tools, name: string, input: unknown) => (await drain(await t[name]!.execute!(input, { toolCallId: `owner-${name}`, messages: [] }))) as Record<string, unknown>;
+  {
+    const r = await run(spent, "way_home", { from: "Gdansk", from_date: plus(15), to_date: plus(21) });
+    const homes = (r.homeAirports as { airport: string }[] | undefined)?.map((h) => h.airport) ?? [];
+    verdict("way_home: budget spent", !r.error && r.searched === 0 && homes.includes("OTP") && homes.includes("GHV") && typeof r.window === "string", `${String(r.error ?? r.note ?? "").slice(0, 40)}; home ${homes.slice(0, 5).join(",")}`);
+    const t = await run(spent, "way_home", { from: "Torun", from_date: plus(15) });
+    verdict("way_home: a town", !t.error && typeof t.placeNote === "string" && /no airport/.test(String(t.placeNote)), String(t.placeNote ?? t.error ?? t.note ?? "").slice(0, 66));
+    const u = await run(spent, "way_home", { from: "Gdanskk" });
+    verdict("way_home: unknown place", !u.error && typeof u.note === "string" && /close matches/.test(String(u.note)), String(u.note ?? u.error).slice(0, 66));
+  }
+  {
+    const d = await dry("walk_trips", { fixedOut: { from: "Brasov", to: "Warsaw", date: plus(12) }, mustInclude: ["Torun", "Gdansk"], minNights: 6, maxNights: 8 });
+    const p = d?.params ?? {};
+    const fo = p.fixedOut as { to?: string; date?: string } | undefined;
+    const towns = (p.towns as { name: string; code: string }[] | undefined) ?? [];
+    const must = (p.mustInclude as string[] | undefined) ?? [];
+    verdict("walk: fixedOut and a town", fo?.to === "WAW" && fo?.date === plus(12) && p.from === plus(12) && towns.some((x) => x.name === "Toruń") && must.includes(towns[0]?.code ?? "?") && must.includes("Gdansk") && d?.leaked === 0, `out ${fo?.to} ${fo?.date}, from ${p.from}, towns ${towns.map((x) => x.name).join(",")}, must ${must.join(",")}`);
+    const r = await run(spent, "walk_trips", { fixedOut: { from: "Brasov", to: "Warsaw", date: plus(12) }, mustInclude: ["Torun", "Gdansk"], minNights: 6, maxNights: 8 });
+    const loops = (r.loops as { legs: { source: string; to: string }[] }[] | undefined) ?? [];
+    const first = loops[0]?.legs[0];
+    verdict("walk: own flight kept", !r.error && (!loops.length || (first?.source === "given" && first.to === "Warsaw" && loops.every((l) => l.legs.some((g) => g.to === "Toruń")))), loops.length ? `${loops.length} loops, the first leg ${first?.source} to ${first?.to}, Toruń in every loop` : String(r.note ?? r.error ?? "").slice(0, 66));
+  }
+  {
+    const r = await run(spent, "events_worth_travelling_for", { from: plus(10), to: plus(17), kinds: ["Paris", "music"] });
+    const local = (r.local as { city: string }[] | undefined) ?? [];
+    verdict("events: a city as a kind", !r.error && local.some((c) => c.city === "Paris") && /read as a city/.test(String(r.corrected ?? "")), `${local.map((c) => c.city).join(",")}; ${String(r.corrected ?? r.note ?? r.error ?? "").slice(0, 40)}`);
+  }
+  {
+    const a = await run(spent, "price_insight", { from: "GHV", to: "Reykjavik", date: plus(40), price: 100 });
+    const b = await run(spent, "price_insight", { from: "Brasov", to: "KEF", date: plus(40), price: 100 });
+    const thin = typeof a.samples === "number" && a.samples < 5;
+    const ok = !a.error && (a.source === "none" || (thin ? a.verdict === "not enough history" : typeof a.basis === "string")) && a.verdict === b.verdict && a.samples === b.samples;
+    verdict("price_insight: like with like", ok, `${a.verdict}, ${a.samples ?? 0} fares, same answer twice: ${a.verdict === b.verdict}`);
+    // Two prices on one route and day in ONE turn (one tools instance): each judged against the same typical. The
+    // memo once kept the first verdict, so the one-stop at 150 was "great" because the direct at 32 was asked first.
+    const one = atlasTools(spentCtx()) as unknown as Tools;
+    const q = { from: "GDN", to: "OTP", date: "2026-10-31", oneWay: true };
+    const bare = await run(one, "price_insight", q);
+    const lo = await run(one, "price_insight", { ...q, price: 32 });
+    const hi = await run(one, "price_insight", { ...q, price: 150 });
+    const typ = typeof lo.typical === "number" ? lo.typical : null;
+    const expect = (p: number) => (typ == null ? "unknown" : p / typ <= 0.7 ? "great" : p / typ <= 0.9 ? "good" : p / typ > 1.15 ? "high" : "typical");
+    const judged = lo.verdict === "not enough history" || lo.source === "none" ? lo.verdict === hi.verdict : lo.verdict === expect(32) && hi.verdict === expect(150) && bare.verdict === "unknown";
+    verdict("price_insight: two prices", !lo.error && !hi.error && judged, `no price ${bare.verdict}, 32 ${lo.verdict}, 150 ${hi.verdict} (typical ${typ ?? "none"}, ${lo.samples ?? 0} fares)`);
+  }
+  {
+    // A town in the stops of an itinerary (the walk's Warsaw, Torun, Gdansk), and the fares the thread already found:
+    // the way home from way_home prices the last leg instead of a distance estimate. Read through the trace: no model.
+    const fakeHome = { from: "Gdansk", window: "2026-10-27 to 2026-11-03", bestDirect: { day: "2026-10-31", from: "GDN", to: "OTP", depart: "21:05", arrive: "00:40", price: 32, direct: true, hours: 2.6, carrier: "Ryanair", url: "https://www.kiwi.com/x" }, cheapest: null, calendar: [] };
+    rememberOutput(ctx, "way_home", fakeHome);
+    const d = await dry("make_itinerary", { origin: "Brasov", start: "2026-10-24", stops: [{ place: "Warsaw", nights: 2 }, { place: "Torun", nights: 1 }, { place: "Gdansk", nights: 4 }] });
+    const stops = (d?.params.stops as string[] | undefined) ?? [];
+    const prices = (d?.params.prices as (number | null)[] | undefined) ?? [];
+    verdict("itinerary: a town and a fare", d?.engine === "generateItinerary" && stops.includes("Toruń") && prices[prices.length - 1] === 32 && d.leaked === 0, `stops ${stops.join(",")}, prices ${JSON.stringify(prices)}`);
+    ctx.recent?.delete("fares");
+  }
+  {
+    // The walk's params for the browser carry the town's name (never T-torun, which /api/walk refused), and a walk
+    // with the traveller's own flight is marked so the map never runs it again without that flight.
+    const r = await run(spent, "walk_trips", { fixedOut: { from: "Brasov", to: "Warsaw", date: plus(12) }, mustInclude: ["Torun", "Gdansk"], minNights: 6, maxNights: 8 });
+    const must = String(((r.params as Record<string, unknown> | undefined)?.mustInclude as string | undefined) ?? "");
+    verdict("walk: params for the map", !!r.params ? !/T-/.test(must) && /Toru/.test(must) && r.mapRerun === false : !!r.note, r.params ? `mustInclude ${must}, mapRerun ${String(r.mapRerun)}` : String(r.note ?? r.error).slice(0, 66));
+  }
+  {
+    // Kinds that are event words stay kinds, whatever the gazetteer says (Marathon, Florida; Christmas Island).
+    const m = await run(spent, "events_worth_travelling_for", { from: plus(10), to: plus(40), kinds: ["Marathon"] });
+    const c = await run(spent, "events_worth_travelling_for", { from: plus(10), to: plus(40), kinds: ["Christmas"] });
+    verdict("events: event words stay", !m.local && !c.local && !/read as a city/.test(String(m.corrected ?? "") + String(c.corrected ?? "")), `Marathon ${m.local ? "a city" : "a kind"}, Christmas ${c.local ? "a city" : "a kind"}`);
+    // The owner's turn 4: three cities, one web search for all of them (Gdansk is never left without one).
+    const t = await run(atlasTools(spentCtx()) as unknown as Tools, "events_worth_travelling_for", { from: "2026-10-24", to: "2026-11-02", kinds: ["Warsaw", "Torun", "Gdansk"] });
+    const local = (t.local as { city: string }[] | undefined) ?? [];
+    verdict("events: three cities", local.length === 3 && !/no web search left/.test(String(t.note ?? "")), `${local.map((x) => x.city).join(",")}; ${String(t.note ?? "").slice(0, 40)}`);
+  }
+  {
+    // A Polish seaside town flies home from Gdansk and Bydgoszcz, never from Kaliningrad (Russia, a travel warning).
+    const r = await run(spent, "way_home", { from: "Sopot", from_date: plus(15) });
+    verdict("way_home: no unsafe airport", !r.error && !/Kaliningrad/i.test(String(r.placeNote ?? "")), String(r.placeNote ?? r.note ?? r.error ?? "").slice(0, 66));
+  }
+  {
+    const w = "2026-10-24";
+    const x = "2026-11-02";
+    const got = [dateInText("Halloween party on 31 October at Klub Stodola", w, x), dateInText("Oct 28th, 2026 jazz night", w, x), dateInText("28.10.2026 concert", w, x), dateInText("Spring fair 12 May", w, x)];
+    verdict("events: dates in web text", JSON.stringify(got) === JSON.stringify(["2026-10-31", "2026-10-28", "2026-10-28", null]), JSON.stringify(got));
+    // A range that began before the window runs into it; a day written "26.10." without a year.
+    const more = [dateInText("Jazz week from 20 to 25 October", w, x), dateInText("Expo 20-26 Oct", w, x), dateInText("Mon 26.10. Klub Stodola", w, x), dateInText("10-15 October fair", w, x)];
+    verdict("events: ranges and dd.mm.", JSON.stringify(more) === JSON.stringify(["2026-10-24", "2026-10-24", "2026-10-26", null]), JSON.stringify(more));
+  }
+  {
+    const sys = chatSystem(chatContext({ origin: { lat: 45.657, lon: 25.601, label: "Brasov" }, gateways: ["GHV", "SBZ", "OTP"], home: "RO", today }));
+    verdict("prompt: the way home rule", /way_home/.test(sys) && /never search or re-plan the way out/.test(sys) && /direct options first/.test(sys) && /at most 2 web searches/.test(sys), "way_home, keep the flight, direct first, two web searches");
+  }
+  verdict("owner: no search left", sent() === before, `${sent() - before} Kiwi searches sent by the owner cases`);
+  // --owner-live: the way home he needed, live: Gdansk, 27 Oct to 3 Nov, direct only. The first search goes to every
+  // home airport at once (its cheapest 15 are one-stops), then one home airport at a time, where the direct shows.
+  // At most min(6, --live-cap) Kiwi searches.
+  if (flag("owner-live")) {
+    const cap = Math.min(6, LIVE_CAP);
+    const c: AgentContext = { origin: { lat: 45.657, lon: 25.601, label: "Brasov" }, gateways: ["GHV", "SBZ", "OTP"], home: "RO", today, budget: { used: 0, max: cap } };
+    const t0 = sent();
+    const r = await run(atlasTools(c) as unknown as Tools, "way_home", { from: "Gdansk", from_date: "2026-10-27", to_date: "2026-11-03", direct_only: true });
+    const days = (r.calendar as { day: string; direct: { price: number; from: string; to: string; carrier: string } | null; none?: string }[] | undefined) ?? [];
+    const bd = r.bestDirect as { day: string; from: string; to: string; price: number; carrier: string } | null | undefined;
+    for (const d of days) console.log(`    ${d.day}  ${d.direct ? `${d.direct.from}-${d.direct.to} ${d.direct.price} EUR ${d.direct.carrier}` : d.none ?? "-"}`);
+    verdict("way_home live: direct only", !r.error && sent() - t0 <= cap && (!!bd || /not proof/.test(String(r.note ?? ""))), `${bd ? `best direct ${bd.day} ${bd.from}-${bd.to} ${bd.price} EUR ${bd.carrier}` : String(r.note ?? r.error).slice(0, 50)}; ${sent() - t0} searches`, sent() - t0);
+  }
+  console.log("");
+}
+
 if (!want("tools")) report();
 
 console.log(`check-tools: context GHV, SBZ, OTP, home RO, origin Brasov, today ${today}; live cap ${LIVE_CAP} searches; Kiwi ${kiwiThrottled() ? "THROTTLED (breaker open)" : "open"}`);
@@ -822,6 +945,9 @@ await check("stopover_programmes", {});
 await check("hotel_deals", { limit: 5 });
 await check("fare_history", { from: "OTP", to: "LIS" });
 await check("price_insight", { from: "OTP", to: "Lisbon", month: nextMonth, price: 120 });
+await check("price_insight", { from: "OTP", to: "Lisbon", date: plus(30), price: 120, nights: 4 }, { label: "price_insight (a day)" });
+await check("ground_reach", { from: "Torun", maxHours: 3 }, { label: "ground_reach (a town)" });
+await check("sights", { city: "Toruń" }, { label: "sights (a town)" });
 await check("ground_reach", { maxHours: 4 });
 await check("ask", { kind: "dates", question: "When?" });
 await check("oneway_fares", { origin: "OTP", limit: 5 });
@@ -850,6 +976,7 @@ await check("plan_days", wildPick ? { key: { region: wildPick.region, nights: wi
 // Live, smallest inputs, cheapest first. Each estimate is checked against the cap before the call.
 await check("scan_cheapest", { to: "Lisbon", months: 1, startMonth: nextMonth }, { estimate: 1 });
 await check("reprice_route", { from: "OTP", to: "LIS", depart: plus(30), nights: 4 }, { estimate: 1 });
+await check("way_home", { from: "Gdansk", from_date: plus(14), to_date: plus(20) }, { estimate: 2 });
 await check("find_getaways", { from: plus(30), to: plus(37), where: "Portugal", minNights: 3, maxNights: 5 }, { estimate: 2 });
 await check("group_trip", { members: [{ name: "Ana", origins: ["Cluj"], available: [{ from: plus(30), to: plus(34) }] }, { name: "Patrick", origins: ["GHV"], available: [{ from: plus(30), to: plus(34) }] }], where: "Lisbon", minNights: 3, maxNights: 4 }, { estimate: 4 });
 // cheapest_way spends from the turn's budget: cap it to what is left under LIVE_CAP. First
@@ -921,6 +1048,7 @@ console.log("turn budget spent (no search may leave; the note names the turn, no
     ["group_trip", { members: [{ name: "Ana", origins: ["Cluj"], available: [{ from: plus(30), to: plus(34) }] }, { name: "Patrick", origins: ["GHV"], available: [{ from: plus(30), to: plus(34) }] }], where: "Lisbon" }],
     ["cheapest_way", { to: "Lisbon", depart: plus(35) }],
     ["walk_trips", { from: plus(20), to: plus(30), minNights: 5, maxNights: 6 }],
+    ["way_home", { from: "Gdansk", from_date: plus(20) }],
     ["two_city_combos", { from: "OTP", dst: "OPO", city: "OPO", out: plus(30), back: plus(34), price: 150 }],
     ["wild_trip", { region: "sea", nights: 10, countries: ["Vietnam", "Thailand"], wishes: "temples and street food" }],
   ];
@@ -965,7 +1093,7 @@ console.log("engine parameters (read through the trace, no engine call):");
     ["cheapest_way", "cheapestWay", { to: "Lisbon", depart: plus(35), nights: 4, harder: true }, (p) => [p.budget === Math.min(24, left()) && typeof p.deadlineMs === "number" && p.deadlineMs > 90_000 && p.deadlineMs <= 150_000, `harder: budget ${p.budget}, deadlineMs ${p.deadlineMs}`]],
     ["cheapest_way", "cheapestWay", { to: "Vienna", depart: plus(1), flex: 2, nights: 3 }, (p) => [p.depart === plus(1) && p.flex === 2, `past window: depart ${p.depart}, flex ${p.flex} (the engine trims it to today)`]],
     ["wild_trip", "wildByWalk", { region: "sea", nights: 10, countries: ["Vietnam", "Thailand"] }, (a, at) => [a.region === "custom" && near(a.deadline, at + WILD_BUILD_MS - DEADLINE_MARGIN_MS) && Array.isArray(a.countries) && a.countries.join() === "VN,TH" && a.nightsPerStop === 2, `region ${a.region}, countries ${String(a.countries)}, nps ${a.nightsPerStop}, deadline in ${Math.round(((a.deadline as number) - at) / 1000)} s`]],
-    ["wild_trip", "buildWild", { region: "sea", nights: 10, countries: ["Vietnam", "Thailand"], engine: "classic" }, (a, at) => [a.region === "custom" && near(a.deadline, at + WILD_BUILD_MS - DEADLINE_MARGIN_MS) && Array.isArray(a.countries) && a.countries.join() === "VN,TH" && a.nightsPerStop === undefined, `classic: region ${a.region}, countries ${String(a.countries)}, nps ${a.nightsPerStop}`]],
+    ["wild_trip", "buildWild", { region: "sea", nights: 10, countries: ["Vietnam", "Thailand"], engine: "classic" }, (a, at) => [a.region === "custom" && near(a.deadline, at + WILD_BUILD_MS - DEADLINE_MARGIN_MS) && Array.isArray(a.countries) && a.countries.join() === "VN,TH" && a.nightsPerStop === 2, `classic (the style's nights a place, as the Wild tab sends them): region ${a.region}, countries ${String(a.countries)}, nps ${a.nightsPerStop}`]],
     ["wild_trip", "buildWildVariants", { region: "sea", nights: 10, variants: 2 }, (p, at) => [p.region === "sea" && near(p.deadline, at + WILD_BUILD_MS - DEADLINE_MARGIN_MS) && p.variants === 2, `region ${p.region}, variants ${p.variants}, deadline in ${Math.round(((p.deadline as number) - at) / 1000)} s`]],
     ["long_stay", "longStay", { countries: ["PT"], months: 1 }, (p, at) => [near(p.deadline, at + LONG_BUILD_MS - DEADLINE_MARGIN_MS), `deadline in ${Math.round(((p.deadline as number) - at) / 1000)} s`]],
     ["group_trip", "groupTrip", groupIn, (p, at) => [near(p.deadline, at + LONG_BUILD_MS - DEADLINE_MARGIN_MS), `deadline in ${Math.round(((p.deadline as number) - at) / 1000)} s`]],
@@ -1024,6 +1152,7 @@ await check("best_months", { city: "Lisbonn" }, { edge: true });
 await check("cheapest_deals", { country: "Narnia" }, { edge: true });
 await check("events_near", { city: "Lisboa" }, { edge: true });
 await check("price_insight", { from: "OTP", to: "LIS", month: "2026-13" }, { edge: true });
+await check("way_home", { from: "Narnia" }, { edge: true, label: "way_home (unknown)" });
 await check("hotels_near", { city: "Lisbon", checkin: plus(40), checkout: plus(38) }, { edge: true });
 await check("wild_trip", wildPick ? { region: "Southeast Asia", nights: wildPick.nights, engine: "classic" } : {}, { edge: true, skip: wildPick?.region === "sea" ? undefined : "needs the stored Southeast Asia trip" });
 // A long stay the engine refuses in a sentence (region custom with no countries, thrown as

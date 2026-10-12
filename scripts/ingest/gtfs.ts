@@ -9,11 +9,11 @@
 import { DuckDBInstance } from "@duckdb/node-api";
 import { unzipSync } from "fflate";
 import { existsSync } from "node:fs";
-import { mkdir, open, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, open, readFile, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { haversineKm } from "../../lib/geo";
 import { FEEDS, type Feed } from "./feeds";
-import { recordManifest } from "./manifest";
+import type { ManifestEntry } from "./manifest";
 
 const RAW = "data/raw/gtfs";
 // GTFS_OUT points a test run at another file (and skips the manifest), so trying one feed
@@ -65,16 +65,50 @@ function wantedEntry(name: string): boolean {
   return path.basename(name) === name;
 }
 
-async function download(feed: Feed): Promise<string> {
+// When the timetable was fetched, for the manifest. Files reused from an earlier download carry
+// that download's date (their mtime), not today's: PKP PLK's re-use terms require the source
+// date to be stated, and the app shows the manifest's date as that date.
+async function filesDate(dir: string): Promise<string> {
+  return (await stat(`${dir}/stop_times.txt`)).mtime.toISOString();
+}
+
+async function fetchZip(url: string): Promise<Uint8Array> {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`HTTP ${res.status} from ${url}`);
+  return new Uint8Array(await res.arrayBuffer());
+}
+
+async function download(feed: Feed): Promise<{ dir: string; fetchedAt: string }> {
   const dir = `${RAW}/${feed.id}`;
   await mkdir(dir, { recursive: true });
-  if (process.env.GTFS_OFFLINE && existsSync(`${dir}/stop_times.txt`)) {
+  const haveFiles = existsSync(`${dir}/stop_times.txt`);
+  if (process.env.GTFS_OFFLINE && haveFiles) {
     console.log(`${feed.id}: GTFS_OFFLINE set, using the files in ${dir}`);
-    return dir;
+    return { dir, fetchedAt: await filesDate(dir) };
   }
-  const res = await fetch(feed.url);
-  if (!res.ok) throw new Error(`${feed.id}: HTTP ${res.status} from ${feed.url}`);
-  const zip = new Uint8Array(await res.arrayBuffer());
+  let url = feed.url;
+  if (feed.resolveUrl) {
+    try {
+      url = await feed.resolveUrl();
+    } catch (err) {
+      console.log(`${feed.id}: link lookup failed (${(err as Error).message}), trying ${feed.url}`);
+    }
+  }
+  // One quiet retry: some hosts (a private server for the Czech feed) blink, and the workflow's
+  // own retry reruns all 18 feeds. A second failure falls back to an earlier download on this
+  // machine when there is one; otherwise the caller skips the feed.
+  let zip: Uint8Array;
+  try {
+    zip = await fetchZip(url).catch(async (err) => {
+      console.log(`${feed.id}: ${(err as Error).message}, retrying in 20 s`);
+      await new Promise((r) => setTimeout(r, 20_000));
+      return fetchZip(url);
+    });
+  } catch (err) {
+    if (!haveFiles) throw new Error(`${feed.id}: ${(err as Error).message}`);
+    console.log(`${feed.id}: download failed (${(err as Error).message}), reusing the earlier files in ${dir}`);
+    return { dir, fetchedAt: await filesDate(dir) };
+  }
   // The filter stops fflate inflating the skipped entries at all: without it the Thai feed's
   // 153 MB shapes.txt and the SNCB zip were decompressed in memory only to be thrown away.
   const files = unzipSync(zip, { filter: (f) => wantedEntry(f.name) });
@@ -83,7 +117,7 @@ async function download(feed: Feed): Promise<string> {
     await writeFile(path.join(dir, name), data);
   }
   console.log(`${feed.id}: ${(zip.length / 1e6).toFixed(1)} MB, ${Object.keys(files).length} files kept`);
-  return dir;
+  return { dir, fetchedAt: new Date().toISOString() };
 }
 
 const secs = (col: string) =>
@@ -102,6 +136,23 @@ async function columnsOf(file: string): Promise<Set<string>> {
   } finally {
     await fh.close();
   }
+}
+
+// A stop's name for the app. BDZ's feed names Bulgarian stations in Cyrillic only ("София"),
+// which neither the traveller nor a search for "Sofia" can read; its translations.txt carries
+// the English name. The translation is used only when the name is in Cyrillic or Greek script,
+// so SNCB's bilingual Belgian names, which also have English entries, stay as they were.
+// translations.txt keys a row either by record_id (the stop_id) or by field_value (the name).
+async function stopNameSql(dir: string, csv: (f: string) => string): Promise<string> {
+  const file = `${dir}/translations.txt`;
+  if (!existsSync(file)) return "stop_name";
+  const cols = await columnsOf(file);
+  if (!cols.has("translation") || !cols.has("language") || !cols.has("table_name")) return "stop_name";
+  const en = `FROM ${csv("translations.txt")} WHERE table_name = 'stops' AND field_name = 'stop_name' AND lower(language) = 'en' AND COALESCE(translation, '') <> ''`;
+  const byId = cols.has("record_id") ? `(SELECT any_value(translation) ${en} AND record_id = s_id.stop_id)` : "NULL";
+  const byName = cols.has("field_value") ? `(SELECT any_value(translation) ${en} AND field_value = s_id.stop_name)` : "NULL";
+  return `CASE WHEN regexp_matches(stop_name, '\\p{Cyrillic}|\\p{Greek}')
+               THEN COALESCE(${byId}, ${byName}, stop_name) ELSE stop_name END`;
 }
 
 // Only some of a feed's routes are wanted (feeds.ts `keep`): a national feed that mixes
@@ -127,16 +178,35 @@ const feedStats: Record<string, { stations: number; edges: number }> = {};
 
 // Thailand's OTP feed writes every stop name as "ไทย;English" and some with a trailing tab;
 // the app shows the name, so keep the English half. No other feed uses a semicolon in names.
-function cleanName(raw: string): string {
+function cleanName(raw: string, feedId: string): string {
   const parts = raw.split(";").map((p) => p.trim()).filter(Boolean);
-  return (parts.length > 1 ? parts[parts.length - 1] : parts[0]) ?? raw.trim();
+  const name = (parts.length > 1 ? parts[parts.length - 1] : parts[0]) ?? raw.trim();
+  return /\p{Script=Cyrillic}/u.test(name) ? latinise(name, feedId.startsWith("bg-")) : name;
+}
+
+// A Cyrillic name with no English translation in the feed (the Polish feed's 26 Ukrainian
+// stations, "Київ-Пасажирський") is unreadable and unsearchable, and some have no GeoNames
+// town to fall back on. Ukrainian national romanisation by default, Bulgarian's for BDZ.
+const UK: Record<string, string> = { а: "a", б: "b", в: "v", г: "h", ґ: "g", д: "d", е: "e", є: "ie", ж: "zh", з: "z", и: "y", і: "i", ї: "i", й: "i", к: "k", л: "l", м: "m", н: "n", о: "o", п: "p", р: "r", с: "s", т: "t", у: "u", ф: "f", х: "kh", ц: "ts", ч: "ch", ш: "sh", щ: "shch", ь: "", ю: "iu", я: "ia", ы: "y", э: "e", ё: "io", ъ: "", "'": "", "’": "" };
+const UK_START: Record<string, string> = { є: "ye", ї: "yi", й: "y", ю: "yu", я: "ya" };
+const BG: Record<string, string> = { ...UK, г: "g", и: "i", й: "y", х: "h", щ: "sht", ъ: "a", ю: "yu", я: "ya" };
+function latinise(name: string, bulgarian: boolean): string {
+  return name.replace(/\p{Script=Cyrillic}+(?:['’]\p{Script=Cyrillic}+)*/gu, (word) =>
+    [...word]
+      .map((ch, i) => {
+        const lc = ch.toLowerCase();
+        const t = (!bulgarian && i === 0 && UK_START[lc]) || ((bulgarian ? BG : UK)[lc] ?? "");
+        return ch === lc ? t : t.charAt(0).toUpperCase() + t.slice(1);
+      })
+      .join(""),
+  );
 }
 
 function stationFor(rawName: string, lat: number, lon: number, feedId: string): number {
   const key = `${Math.round(lat * GRID)},${Math.round(lon * GRID)}`;
   let s = stations.get(key);
   if (!s) {
-    const name = cleanName(rawName);
+    const name = cleanName(rawName, feedId);
     s = { id: stations.size, name, lat: +lat.toFixed(5), lon: +lon.toFixed(5), feeds: [], nbrs: new Set(), dep: 0 };
     stations.set(key, s);
   }
@@ -150,8 +220,22 @@ function stationFor(rawName: string, lat: number, lon: number, feedId: string): 
 const DUCKDB_TMP = `${RAW}/.duckdb-tmp`;
 const DUCKDB_LIMITS = `SET memory_limit = '2GB'; SET threads = 2; SET preserve_insertion_order = false; SET temp_directory = '${DUCKDB_TMP}';`;
 
+// Manifest rows wait until the graph file is written: recorded inside the loop, a run that died
+// on a later feed left a manifest naming data the graph did not contain.
+const manifestRows: [string, ManifestEntry][] = [];
+// Feeds that could not be downloaded (nor reused from disk), or that gave no connection at all.
+const failed: string[] = [];
+
 for (const feed of feeds) {
-  const dir = await download(feed);
+  let dir: string;
+  let fetchedAt: string;
+  try {
+    ({ dir, fetchedAt } = await download(feed));
+  } catch (err) {
+    console.log(`${(err as Error).message}: skipping this feed`);
+    failed.push(feed.id);
+    continue;
+  }
   // A run that died mid-query leaves its spill files behind (2 GB on 2026-10-10); clear them
   // before the next feed so a crash never eats the disk twice.
   await rm(DUCKDB_TMP, { recursive: true, force: true });
@@ -161,21 +245,26 @@ for (const feed of feeds) {
   await db.run(DUCKDB_LIMITS);
   const csv = (f: string) => `read_csv('${dir}/${f}', header = true, all_varchar = true)`;
 
-  // Days per week each service runs: calendar.txt, or calendar_dates.txt when that is all there is.
+  // Days per week each service runs, counted over one 28-day window shared by the whole feed:
+  // calendar.txt expanded by weekday, plus the dates calendar_dates.txt adds, minus those it
+  // removes. The window starts today, or inside the feed's own dates when it has none then.
+  // Before 2026-10-12 a calendar_dates-only feed was counted per service over that service's
+  // own first-to-last date, so a variant running on one single date counted as daily: the
+  // Polish feed (868 irregular services over a year) gave Warsaw to Gdansk 1,095 trains a week
+  // instead of about 175, and lib/ground.ts turned that into a 5-minute wait instead of 30.
   const hasCalendar = existsSync(`${dir}/calendar.txt`);
   const hasDates = existsSync(`${dir}/calendar_dates.txt`);
-  const serviceSql = hasCalendar
-    ? `SELECT service_id, (monday::INT + tuesday::INT + wednesday::INT + thursday::INT + friday::INT + saturday::INT + sunday::INT) AS days FROM ${csv("calendar.txt")}`
-    : hasDates
-      ? `SELECT service_id, least(7, count(*) * 7.0 / greatest(1, date_diff('day', min(strptime(date, '%Y%m%d')), max(strptime(date, '%Y%m%d'))) + 1)) AS days
-         FROM ${csv("calendar_dates.txt")} WHERE exception_type = '1' GROUP BY service_id`
-      : `SELECT NULL::VARCHAR AS service_id, 7 AS days WHERE false`;
+  const serviceSql = serviceDaysSql(
+    hasCalendar ? csv("calendar.txt") : null,
+    hasDates ? csv("calendar_dates.txt") : null,
+  );
 
   // parent_station is optional in GTFS (Amtrak, KTM and Thailand's feed leave it out). Without
   // it every stop is its own station; the 500 m grid in stationFor still merges platforms.
   const stopColumns = await columnsOf(`${dir}/stops.txt`);
   const stationExpr = stopColumns.has("parent_station") ? "COALESCE(NULLIF(parent_station, ''), stop_id)" : "stop_id";
   const routeFilter = routeFilterSql(feed, await columnsOf(`${dir}/routes.txt`));
+  const stopNameExpr = await stopNameSql(dir, csv);
 
   // frequencies.txt (optional) describes a trip that repeats all day: "every 30 minutes from
   // 06:00 to 20:00". Thailand's coaches and ferries are written that way; without this a coach
@@ -192,9 +281,9 @@ for (const feed of feeds) {
   await db.run(`
     CREATE TABLE services AS ${serviceSql};
     CREATE TABLE stops AS
-      SELECT stop_id, stop_name, stop_lat::DOUBLE AS lat, stop_lon::DOUBLE AS lon,
+      SELECT stop_id, ${stopNameExpr} AS stop_name, stop_lat::DOUBLE AS lat, stop_lon::DOUBLE AS lon,
              ${stationExpr} AS station
-      FROM ${csv("stops.txt")}
+      FROM ${csv("stops.txt")} s_id
       WHERE stop_lat IS NOT NULL AND stop_lon IS NOT NULL AND stop_lat <> '' AND stop_lon <> '';
     CREATE TABLE trips AS
       SELECT t.trip_id, t.service_id, t.route_id, ${modeSql("r.route_type", feed.mode)} AS mode
@@ -229,9 +318,14 @@ for (const feed of feeds) {
       FROM st GROUP BY trip_id;
     -- One row per pattern: a representative trip, its mode, weekly runs, and the fastest
     -- straight-line average a time on it may imply before it counts as a placeholder.
+    -- Only trips that run in the 28-day window: a pattern of a train that does not run in the
+    -- next four weeks made an edge with 0 trips a week, and lib/ground.ts routed over it as a
+    -- weekly train (Prague to Ostrava, 220 min, 0 a week). A feed that has run out counts its
+    -- last 28 days instead (serviceDaysSql), so it keeps its patterns.
     CREATE TABLE patterns AS
       SELECT pid, min(p.trip_id) AS trip_id, any_value(ti.mode) AS mode, sum(ti.per_week) AS per_week
       FROM trip_pattern p JOIN trip_info ti ON ti.trip_id = p.trip_id
+      WHERE ti.per_week > 0
       GROUP BY pid;
     ALTER TABLE patterns ADD COLUMN max_kmh DOUBLE;
     UPDATE patterns SET max_kmh = ${maxKmhSql};
@@ -319,7 +413,10 @@ for (const feed of feeds) {
     } else {
       minutes = Math.round(secs / 60);
     }
-    const tpw = Math.round(Number(r.trips_per_week));
+    // At least 1 for a train that runs at all (once in four weeks rounds to 0 otherwise), so 0
+    // in the file keeps meaning a walk, never a train that does not run.
+    const perWeek = Number(r.trips_per_week);
+    const tpw = perWeek > 0 ? Math.max(1, Math.round(perWeek)) : 0;
     const prev = edgeAgg.get(key);
     if (prev) {
       prev.minutes = Math.min(prev.minutes, minutes);
@@ -374,19 +471,90 @@ for (const feed of feeds) {
   db.closeSync();
   instance.closeSync();
 
-  if (TEST_RUN) continue;
-  await recordManifest(`gtfs:${feed.id}`, {
-    source: feed.name,
-    url: feed.url,
-    licence: feed.licence,
-    note: `${feed.attribution}. Direct connections with shortest in-vehicle time; not a timetable.`,
-    fetchedAt: new Date().toISOString(),
-    rows: edges,
-    file: OUT,
-  });
+  if (!rows.length) {
+    console.log(`${feed.id}: no connection runs in the 28-day window; treating the feed as failed`);
+    failed.push(feed.id);
+    continue;
+  }
+  manifestRows.push([
+    `gtfs:${feed.id}`,
+    {
+      source: feed.name,
+      url: feed.url,
+      licence: feed.licence,
+      note: `${feed.attribution}. Direct connections with shortest in-vehicle time; not a timetable.`,
+      fetchedAt,
+      rows: edges,
+      file: OUT,
+    },
+  ]);
 }
 // DuckDB deletes its spill files on close but leaves the folder; the run should leave no trace.
 await rm(DUCKDB_TMP, { recursive: true, force: true });
+
+// A feed the current graph has (its gtfs: row in the manifest) failed: keep the whole previous
+// graph rather than ship one without, say, every Czech train. Week-old timetables are fine for
+// direct connections; a missing country is not. A feed that is new this run and failed is only
+// left out. Either way the run exits non-zero at the end so the workflow reports it.
+const MANIFEST = "public/data/manifest.json";
+async function readManifest(): Promise<Record<string, ManifestEntry>> {
+  try {
+    return JSON.parse(await readFile(MANIFEST, "utf8")) as Record<string, ManifestEntry>;
+  } catch {
+    return {};
+  }
+}
+if (failed.length && !TEST_RUN) {
+  const had = await readManifest();
+  const lost = failed.filter((id) => had[`gtfs:${id}`]);
+  if (lost.length) {
+    console.log(`failed: ${failed.join(", ")}; the graph has ${lost.join(", ")}, so it stays as it was (nothing written)`);
+    process.exit(1);
+  }
+}
+
+// Days per week each service runs, as SQL over the feed's calendar files (either may be absent).
+// Every service named in either file gets a row, 0 when it does not run in the window, so a
+// seasonal or one-off variant adds nothing to the weekly count; a trip whose service is in
+// neither file keeps the old fallback of once a week (COALESCE in trip_info).
+function serviceDaysSql(calendar: string | null, dates: string | null): string {
+  const WINDOW = 28;
+  const ymd = (col: string) => `strptime(${col}, '%Y%m%d')::DATE`;
+  const cal = calendar
+    ? `SELECT service_id, ${ymd("start_date")} AS s, ${ymd("end_date")} AS e,
+              [sunday, monday, tuesday, wednesday, thursday, friday, saturday] AS wd
+       FROM ${calendar}`
+    : `SELECT NULL::VARCHAR AS service_id, NULL::DATE AS s, NULL::DATE AS e, NULL::VARCHAR[] AS wd WHERE false`;
+  const cd = dates
+    ? `SELECT service_id, ${ymd("date")} AS d, exception_type::INT AS x FROM ${dates}`
+    : `SELECT NULL::VARCHAR AS service_id, NULL::DATE AS d, NULL::INT AS x WHERE false`;
+  return `
+    WITH cal AS (${cal}), cd AS (${cd}),
+    bounds AS (
+      SELECT least((SELECT min(s) FROM cal), (SELECT min(d) FROM cd WHERE x = 1)) AS lo,
+             greatest((SELECT max(e) FROM cal), (SELECT max(d) FROM cd WHERE x = 1)) AS hi
+    ),
+    -- Today when the feed runs today; otherwise its first dates (a feed published ahead) or its
+    -- last four weeks (a feed that has run out), so a stale feed still has a weekly pattern.
+    win AS (
+      SELECT greatest(lo, least(current_date, hi - ${WINDOW - 1})) AS w0 FROM bounds
+    ),
+    days AS (
+      SELECT (w0 + i::INTEGER)::DATE AS d FROM win, range(${WINDOW}) t(i)
+    ),
+    active AS (
+      SELECT cal.service_id, days.d FROM cal JOIN days ON days.d BETWEEN cal.s AND cal.e
+      WHERE cal.wd[dayofweek(days.d) + 1] = '1'
+      UNION
+      SELECT cd.service_id, cd.d FROM cd JOIN days ON days.d = cd.d WHERE cd.x = 1
+      EXCEPT
+      SELECT service_id, d FROM cd WHERE x = 2
+    ),
+    counted AS (SELECT service_id, count(*) * 7.0 / ${WINDOW} AS days FROM active GROUP BY service_id),
+    named AS (SELECT service_id FROM cal UNION SELECT service_id FROM cd)
+    SELECT named.service_id, COALESCE(counted.days, 0) AS days
+    FROM named LEFT JOIN counted USING (service_id)`;
+}
 
 // The mode of a route from its GTFS route_type (basic and extended codes), as a SQL expression.
 // Computed in DuckDB because the speed ceiling per trip depends on it.
@@ -502,7 +670,9 @@ try {
 const MODES = ["rail", "coach", "ferry", "other", "walk"];
 const graph = {
   generatedAt: new Date().toISOString(),
-  feeds: feeds.map((f) => ({ id: f.id, name: f.name, licence: f.licence, attribution: f.attribution })),
+  feeds: feeds
+    .filter((f) => !failed.includes(f.id))
+    .map((f) => ({ id: f.id, name: f.name, licence: f.licence, attribution: f.attribution })),
   modes: MODES,
   // [name, lat, lon, neighbouring stations, departures per day, population, town (when it differs)]
   stations: [...stations.values()].map(
@@ -517,3 +687,19 @@ await mkdir("public/data", { recursive: true });
 await writeFile(OUT, JSON.stringify(graph) + "\n");
 const size = (await readFile(OUT)).length;
 console.log(`ground graph: ${graph.stations.length} stations, ${graph.edges.length} edges, ${(size / 1e6).toFixed(1)} MB → ${OUT}`);
+
+// Only now that the graph is on disk does the manifest describe it. The run rewrites the whole
+// graph, so gtfs: rows for feeds not in it (a one-feed run, a dropped feed) go too.
+if (!TEST_RUN) {
+  const manifest = await readManifest();
+  for (const key of Object.keys(manifest)) if (key.startsWith("gtfs:")) delete manifest[key];
+  for (const [key, entry] of manifestRows) {
+    manifest[key] = entry;
+    console.log(`${key}: ${entry.rows} rows, fetched ${entry.fetchedAt.slice(0, 10)}`);
+  }
+  await writeFile(MANIFEST, JSON.stringify(manifest, null, 2) + "\n");
+}
+if (failed.length) {
+  console.log(`failed and left out of the graph: ${failed.join(", ")}`);
+  process.exit(1);
+}

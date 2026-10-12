@@ -211,3 +211,47 @@ stored answer is served. Only needed if you want to force a rebuild from the bro
 2. Vercel → Settings → Environment Variables → Production: `ATLAS_FRESH_TOKEN` = that string.
    Put the same line in `.env.local` for local use. Never paste it in chat.
 3. Force a rebuild with `.../api/board?from=OTP&fresh=<the string>`.
+
+## 16. The access code: Atlas is private (do this on Vercel now)
+
+Since 2026-10-12 every page and API route asks for an access code first (`proxy.ts`), so
+strangers cannot run up the model, Kiwi, Tavily, Foursquare or LiteAPI bills. Open without
+the code: the `/access` page, shared itinerary links (`/i/<id>`, their preview image and
+calendar file), static files. Search engines are told to stay out (`robots.txt` disallows
+everything, every response carries `X-Robots-Tag: noindex`).
+
+The code and the cookie secret were generated on the laptop and are already in
+`.env.local` (never paste them in chat). **Do steps 1 to 3 before this change reaches
+production.** Until it does, the live site is still the old, public one. Once it is deployed
+without the code, the production site fails closed: every page and API answers 503 "Atlas is
+not configured yet" (shared itinerary links still open) and its logs say
+`ACCESS GATE NOT CONFIGURED IN PRODUCTION`. That is on purpose: a dropped env var must never
+make the site public again. (`ATLAS_GATE_OFF=1` on Vercel is the deliberate way to run it
+public; do not set it unless you mean that.)
+
+1. Open `.env.local` in an editor and copy the two lines `ATLAS_ACCESS_CODE=...` and
+   `ATLAS_COOKIE_SECRET=...`.
+2. Vercel → the `atlas` project → Settings → Environment Variables → Add: name
+   `ATLAS_ACCESS_CODE`, value the code, environments **Production and Preview**. Then the
+   same for `ATLAS_COOKIE_SECRET`. Mark both Sensitive.
+   (CLI alternative: `vercel env add ATLAS_ACCESS_CODE production` and paste when asked;
+   repeat for `preview` and for the secret.)
+3. Redeploy: Deployments → the latest production deployment → ⋯ → Redeploy (environment
+   variables only apply to new deployments).
+4. Check: open https://atlas-kappa-wheat.vercel.app in a private window. It should show
+   "Atlas is private for now. Enter the access code." Type the code; you land on the page
+   you asked for and stay signed in for 90 days on that browser.
+5. Give the code to whoever should see Atlas. To lock everyone out again, change
+   `ATLAS_ACCESS_CODE` on Vercel and redeploy: every old cookie stops working.
+
+Scripts and other machines can skip the cookie with the header `x-atlas-access: <code>`.
+A wrong code in that header waits 600 ms and an address gets ten wrong ones a minute, then
+429, the same as the form, so a short code you pick yourself in step 5 cannot be guessed
+fast. Still prefer a long one (12 characters or more).
+On the laptop's dev server the gate is off (localhost is not public) unless `.env.local`
+has `ATLAS_GATE_DEV=1`.
+
+The daily caps (`lib/usage-caps.ts`) need nothing from you: with `DATABASE_URL` they are
+counted in the `usage_daily` table. Raise one with `ATLAS_CAP_<KIND>` on Vercel if the real
+traffic outgrows it (defaults: chat turns 400, model calls 250, Tavily 250, Foursquare 250,
+LiteAPI 400 a day).

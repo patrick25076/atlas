@@ -1,7 +1,7 @@
 import { convertToModelMessages, hasToolCall, stepCountIs, streamText, type UIMessage } from "ai";
 import { createAmazonBedrock } from "@ai-sdk/amazon-bedrock";
 import { atlasTools, chatContext, chatSystem, rememberOutput, TURN_SEARCH_BUDGET, type AgentContext } from "@/lib/agent-tools";
-import { TtlLru } from "@/lib/memo";
+import { allowUsage, chatRateLimit } from "@/lib/usage-caps";
 
 // POST /api/chat { messages: UIMessage[], context: { origin, gateways, home, month, today, been, prefs } }
 // The conversation with Atlas: the whole history comes with every turn (the browser keeps it),
@@ -14,20 +14,44 @@ import { TtlLru } from "@/lib/memo";
 export const maxDuration = 300;
 /** The browser posts the whole thread; past this many bytes it is not a thread but a payload. */
 const MAX_BODY_BYTES = 512 * 1024;
+/**
+ * What one turn may hand the model. The body cap alone let a single 500 KB message ride through up to ten model
+ * steps (about 125k input tokens each), and the daily chat_turn cap counts turns, not that work. A traveller's message
+ * is a few sentences: the newest one is refused past MAX_USER_CHARS, older ones are cut there, and the history the
+ * model reads is kept under MAX_MODEL_HISTORY_BYTES with the oldest turns dropped first.
+ */
+const MAX_USER_CHARS = 4_000;
+const MAX_MODEL_HISTORY_BYTES = 60 * 1024;
 
-/** Messages per address per hour. Bounded: ten thousand addresses at most, each forgotten an
- * hour after its first message (the entry is counted in place, so the hour runs from then). */
-const MESSAGES_PER_HOUR = 80;
-const hits = new TtlLru<{ n: number }>(10_000, 3_600_000);
-function limited(ip: string): boolean {
-  const h = hits.get(ip);
-  if (!h) {
-    hits.set(ip, { n: 1 });
-    return false;
-  }
-  h.n++;
-  return h.n > MESSAGES_PER_HOUR;
+/** Every user text part cut to MAX_USER_CHARS (older turns only reach here; the newest is checked before). */
+function capUserText(messages: UIMessage[]): UIMessage[] {
+  return messages.map((m) => {
+    if (m.role !== "user") return m;
+    let changed = false;
+    const parts = m.parts.map((p) => {
+      if (p.type !== "text" || p.text.length <= MAX_USER_CHARS) return p;
+      changed = true;
+      return { ...p, text: `${p.text.slice(0, MAX_USER_CHARS)} [cut]` };
+    });
+    return changed ? { ...m, parts } : m;
+  });
 }
+/** The newest turns that fit in MAX_MODEL_HISTORY_BYTES, starting at a user message; the last message always stays. */
+function fitHistory(messages: UIMessage[]): UIMessage[] {
+  let out = messages;
+  while (out.length > 1 && JSON.stringify(out).length > MAX_MODEL_HISTORY_BYTES) {
+    out = out.slice(1);
+    while (out.length > 1 && out[0].role !== "user") out = out.slice(1);
+  }
+  return out;
+}
+/** The characters of a message's text parts. */
+const textLength = (m: UIMessage) => m.parts.reduce((n, p) => n + (p.type === "text" ? p.text.length : 0), 0);
+
+// Abuse limits (lib/usage-caps.ts, the security stream's): chatRateLimit is 30 turns an hour per
+// address in this process, allowUsage("chat_turn") the site's daily ceiling on chat turns across
+// instances (Postgres when configured). The address check runs first and costs nothing; the
+// daily counter is counted only for a request that will really run the model.
 
 /** Older tool outputs lose their `raw` payload (Deal arrays, a whole trip) before they reach
  * the model: the compact fields say the same, and the browser already has its copy. */
@@ -60,7 +84,8 @@ function errorLine(err: unknown): string {
 export async function POST(request: Request) {
   if (!process.env.AWS_BEARER_TOKEN_BEDROCK) return Response.json({ error: "The chat needs a model key (AWS_BEARER_TOKEN_BEDROCK)." }, { status: 503 });
   const ip = request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || "local";
-  if (limited(ip)) return Response.json({ error: "Too many messages this hour; try again later." }, { status: 429 });
+  const rate = chatRateLimit(ip);
+  if (!rate.ok) return Response.json({ error: "Too many messages this hour; try again later." }, { status: 429, headers: { "Retry-After": String(Math.max(1, Math.round(rate.retryAfter))) } });
 
   const declared = Number(request.headers.get("content-length") ?? 0);
   if (declared > MAX_BODY_BYTES) return Response.json({ error: "The conversation is too large to send; start a new chat." }, { status: 413 });
@@ -74,6 +99,11 @@ export async function POST(request: Request) {
   }
   const messages = (Array.isArray(body.messages) ? body.messages : []).filter((m) => m && typeof m === "object" && Array.isArray(m.parts)).slice(-40);
   if (!messages.length) return Response.json({ error: "messages required" }, { status: 400 });
+  const newest = messages[messages.length - 1];
+  if (newest.role === "user" && textLength(newest) > MAX_USER_CHARS) return Response.json({ error: `That message is too long; keep it under ${MAX_USER_CHARS.toLocaleString("en-GB")} characters.` }, { status: 413 });
+  // The day's chat ceiling for the whole site: past it nobody's turn runs the model until tomorrow (UTC).
+  const day = await allowUsage("chat_turn");
+  if (!day.ok) return Response.json({ error: "Atlas has answered as many chats as it can today; try again tomorrow." }, { status: 429 });
   // The context (origin, airports, Been list, the traveller's day, the trip style) and the
   // system prompt are shared with the terminal CLI (scripts/atlas.ts): lib/agent-tools.ts builds
   // both. The trip style is believed only field by field (chatPrefs: nights a place clamped to
@@ -85,6 +115,10 @@ export async function POST(request: Request) {
   // walk_trips included, spends from this one budget, and a spent turn still answers from memory.
   const turnCap = Number(process.env.CHAT_TURN_SEARCHES);
   if (process.env.CHAT_TURN_SEARCHES?.trim() && Number.isFinite(turnCap) && turnCap >= 0) ctx.budget = { used: 0, max: Math.min(TURN_SEARCH_BUDGET, Math.round(turnCap)) };
+  // Under next dev only, a test replay may lower (never raise) this one turn's searches with the header
+  // x-atlas-turn-searches, so a scripted conversation stays inside a fixed number of live Kiwi searches.
+  const testCap = process.env.NODE_ENV === "development" ? Number(request.headers.get("x-atlas-turn-searches") ?? "") : NaN;
+  if (request.headers.has("x-atlas-turn-searches") && Number.isFinite(testCap) && testCap >= 0) ctx.budget = { used: 0, max: Math.min(ctx.budget?.max ?? TURN_SEARCH_BUDGET, Math.round(testCap)) };
   // The thread's latest route, deals and wild trip, replayed from the history before the
   // raw payloads are slimmed away, so "make it an itinerary" in a later turn plans what the
   // traveller saw (make_itinerary's from: last_route, last_deal, last_wild).
@@ -106,7 +140,7 @@ export async function POST(request: Request) {
   const result = streamText({
     model,
     system,
-    messages: await convertToModelMessages(slimHistory(messages), { ignoreIncompleteToolCalls: true, tools }),
+    messages: await convertToModelMessages(fitHistory(capUserText(slimHistory(messages))), { ignoreIncompleteToolCalls: true, tools }),
     tools,
     stopWhen: [stepCountIs(10), hasToolCall("ask")],
     maxOutputTokens: 1400,

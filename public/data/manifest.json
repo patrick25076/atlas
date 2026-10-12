@@ -26,51 +26,6 @@
     "rows": 1159,
     "file": "public/data/airlines.json"
   },
-  "gtfs:de-fv": {
-    "source": "Germany long-distance rail (ICE/IC/EC)",
-    "url": "https://download.gtfs.de/germany/fv_free/latest.zip",
-    "licence": "CC BY 4.0",
-    "note": "gtfs.de. Direct connections with shortest in-vehicle time; not a timetable.",
-    "fetchedAt": "2026-10-10T14:52:36.024Z",
-    "rows": 16545,
-    "file": "public/data/ground-graph.json"
-  },
-  "gtfs:ro-rail": {
-    "source": "Romanian railway operators (CFR Călători and private operators, cross-border to HU/BG/MD)",
-    "url": "https://files.mobilitydatabase.org/mdb-3236/latest.zip",
-    "licence": "OGL-ROU 1.0 (Romanian Open Government Licence)",
-    "note": "S.C. Informatică Feroviară S.A. via Mobility Database (mdb-3236). Direct connections with shortest in-vehicle time; not a timetable.",
-    "fetchedAt": "2026-10-10T14:52:36.675Z",
-    "rows": 66358,
-    "file": "public/data/ground-graph.json"
-  },
-  "gtfs:fr-sncf": {
-    "source": "SNCF: TGV, Intercités and TER",
-    "url": "https://files.mobilitydatabase.org/tdg-83582/latest.zip",
-    "licence": "ODbL 1.0",
-    "note": "SNCF via transport.data.gouv.fr (tdg-83582). Direct connections with shortest in-vehicle time; not a timetable.",
-    "fetchedAt": "2026-10-10T14:52:38.083Z",
-    "rows": 72963,
-    "file": "public/data/ground-graph.json"
-  },
-  "gtfs:eurostar": {
-    "source": "Eurostar",
-    "url": "https://files.mobilitydatabase.org/tdg-82199/latest.zip",
-    "licence": "Licence Ouverte / Etalab 2.0",
-    "note": "Eurostar International Ltd. via transport.data.gouv.fr (tdg-82199). Direct connections with shortest in-vehicle time; not a timetable.",
-    "fetchedAt": "2026-10-10T14:52:38.271Z",
-    "rows": 193,
-    "file": "public/data/ground-graph.json"
-  },
-  "gtfs:flixbus-eu": {
-    "source": "FlixBus and FlixTrain, European network",
-    "url": "https://files.mobilitydatabase.org/tdg-11681/latest.zip",
-    "licence": "ODbL 1.0",
-    "note": "FlixBus via transport.data.gouv.fr (tdg-11681). Direct connections with shortest in-vehicle time; not a timetable.",
-    "fetchedAt": "2026-10-10T14:52:40.006Z",
-    "rows": 67938,
-    "file": "public/data/ground-graph.json"
-  },
   "cities": {
     "source": "Travelpayouts cities.json + airports.json",
     "url": "https://api.travelpayouts.com/data/en/cities.json",
@@ -179,33 +134,6 @@
     "rows": 3564,
     "file": "public/data/ferries.json"
   },
-  "gtfs:es-renfe": {
-    "source": "Renfe: high-speed, long-distance and media distancia",
-    "url": "https://ssl.renfe.com/gtransit/Fichero_AV_LD/google_transit.zip",
-    "licence": "CC BY 4.0",
-    "note": "Renfe via data.renfe.com. Direct connections with shortest in-vehicle time; not a timetable.",
-    "fetchedAt": "2026-10-10T14:52:40.671Z",
-    "rows": 38948,
-    "file": "public/data/ground-graph.json"
-  },
-  "gtfs:be-sncb": {
-    "source": "SNCB/NMBS (Belgium)",
-    "url": "https://files.mobilitydatabase.org/mdb-1859/latest.zip",
-    "licence": "SNCB open data (see gtfs.be)",
-    "note": "NMBS-SNCB via Mobility Database (mdb-1859). Direct connections with shortest in-vehicle time; not a timetable.",
-    "fetchedAt": "2026-10-10T14:52:45.733Z",
-    "rows": 65303,
-    "file": "public/data/ground-graph.json"
-  },
-  "gtfs:ie-rail": {
-    "source": "Irish Rail",
-    "url": "https://files.mobilitydatabase.org/mdb-2637/latest.zip",
-    "licence": "NTA open data (transportforireland.ie)",
-    "note": "Iarnród Éireann via Mobility Database (mdb-2637). Direct connections with shortest in-vehicle time; not a timetable.",
-    "fetchedAt": "2026-10-10T14:52:45.980Z",
-    "rows": 3329,
-    "file": "public/data/ground-graph.json"
-  },
   "deals": {
     "source": "Kiwi.com flight search (public MCP)",
     "url": "https://mcp.kiwi.com/",
@@ -242,24 +170,6 @@
     "rows": 193,
     "file": "public/data/costs.json"
   },
-  "gtfs:ca-via": {
-    "source": "VIA Rail Canada",
-    "url": "https://files.mobilitydatabase.org/mdb-735/latest.zip",
-    "licence": "VIA Rail developer terms (viarail.ca/en/developer-resources)",
-    "note": "VIA Rail Canada via Mobility Database (mdb-735). Direct connections with shortest in-vehicle time; not a timetable.",
-    "fetchedAt": "2026-10-10T14:52:46.165Z",
-    "rows": 16752,
-    "file": "public/data/ground-graph.json"
-  },
-  "gtfs:flix-us": {
-    "source": "FlixBus and Greyhound, United States network",
-    "url": "https://gtfs.gis.flix.tech/gtfs_generic_us.zip",
-    "licence": "Flix open GTFS (gtfs.gis.flix.tech, no explicit licence; the EU twin is ODbL on transport.data.gouv.fr)",
-    "note": "Flix SE (FlixBus, Greyhound). Direct connections with shortest in-vehicle time; not a timetable.",
-    "fetchedAt": "2026-10-10T14:52:46.781Z",
-    "rows": 16092,
-    "file": "public/data/ground-graph.json"
-  },
   "climate": {
     "source": "NASA POWER climatology (MERRA-2), 2001 to 2025",
     "url": "https://power.larc.nasa.gov/docs/services/api/temporal/climatology/",
@@ -269,13 +179,148 @@
     "rows": 2805,
     "file": "public/data/climate.json"
   },
+  "gtfs:de-fv": {
+    "source": "Germany long-distance rail (ICE/IC/EC)",
+    "url": "https://download.gtfs.de/germany/fv_free/latest.zip",
+    "licence": "CC BY 4.0",
+    "note": "gtfs.de. Direct connections with shortest in-vehicle time; not a timetable.",
+    "fetchedAt": "2026-10-10T14:43:48.534Z",
+    "rows": 16318,
+    "file": "public/data/ground-graph.json"
+  },
+  "gtfs:ro-rail": {
+    "source": "Romanian railway operators (CFR Călători and private operators, cross-border to HU/BG/MD)",
+    "url": "https://files.mobilitydatabase.org/mdb-3236/latest.zip",
+    "licence": "OGL-ROU 1.0 (Romanian Open Government Licence)",
+    "note": "S.C. Informatică Feroviară S.A. via Mobility Database (mdb-3236). Direct connections with shortest in-vehicle time; not a timetable.",
+    "fetchedAt": "2026-10-10T14:22:31.930Z",
+    "rows": 63278,
+    "file": "public/data/ground-graph.json"
+  },
+  "gtfs:fr-sncf": {
+    "source": "SNCF: TGV, Intercités and TER",
+    "url": "https://files.mobilitydatabase.org/tdg-83582/latest.zip",
+    "licence": "ODbL 1.0",
+    "note": "SNCF via transport.data.gouv.fr (tdg-83582). Direct connections with shortest in-vehicle time; not a timetable.",
+    "fetchedAt": "2026-10-10T14:22:33.689Z",
+    "rows": 68867,
+    "file": "public/data/ground-graph.json"
+  },
+  "gtfs:eurostar": {
+    "source": "Eurostar",
+    "url": "https://files.mobilitydatabase.org/tdg-82199/latest.zip",
+    "licence": "Licence Ouverte / Etalab 2.0",
+    "note": "Eurostar International Ltd. via transport.data.gouv.fr (tdg-82199). Direct connections with shortest in-vehicle time; not a timetable.",
+    "fetchedAt": "2026-10-10T14:22:39.563Z",
+    "rows": 108,
+    "file": "public/data/ground-graph.json"
+  },
+  "gtfs:flixbus-eu": {
+    "source": "FlixBus and FlixTrain, European network",
+    "url": "https://files.mobilitydatabase.org/tdg-11681/latest.zip",
+    "licence": "ODbL 1.0",
+    "note": "FlixBus via transport.data.gouv.fr (tdg-11681). Direct connections with shortest in-vehicle time; not a timetable.",
+    "fetchedAt": "2026-10-10T14:22:43.631Z",
+    "rows": 66230,
+    "file": "public/data/ground-graph.json"
+  },
+  "gtfs:es-renfe": {
+    "source": "Renfe: high-speed, long-distance and media distancia",
+    "url": "https://ssl.renfe.com/gtransit/Fichero_AV_LD/google_transit.zip",
+    "licence": "CC BY 4.0",
+    "note": "Renfe via data.renfe.com. Direct connections with shortest in-vehicle time; not a timetable.",
+    "fetchedAt": "2026-10-10T14:22:48.908Z",
+    "rows": 38948,
+    "file": "public/data/ground-graph.json"
+  },
+  "gtfs:be-sncb": {
+    "source": "SNCB/NMBS (Belgium)",
+    "url": "https://files.mobilitydatabase.org/mdb-1859/latest.zip",
+    "licence": "SNCB open data (see gtfs.be)",
+    "note": "NMBS-SNCB via Mobility Database (mdb-1859). Direct connections with shortest in-vehicle time; not a timetable.",
+    "fetchedAt": "2026-10-10T14:22:54.672Z",
+    "rows": 21791,
+    "file": "public/data/ground-graph.json"
+  },
+  "gtfs:ie-rail": {
+    "source": "Irish Rail",
+    "url": "https://files.mobilitydatabase.org/mdb-2637/latest.zip",
+    "licence": "NTA open data (transportforireland.ie)",
+    "note": "Iarnród Éireann via Mobility Database (mdb-2637). Direct connections with shortest in-vehicle time; not a timetable.",
+    "fetchedAt": "2026-10-10T14:23:13.935Z",
+    "rows": 3329,
+    "file": "public/data/ground-graph.json"
+  },
+  "gtfs:pl-rail": {
+    "source": "Polish railways (PKP Intercity, Polregio and the regional operators)",
+    "url": "https://mkuran.pl/gtfs/polish_trains.zip",
+    "licence": "PKP PLK and Koleje Mazowieckie public-sector re-use terms (Polish Act of 11 August 2021): free, commercial use allowed, with the source and the date stated and PKP PLK informed of the re-use",
+    "note": "PKP Polskie Linie Kolejowe S.A. and Koleje Mazowieckie, GTFS by Mikołaj Kuranowski (mkuran.pl). Direct connections with shortest in-vehicle time; not a timetable.",
+    "fetchedAt": "2026-10-12T10:00:37.029Z",
+    "rows": 176704,
+    "file": "public/data/ground-graph.json"
+  },
+  "gtfs:cz-rail": {
+    "source": "Czech railways (České dráhy, RegioJet, Leo Express, Arriva and the regional operators)",
+    "url": "https://motis.obehy.cz/get-feeds/cz-czptt-gtfs.zip",
+    "licence": "Správa železnic CZPTT timetable (portal.cisjr.cz, published by law, no licence stated); GTFS conversion CC0 1.0 (motis.obehy.cz)",
+    "note": "Správa železnic, GTFS by motis.obehy.cz. Direct connections with shortest in-vehicle time; not a timetable.",
+    "fetchedAt": "2026-10-12T10:06:13.875Z",
+    "rows": 62812,
+    "file": "public/data/ground-graph.json"
+  },
+  "gtfs:sk-rail": {
+    "source": "Slovak railways (ZSSK, RegioJet, Leo Express and the other operators)",
+    "url": "https://data.slovensko.sk/download?id=fb3a9724-623b-4ddf-a6b5-a19b4a346281",
+    "licence": "CC BY 1.0 (data.slovensko.sk, dataset ebeeedf1-aca2-451a-bdc0-35d536714888)",
+    "note": "Železnice Slovenskej republiky via data.slovensko.sk. Direct connections with shortest in-vehicle time; not a timetable.",
+    "fetchedAt": "2026-10-12T10:06:21.267Z",
+    "rows": 19077,
+    "file": "public/data/ground-graph.json"
+  },
+  "gtfs:hr-rail": {
+    "source": "HŽ Putnički prijevoz (Croatian railways)",
+    "url": "https://www.hzpp.hr/GTFS_files.zip",
+    "licence": "HŽPP open data on data.gov.hr, published for building applications (no licence text stated)",
+    "note": "HŽ Putnički prijevoz d.o.o.. Direct connections with shortest in-vehicle time; not a timetable.",
+    "fetchedAt": "2026-10-12T10:06:24.588Z",
+    "rows": 16886,
+    "file": "public/data/ground-graph.json"
+  },
+  "gtfs:bg-rail": {
+    "source": "BDZ (Bulgarian State Railways)",
+    "url": "https://gtfs.livetransport.eu/gtfs/bdz.zip",
+    "licence": "CC BY 4.0 (livetransport.eu)",
+    "note": "livetransport.eu, from BDZ timetables. Direct connections with shortest in-vehicle time; not a timetable.",
+    "fetchedAt": "2026-10-12T10:06:26.520Z",
+    "rows": 30160,
+    "file": "public/data/ground-graph.json"
+  },
+  "gtfs:ca-via": {
+    "source": "VIA Rail Canada",
+    "url": "https://files.mobilitydatabase.org/mdb-735/latest.zip",
+    "licence": "VIA Rail developer terms (viarail.ca/en/developer-resources)",
+    "note": "VIA Rail Canada via Mobility Database (mdb-735). Direct connections with shortest in-vehicle time; not a timetable.",
+    "fetchedAt": "2026-10-10T14:23:14.541Z",
+    "rows": 16660,
+    "file": "public/data/ground-graph.json"
+  },
+  "gtfs:flix-us": {
+    "source": "FlixBus and Greyhound, United States network",
+    "url": "https://gtfs.gis.flix.tech/gtfs_generic_us.zip",
+    "licence": "Flix open GTFS (gtfs.gis.flix.tech, no explicit licence; the EU twin is ODbL on transport.data.gouv.fr)",
+    "note": "Flix SE (FlixBus, Greyhound). Direct connections with shortest in-vehicle time; not a timetable.",
+    "fetchedAt": "2026-10-10T14:23:15.331Z",
+    "rows": 15966,
+    "file": "public/data/ground-graph.json"
+  },
   "gtfs:us-amtrak": {
     "source": "Amtrak (all routes, plus Thruway connecting coaches)",
     "url": "https://files.mobilitydatabase.org/mdb-11/latest.zip",
     "licence": "Amtrak public GTFS (content.amtrak.com/content/gtfs, no explicit licence)",
     "note": "Amtrak via Mobility Database (mdb-11). Direct connections with shortest in-vehicle time; not a timetable.",
-    "fetchedAt": "2026-10-10T14:52:47.126Z",
-    "rows": 20610,
+    "fetchedAt": "2026-10-10T14:23:18.010Z",
+    "rows": 20188,
     "file": "public/data/ground-graph.json"
   },
   "gtfs:my-ktm": {
@@ -283,7 +328,7 @@
     "url": "https://files.mobilitydatabase.org/tld-6758/latest.zip",
     "licence": "Malaysian Government open data terms (data.gov.my)",
     "note": "Keretapi Tanah Melayu Berhad via Mobility Database (tld-6758). Direct connections with shortest in-vehicle time; not a timetable.",
-    "fetchedAt": "2026-10-10T14:52:47.246Z",
+    "fetchedAt": "2026-10-10T14:23:18.511Z",
     "rows": 5735,
     "file": "public/data/ground-graph.json"
   },
@@ -292,7 +337,7 @@
     "url": "https://files.mobilitydatabase.org/mdb-1831/latest.zip",
     "licence": "CC BY 4.0",
     "note": "Office of Transport and Traffic Policy and Planning (Thailand) via Mobility Database (mdb-1831). Direct connections with shortest in-vehicle time; not a timetable.",
-    "fetchedAt": "2026-10-10T14:52:47.686Z",
+    "fetchedAt": "2026-10-10T14:23:22.448Z",
     "rows": 19773,
     "file": "public/data/ground-graph.json"
   }

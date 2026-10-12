@@ -139,3 +139,77 @@ export async function rememberedFare(origins: string[], dsts: string[], from: st
     return null;
   }
 }
+
+// ---------------------------------------------------------------------------------------
+// Like with like: the chat's verdict on a fare in hand.
+//
+// The owner saw "high" and then "great" for the same route in one conversation (2026-10-12):
+// the month-wide median mixed one-ways with returns of any length, a pair of airports with
+// another pair of the same cities, and fares seen two months ago. fareVerdict compares only
+// what is comparable: the same city pair (every airport of each side), the same kind of
+// ticket (one-way or return, and for a return the nights within two of the fare in hand),
+// departures within DEPART_SLACK_DAYS of the fare's own day, sightings of the last
+// SIGHTING_DAYS. A sample is the cheapest fare per departure day per sighting day, so one
+// popular day searched forty times counts once a day. Fewer than MIN_SAMPLES is not history.
+
+/** Departures this many days either side of the fare in hand are the same product. */
+export const DEPART_SLACK_DAYS = 7;
+/** Sightings older than this are a different market. */
+export const SIGHTING_DAYS = 30;
+/** Below this many samples the memory says "not enough history", never great or high. */
+export const MIN_SAMPLES = 5;
+
+export type FareVerdict = {
+  verdict: Verdict | "not enough history";
+  /** The samples the verdict rests on (see above); 0 when nothing comparable was seen. */
+  samples: number;
+  typical: number | null;
+  low: number | null;
+  /** The comparison in words, for the model to repeat: "based on 12 fares, one-way, departures 24 Oct to 7 Nov, seen in the last 30 days". */
+  basis: string;
+};
+
+const verdictMemo = new TtlLru<{ typical: number | null; low: number | null; samples: number }>(500, 10 * 60_000);
+
+/**
+ * The fare memory's verdict on a fare in hand, like with like (see above). Null without a
+ * database (the caller says the memory is off, which is not the same as no history).
+ */
+export async function fareVerdict(q: { srcs: string[]; dsts: string[]; depart: string; oneWay: boolean; nights?: number | null; price?: number | null }): Promise<FareVerdict | null> {
+  const db = client();
+  if (!db) return null;
+  const srcs = [...new Set(q.srcs.map((s) => s.toUpperCase()))].slice(0, 6);
+  const dsts = [...new Set(q.dsts.map((s) => s.toUpperCase()))].slice(0, 6);
+  if (!srcs.length || !dsts.length || !/^\d{4}-\d{2}-\d{2}$/.test(q.depart)) return null;
+  const day = Date.parse(q.depart + "T00:00:00Z");
+  if (!Number.isFinite(day)) return null;
+  const from = new Date(day - DEPART_SLACK_DAYS * 86_400_000).toISOString().slice(0, 10);
+  const to = new Date(day + DEPART_SLACK_DAYS * 86_400_000).toISOString().slice(0, 10);
+  const nights = !q.oneWay && q.nights != null && Number.isFinite(q.nights) ? Math.max(1, Math.round(q.nights)) : null;
+  const key = `${srcs.join(",")}|${dsts.join(",")}|${from}|${q.oneWay ? "ow" : `rt${nights ?? ""}`}`;
+  let s = verdictMemo.get(key);
+  if (!s) {
+    try {
+      const rows = await db<{ typical: string | null; low: string | null; samples: string }[]>`
+        with per_day as (
+          select out_date, date_trunc('day', seen_at) as seen_day, min(price) as price from fares
+          where src = any(${srcs}) and dst = any(${dsts}) and out_date >= ${from} and out_date <= ${to}
+            and seen_at > now() - (${SIGHTING_DAYS} || ' days')::interval
+            and ${q.oneWay ? db`back_date is null` : db`back_date is not null`}
+            ${nights != null ? db`and nights between ${nights - 2} and ${nights + 2}` : db``}
+          group by out_date, seen_day
+        )
+        select percentile_cont(0.5) within group (order by price) as typical, min(price) as low, count(*) as samples from per_day`;
+      const r = rows[0];
+      s = { typical: r?.typical != null ? Math.round(Number(r.typical)) : null, low: r?.low != null ? Math.round(Number(r.low)) : null, samples: Number(r?.samples ?? 0) };
+      verdictMemo.set(key, s);
+    } catch (err) {
+      console.log(`insights: verdict ${err instanceof Error ? err.message.slice(0, 160) : err}`);
+      return null;
+    }
+  }
+  const kind = q.oneWay ? "one-way" : `return${nights != null ? `, ${Math.max(1, nights - 2)} to ${nights + 2} nights` : ""}`;
+  const basis = `based on ${s.samples} fare${s.samples === 1 ? "" : "s"} (${kind}, departures ${from} to ${to}, seen in the last ${SIGHTING_DAYS} days)`;
+  if (s.samples < MIN_SAMPLES) return { verdict: "not enough history", samples: s.samples, typical: s.typical, low: s.low, basis };
+  return { verdict: verdictFor(s.typical, q.price ?? null), samples: s.samples, typical: s.typical, low: s.low, basis };
+}
