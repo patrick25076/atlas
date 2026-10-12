@@ -103,19 +103,31 @@ export type WalkParams = {
   /** When it aborts (the client went away), no more live searches are spent and the walk answers from what it has. */
   signal?: AbortSignal;
   onEvent?: (e: WalkEvent) => void;
+  /** Stream how every decision was made (knobs, expand, beam events): the admin's engine room. */
+  trace?: boolean;
 };
 
 /** A town the walk may stop in by ground only (WalkParams.towns). The code is the caller's own (never three letters). */
 export type WalkTown = { code: string; name: string; country: string; lat: number; lon: number };
 /** "given": the traveller's own flight (WalkParams.fixedOut), kept as they gave it. */
-export type WalkLeg = { kind: "fly" | "train" | "coach" | "ferry" | "road"; from: string; fromName: string; to: string; toName: string; date: string; depart?: string; arrive?: string; minutes: number; price: number; estimated?: boolean; carrier?: string; url?: string; source: "live" | "memory" | "boards" | "ground" | "given"; /** Flights: changes on the ticket, and the airports it passes (live itineraries only). */ stops?: number; route?: string[] };
+export type WalkLeg = { kind: "fly" | "train" | "coach" | "ferry" | "road"; from: string; fromName: string; to: string; toName: string; date: string; depart?: string; arrive?: string; minutes: number; price: number; estimated?: boolean; carrier?: string; url?: string; source: "live" | "memory" | "boards" | "ground" | "given"; /** Flights: changes on the ticket, and the airports it passes (live itineraries only). */ stops?: number; route?: string[]; /** A layover of LAYOVER_MIN_H or more on the ticket (live itineraries only): the walk makes it a free night in that city. */ layover?: WalkLayover };
 export type WalkStop = { code: string; name: string; country: string; lat: number; lon: number; arrive: string; leave: string; nights: number; worth: number; img?: string };
 export type WalkLoop = { id: string; title: string; stops: WalkStop[]; legs: WalkLeg[]; /** The home airport the loop flies out of, else the one it flies back into, else HOME (ground both ways). */ home: string; start: string; end: string; nights: number; flights: number; ground: number; total: number; hours: number; score: number; why: string[] };
 export type WalkEvent =
   | { type: "node"; code: string; name: string; lat: number; lon: number; date: string; depth: number; cost: number }
   | { type: "edge"; from: string; to: string; toName: string; lat: number; lon: number; kind: WalkLeg["kind"]; price: number; minutes: number; chosen?: boolean; source: WalkLeg["source"]; /** The way home: `to` is HOME, lat/lon the home airport (or the door for a ground way home). */ home?: boolean }
   | { type: "loop"; loop: WalkLoop }
-  | { type: "progress"; text: string };
+  | { type: "progress"; text: string }
+  // Trace events, sent only when WalkParams.trace is set (the admin's engine room): how the walk decides.
+  | { type: "knobs"; values: Record<string, string | number> }
+  | { type: "expand"; id: number; parent: number; depth: number; city: string; name: string; date: string; window: [string, string] | null; cost: number; path: string; notes: string[]; candidates: WalkCandidate[] }
+  | { type: "beam"; depth: number; width: number; kept: WalkBeamRow[]; dropped: WalkBeamRow[] };
+/** A layover long enough for a night out: the city, its hours and the days it spans. */
+export type WalkLayover = { code: string; name: string; country: string; hours: number; arrive: string; leave: string };
+/** One way out of a stop as the walk weighed it: cost = price + hoursCost + stopsCost - bonus (the lower wins). */
+export type WalkCandidate = { to: string; name: string; country: string; kind: WalkLeg["kind"]; source: WalkLeg["source"]; date: string; price: number; minutes: number; stops: number; hoursCost: number; stopsCost: number; bonus: number; cost: number; best: boolean; layover?: { name: string; hours: number } };
+/** A state at a depth: kept by the beam (walked on) or dropped. */
+export type WalkBeamRow = { id: number; parent: number; city: string; name: string; date: string; money: number; cost: number; priority: number; path: string };
 export type WalkResult = { loops: WalkLoop[]; searched: number; failed: number; fromMemory: number; expanded: number; considered: string[]; note?: string; partial?: boolean; generatedAt: string };
 
 // ---------------------------------------------------------------------------------------
@@ -130,6 +142,25 @@ const EURO_PER_KM = 0.1;
 const FLIGHT_OVERHEAD_MIN = 90;
 /** How much of a place's worth (0 to about 150) is taken off its price. */
 const WORTH_WEIGHT = 0.5;
+/**
+ * What a change of plane costs on top of the fare, in euros, per tradeoff. The owner (2026-10-12): "I'm looking for
+ * fewer stops". Even at Cheapest a stop is worth avoiding for a few euros: twelve is about six hours at the price rate.
+ */
+const STOP_EURO: Record<"price" | "balanced" | "comfort", number> = { price: 12, balanced: 25, comfort: 60 };
+/**
+ * The most a place's worth (fame, listings, variety, style) may take off an edge, in euros, per tradeoff; a must city
+ * comes on top. Without it a famous new country paid for a flight twice the price of the cheaper one (Hanoi to
+ * Vientiane for 157 euro over Bangkok for 76, 2026-10-12): at Cheapest, taste breaks ties, it does not pay double.
+ */
+const BONUS_CAP: Record<"price" | "balanced" | "comfort", number> = { price: 45, balanced: 80, comfort: 130 };
+/**
+ * A layover this long (hours) on one ticket is a night in that city for free: the owner's trick ("if I have a layover,
+ * I would prefer it to be over 20 hours and get a night extra"). Up to LAYOVER_MAX_H; longer is two tickets' worth.
+ */
+const LAYOVER_MIN_H = 18;
+const LAYOVER_MAX_H = 60;
+/** x, saturating towards cap: about x while small, never past cap, and a bigger x always a little more. */
+const soft = (x: number, cap: number) => (x <= 0 ? x : cap * (1 - Math.exp(-x / cap)));
 /** Remembered one-way destinations out of a stop at or past which its "anywhere" search is skipped: the size of a Kiwi
  * "anywhere" answer, so a handful of rows left by someone's pair search never stands in for the explore. Home always searches. */
 const KNOWN_ENOUGH = 15;
@@ -507,6 +538,8 @@ type State = {
 };
 
 type Edge = { to: string; leg: WalkLeg; arrive: string; img?: string };
+/** What one expansion weighed, kept for the trace. */
+type TraceBox = { notes: string[]; offered: (WalkCandidate & { key: Edge })[]; window: [string, string] | null; best: Map<string, Edge> };
 /** A place the walk can stop in: a city of cities.json, or a named town reached by ground only (town: true). */
 type Spot = { name: string; country: string; lat: number; lon: number; airports: string[]; town?: true };
 /** A town counts as reached by a station of the ground graph this close to it. */
@@ -581,7 +614,7 @@ export async function walkTrips(p: WalkParams): Promise<WalkResult> {
   const maxFlyMin = p.maxFlightHours && Number.isFinite(p.maxFlightHours) && p.maxFlightHours > 0 ? p.maxFlightHours * 60 : Infinity;
   const tradeoff: Tradeoff = p.tradeoff ?? "price";
   const [hIn, hHop, hHome] = HOUR_VALUE[tradeoff];
-  const stopsPenalty = (stops: number) => (tradeoff === "comfort" ? stops * 60 : tradeoff === "balanced" ? stops * 20 : 0);
+  const stopsPenalty = (stops: number) => Math.max(0, stops) * STOP_EURO[tradeoff];
   const exclude = (p.exclude ?? []).map((c) => c.trim().toUpperCase()).filter((c) => /^[A-Z]{2}$/.test(c));
   // Towns without an airport (WalkParams.towns): a place like any city for the walk, but reached and left by
   // ground only. `spot` reads a city or a town the same way, so the rest of the walk needs no second path.
@@ -843,10 +876,24 @@ export async function walkTrips(p: WalkParams): Promise<WalkResult> {
     if (!s.countries.has(c.country)) v += 15 + (unique ? UNIQUE_NEW_COUNTRY : 0);
     if (s.depth > 0 && isHub(s.city) && !isHub(code)) v += 25;
     if (prefer.has(c.country)) v += 40;
-    if (must.includes(code)) v += 150;
     v += styleScore(code);
-    return v * WORTH_WEIGHT;
+    // Taste breaks ties, it does not pay double: the worth saturates towards BONUS_CAP (soft, so a famous city still
+    // beats a plain one, never by more than the cap); a city the traveller must pass through comes on top.
+    return soft(Math.max(0, v) * WORTH_WEIGHT, BONUS_CAP[tradeoff]) + (v < 0 ? v * WORTH_WEIGHT : 0) + (must.includes(code) ? 150 * WORTH_WEIGHT : 0);
   };
+  /** The free night of a long layover, when its city can be a stop: not home, not already seen, not on the been or avoid list. */
+  const layoverStop = (leg: WalkLeg, s: State): WalkLayover | null => {
+    const l = leg.layover;
+    if (!l) return null;
+    const c = spot(l.code);
+    if (!c || c.country === home || s.cities.includes(l.code) || l.code === cityOf.get(leg.to)) return null;
+    if (!countryAllowed(c.country, exclude) || avoidCountries.has(c.country) || avoidCities.has(l.code) || unsafe(c.country)) return null;
+    return l;
+  };
+  /** What a free layover night is worth, in euros taken off its ticket: the city's worth, a little less than a real stop. */
+  const layoverBonus = (l: WalkLayover | null): number => (l ? soft(8 + worth(l.code) * WORTH_WEIGHT * 0.6, BONUS_CAP[tradeoff]) : 0);
+  /** The minutes of a leg that are travel: a free layover night is a stay, not hours on the road. */
+  const travelMinutes = (leg: WalkLeg, l: WalkLayover | null) => (l ? Math.max(60, leg.minutes - l.hours * 60) : leg.minutes);
   const hoursOfFlight = (minutes: number) => (minutes + FLIGHT_OVERHEAD_MIN) / 60;
   /** The hours a leg is charged at the tradeoff's rate: a flight with its airport time, an easy train or coach at
    * GROUND_HOUR_SHARE, a drive or a long overland day in full. One rule for every edge, so a ground hop and a
@@ -880,6 +927,33 @@ export async function walkTrips(p: WalkParams): Promise<WalkResult> {
   );
   if (targeted) say(`Searching into ${[...allowed!].map((cc) => countryLabel(cc)).join(", ")} through their biggest airports, not "anywhere".`);
   if (groundOff) say("Trains and coaches are off: flights only.");
+  /** The trace (the admin's engine room): a state's path, a beam row, an expanded state with what it weighed. */
+  const pathOf = (x: State) => [p.origin.label, ...x.stops.map((y) => y.name)].join(" → ");
+  const beamRow = (x: State): WalkBeamRow => ({ id: x.id, parent: x.parent, city: x.city, name: x.name, date: x.date, money: Math.round(x.money), cost: Math.round(x.cost), priority: Math.round(x.priority), path: pathOf(x) });
+  const traceExpand = (x: State, tr: TraceBox) =>
+    emit({ type: "expand", id: x.id, parent: x.parent, depth: x.depth, city: x.city, name: x.name, date: x.date, window: tr.window, cost: Math.round(x.cost), path: pathOf(x), notes: tr.notes, candidates: tr.offered.map(({ key, ...c }) => ({ ...c, best: tr.best.get(c.to) === key })).sort((y, z) => y.cost - z.cost) });
+  if (p.trace)
+    emit({
+      type: "knobs",
+      values: {
+        tradeoff,
+        "euro an hour (in, hop, home)": HOUR_VALUE[tradeoff].join(", "),
+        "euro a change of plane": STOP_EURO[tradeoff],
+        "most a place's worth takes off": BONUS_CAP[tradeoff],
+        "worth weight": WORTH_WEIGHT,
+        "free night from a layover of (h)": `${LAYOVER_MIN_H} to ${LAYOVER_MAX_H}`,
+        "nights a stop": nMin === nMax ? nMin : `${nMin} to ${nMax}`,
+        "stops at most": maxStops,
+        beam,
+        "live searches allowed": budget,
+        "train or coach up to (min)": groundOff ? 0 : maxGroundMin,
+        "searches into": targeted ? "the region's biggest hubs" : "anywhere",
+        "fare memory counts for (days)": MEMORY_AGE_DAYS,
+        "memory answers a stop with (fares)": KNOWN_ENOUGH,
+        "flight overhead (min)": FLIGHT_OVERHEAD_MIN,
+        "train or coach euro a km": EURO_PER_KM,
+      },
+    });
 
   /** The road between the traveller's door and a home airport, when it is a real drive. */
   const roadLeg = (airport: string, toAirport: boolean, date: string): WalkLeg | null => {
@@ -911,7 +985,21 @@ export async function walkTrips(p: WalkParams): Promise<WalkResult> {
     source,
     stops: it.outbound.stops,
     route: it.outbound.route,
+    ...layoverOf(it),
   });
+  /** The first layover of LAYOVER_MIN_H to LAYOVER_MAX_H on an itinerary, in a city the walk knows. */
+  function layoverOf(it: KiwiItinerary): { layover?: WalkLayover } {
+    const seg = it.outbound.segments ?? [];
+    for (let i = 0; i < seg.length - 1; i++) {
+      const h = (Date.parse(seg[i + 1].departureTime) - Date.parse(seg[i].arrivalTime)) / 3_600_000;
+      if (!Number.isFinite(h) || h < LAYOVER_MIN_H || h > LAYOVER_MAX_H) continue;
+      const code = cityOf.get(seg[i].to) ?? (CITIES[seg[i].to] ? seg[i].to : "");
+      const c = code ? CITIES[code] : undefined;
+      if (!c) continue;
+      return { layover: { code, name: c.name, country: c.country, hours: Math.round(h), arrive: dayOf(seg[i].arrivalTime), leave: dayOf(seg[i + 1].departureTime) } };
+    }
+    return {};
+  }
   const flyFromMemory = (from: string, f: MemFare): WalkLeg => ({ kind: "fly", from: f.src, fromName: from === HOME ? airportName(f.src) : (CITIES[from]?.name ?? airportName(f.src)), to: f.dst, toName: airportName(f.dst), date: f.out, minutes: Math.round(f.hours * 60), price: Math.round(f.price), carrier: f.carriers.join(", ") || undefined, url: f.url, source: "memory", stops: f.stops });
   const edgeEvent = (s: State, e: Edge): Extract<WalkEvent, { type: "edge" }> => {
     const c = spot(e.to);
@@ -933,16 +1021,23 @@ export async function walkTrips(p: WalkParams): Promise<WalkResult> {
       last.leave = e.leg.date;
       last.nights = Math.max(1, daysBetween(last.arrive, last.leave));
     }
+    // A long layover on this ticket: a free night in that city, a stop of its own before the one the ticket lands in.
+    const lay = layoverStop(e.leg, s);
+    if (lay) {
+      const lc = spot(lay.code)!;
+      stops.push({ code: lay.code, name: lc.name, country: lc.country, lat: lc.lat, lon: lc.lon, arrive: lay.arrive, leave: lay.leave, nights: Math.max(1, daysBetween(lay.arrive, lay.leave)), worth: Math.round(worth(lay.code)) });
+    }
     stops.push({ code: e.to, name: c.name, country: c.country, lat: c.lat, lon: c.lon, arrive: e.arrive, leave: addDays(e.arrive, nMin), nights: nMin, worth: Math.round(worth(e.to)), img: e.img });
     const road = legs.length > s.legs.length + 1 ? legs[legs.length - 2] : null;
     const roadCost = road ? road.price + hv * (road.minutes / 60) : 0;
-    const b = bonus(e.to, s);
+    const b = bonus(e.to, s) + layoverBonus(lay);
     const money = s.money + e.leg.price + (road?.price ?? 0);
-    const hours = s.hours + realHours(e.leg.kind, e.leg.minutes) + (road ? road.minutes / 60 : 0);
-    const cost = s.cost + e.leg.price + hv * chargedHours(e.leg.kind, e.leg.minutes) + stopsPenalty(stopsOnTicket) + roadCost - b;
+    const hours = s.hours + realHours(e.leg.kind, travelMinutes(e.leg, lay)) + (road ? road.minutes / 60 : 0);
+    const cost = s.cost + e.leg.price + hv * chargedHours(e.leg.kind, travelMinutes(e.leg, lay)) + stopsPenalty(stopsOnTicket) + roadCost - b;
     const countries = new Set(s.countries);
+    if (lay) countries.add(lay.country);
     countries.add(c.country);
-    return { city: e.to, name: c.name, lat: c.lat, lon: c.lon, country: c.country, date: e.arrive, depth: s.depth + 1, cities: [...s.cities, e.to], countries, legs, stops, money, hours, worth: s.worth + b, cost, priority: cost + heuristic(e.to, c.lat, c.lon), start: s.start ?? e.leg.date, via: edgeEvent(s, e), id: nextId++, parent: s.id };
+    return { city: e.to, name: c.name, lat: c.lat, lon: c.lon, country: c.country, date: e.arrive, depth: s.depth + 1, cities: [...s.cities, ...(lay ? [lay.code] : []), e.to], countries, legs, stops, money, hours, worth: s.worth + b, cost, priority: cost + heuristic(e.to, c.lat, c.lon), start: s.start ?? e.leg.date, via: edgeEvent(s, e), id: nextId++, parent: s.id };
   };
 
   /** A loop closed by a home leg from state `s`: ranked, deduplicated by its city sequence, streamed. */
@@ -1245,6 +1340,7 @@ export async function walkTrips(p: WalkParams): Promise<WalkResult> {
     const width = depth === 0 ? 1 : pickWidth(level[0]);
     if (depth > 0 && width < beam) considered.push(`depth ${depth}: beam ${width} instead of ${beam}, keeping ${needToClose(level[0])} of the ${searchesLeft()} searches left for the cheapest branch's hops and way home`);
     const picked = depth === 0 ? level.slice(0, 1) : pickBeam(level, depth, bestKnown, width);
+    if (p.trace) emit({ type: "beam", depth, width, kept: picked.map(beamRow), dropped: level.filter((x) => !picked.includes(x)).slice(0, 20).map(beamRow) });
     // The states of a depth are expanded side by side: their searches go through Kiwi's gate together (six at a
     // time), so a seven-stop walk takes seven rounds of searches, not twenty. The budget is reserved per search.
     let stop = false;
@@ -1255,6 +1351,12 @@ export async function walkTrips(p: WalkParams): Promise<WalkResult> {
         return;
       }
       expanded++;
+      const tr: TraceBox = { notes: [], offered: [], window: null, best: new Map() };
+      const note = (t: string) => {
+        considered.push(t);
+        tr.notes.push(t);
+      };
+      try {
       emit({ type: "node", code: s.city, name: s.name, lat: s.lat, lon: s.lon, date: s.date, depth: s.depth, cost: Math.round(s.cost) });
       if (s.via) emit({ ...s.via, chosen: true });
       const srcs = s.city === HOME ? gwCodes : (spot(s.city)?.airports ?? []);
@@ -1279,7 +1381,7 @@ export async function walkTrips(p: WalkParams): Promise<WalkResult> {
             close(s, leg, mem.stops);
           } else if (!noAirport) {
             const its = await live({ flyFrom: s.city, flyTo: gwCodes.join(","), departureDate: kiwiDate(earliest), departureDateTo: kiwiDate(latest) });
-            considered.push(`${s.name} home to ${gwCodes.join(",")} ${earliest}..${latest}: ${its ? `${its.length} fares` : "not searched"}`);
+            note(`${s.name} home to ${gwCodes.join(",")} ${earliest}..${latest}: ${its ? `${its.length} fares` : "not searched"}`);
             const best = (its ?? [])
               .filter((it) => (gwCodes.includes(it.outbound.to) || gwCodes.includes(cityOf.get(it.outbound.to) ?? "")) && it.outbound.durationSeconds / 60 <= maxFlyMin)
               .sort((a, b) => a.price + hHome * hoursOfFlight(a.outbound.durationSeconds / 60) + stopsPenalty(a.outbound.stops) - (b.price + hHome * hoursOfFlight(b.outbound.durationSeconds / 60) + stopsPenalty(b.outbound.stops)))[0];
@@ -1308,10 +1410,18 @@ export async function walkTrips(p: WalkParams): Promise<WalkResult> {
       if (!hop) return;
       if (tight && nMax > nMin && s.city !== HOME) lengthened++;
       const { a, b } = hop;
+      tr.window = [a, b];
       const hv = s.city === HOME ? hIn : hHop;
       const edges = new Map<string, { edge: Edge; cost: number; stops: number }>();
       const offer = (e: Edge, stopsOnTicket: number) => {
-        const cost = e.leg.price + hv * chargedHours(e.leg.kind, e.leg.minutes) + stopsPenalty(stopsOnTicket) - bonus(e.to, s);
+        const lay = layoverStop(e.leg, s);
+        const hoursCost = hv * chargedHours(e.leg.kind, travelMinutes(e.leg, lay));
+        const b = bonus(e.to, s) + layoverBonus(lay);
+        const cost = e.leg.price + hoursCost + stopsPenalty(stopsOnTicket) - b;
+        if (p.trace) {
+          const c = spot(e.to);
+          tr.offered.push({ key: e, to: e.to, name: c?.name ?? e.leg.toName, country: c?.country ?? "", kind: e.leg.kind, source: e.leg.source, date: e.leg.date, price: e.leg.price, minutes: e.leg.minutes, stops: stopsOnTicket, hoursCost: Math.round(hoursCost), stopsCost: stopsPenalty(stopsOnTicket), bonus: Math.round(b), cost: Math.round(cost), best: false, ...(lay ? { layover: { name: lay.name, hours: lay.hours } } : {}) });
+        }
         const prev = edges.get(e.to);
         // A live itinerary wins a tie with a remembered fare: it knows its real arrival time, the memory only a guess.
         if (!prev || cost < prev.cost || (cost === prev.cost && e.leg.source === "live" && prev.edge.leg.source !== "live")) edges.set(e.to, { edge: e, cost, stops: stopsOnTicket });
@@ -1334,12 +1444,12 @@ export async function walkTrips(p: WalkParams): Promise<WalkResult> {
       const target = targeted ? hubsFor(s) : null;
       const where = target ? target.names.join(", ") || "the region" : "anywhere";
       if (noAirport) {
-        considered.push(`${s.name} has no airport: on by train or coach only`);
+        note(`${s.name} has no airport: on by train or coach only`);
       } else if (s.city !== HOME && known >= (target ? TARGET_HUBS : KNOWN_ENOUGH)) {
         fromMemory++;
-        considered.push(`${s.name} to ${where} ${a}..${b}: ${known} fares from memory, no live search`);
+        note(`${s.name} to ${where} ${a}..${b}: ${known} fares from memory, no live search`);
       } else if (target && !target.airports) {
-        considered.push(`${s.name}: no city of the region left to fly to`);
+        note(`${s.name}: no city of the region left to fly to`);
       } else {
         const its = await live({ flyFrom, flyTo: target ? target.airports : "anywhere", departureDate: kiwiDate(a), departureDateTo: kiwiDate(b) });
         let used = 0;
@@ -1365,7 +1475,7 @@ export async function walkTrips(p: WalkParams): Promise<WalkResult> {
             offer({ to, leg: { kind: "fly", from: d.gw, fromName: airportName(d.gw), to: d.dst, toName: airportName(d.dst), date: d.out, minutes: d.outMin, price: Math.round(d.price / 2), estimated: true, carrier: d.carriers.join(", ") || undefined, url: d.url, source: "boards", stops: d.stops }, arrive: landingDay(d.out, d.outMin, pointOf(d.gw)?.lon, CITIES[to]?.lon), img: d.img }, d.stops);
           }
         }
-        considered.push(`${s.name} to ${where} ${a}..${b}: ${its ? `${its.length} fares, ${used} usable` : known ? `not searched, ${known} from memory` : "not searched"}${tooLong ? `, ${tooLong} over ${p.maxFlightHours} h` : ""}${fromBoards ? `, ${fromBoards} from the boards (half a return, estimated)` : ""}`);
+        note(`${s.name} to ${where} ${a}..${b}: ${its ? `${its.length} fares, ${used} usable` : known ? `not searched, ${known} from memory` : "not searched"}${tooLong ? `, ${tooLong} over ${p.maxFlightHours} h` : ""}${fromBoards ? `, ${fromBoards} from the boards (half a return, estimated)` : ""}`);
       }
 
       // Ground: the graph's reach, cities only (a hop may stay in the country), leaving on the stop's last day.
@@ -1385,12 +1495,16 @@ export async function walkTrips(p: WalkParams): Promise<WalkResult> {
         offer(g.edge, 0);
         groundUsed++;
       }
-      if (groundUsed) considered.push(`${s.name} by ground within ${Math.round(maxGroundMin / 60)} h: ${groundUsed} of ${links.length} cities`);
+      if (groundUsed) note(`${s.name} by ground within ${Math.round(maxGroundMin / 60)} h: ${groundUsed} of ${links.length} cities`);
 
+      for (const [k, v] of edges) tr.best.set(k, v.edge);
       // Every edge is streamed (the fan-out), every child joins the next depth; the beam decides there.
       for (const { edge, stops } of edges.values()) {
         emit(edgeEvent(s, edge));
         push(child(s, edge, hv, stops));
+      }
+      } finally {
+        if (p.trace) traceExpand(s, tr);
       }
     };
     await Promise.all(picked.map(expand));

@@ -164,6 +164,27 @@ function fareOf(r: FareRow): FareSeen {
   return { src: r.src, dst: r.dst, out: isoDay(r.out_iso), back: r.back_iso ? isoDay(r.back_iso) : null, nights: r.nights, price: Number(r.price), stops: r.stops, carriers: r.carriers, hours: Number(r.hours), url: r.url, seenAt: isoStamp(r.seen_at) };
 }
 
+/**
+ * Every one-way sighting between two sets of airports in a window (the admin's engine room): one row per departure
+ * day and price, newest sighting first, so a gap reads as a gap (a day nobody searched) and a price as when it was seen.
+ */
+export async function fareSightings(srcs: string[], dsts: string[], from: string, to: string, limit = 400): Promise<FareSeen[]> {
+  const db = client();
+  if (!db || !srcs.length || !dsts.length || !(await ensureSchema())) return [];
+  try {
+    const rows = await db<FareRow[]>`
+      select src, dst, to_char(out_date, 'YYYY-MM-DD') as out_iso, to_char(back_date, 'YYYY-MM-DD') as back_iso,
+        nights, price, stops, carriers, hours, url, seen_at
+      from fares where src = any(${srcs}) and dst = any(${dsts}) and back_date is null
+        and out_date >= ${from} and out_date <= ${to}
+      order by out_date, price asc, seen_at desc limit ${limit}`;
+    return rows.map(fareOf);
+  } catch (err) {
+    console.log(`db: sightings ${err instanceof Error ? err.message.slice(0, 160) : err}`);
+    return [];
+  }
+}
+
 /** What this route cost whenever anyone looked: cheapest per departure date, newest first. */
 export async function fareHistory(src: string, dst: string, from?: string, to?: string, limit = 30): Promise<FareSeen[]> {
   const db = client();

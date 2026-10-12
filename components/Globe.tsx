@@ -77,6 +77,9 @@ function walkLineOf(e: WalkEvent | WalkLine): WalkLine {
       return { loop: e.loop };
     case "progress":
       return { progress: e.text };
+    default:
+      // Trace events (knobs, expand, beam) are for the admin's engine room; the globe draws none of them.
+      return {};
   }
 }
 /** Something a live search just found, drawn growing from where it leaves and fading out. */

@@ -322,7 +322,7 @@ export async function loadFlightGraph(root = process.env.FLIGHT_GRAPH_PREFIX?.tr
 // Places, the ground and the home airports.
 
 /** What a place is called and where it is: a city of the globe, else the airport. */
-function placeOf(code: string): { code: string; name: string; country: string; lat: number; lon: number } | null {
+export function placeOf(code: string): { code: string; name: string; country: string; lat: number; lon: number } | null {
   const c = CITIES[code];
   if (c) return { code, name: c.name, country: c.country, lat: c.lat, lon: c.lon };
   const g = resolveGateway(code);
@@ -423,6 +423,11 @@ export function homeAirportsFor(origin: { lat: number; lon: number }, homeCountr
 export type Tradeoff = "price" | "balanced" | "comfort";
 /** Euros an hour of travel is worth: nothing on price (hours only break ties), then the plan's two rates. */
 const HOUR_EURO: Record<Tradeoff, number> = { price: 0, balanced: 6, comfort: 18 };
+/** A change of plane on a ticket, in euros on top of its fare, per tradeoff (the walk's STOP_EURO): the owner wants
+ * fewer stops, so even at Cheapest a nonstop beats a one-stop that is a few euros cheaper. Ranking only, never a price. */
+const STOP_EURO: Record<Tradeoff, number> = { price: 12, balanced: 25, comfort: 60 };
+/** Other flights shown beside each flight of a traced trip: out of the same city, a day either side. */
+const TRACE_ALTERNATIVES = 8;
 /** A tie on euros is broken by minutes: this small a weight never outvotes a whole euro over a 100-hour trip. */
 const TIE = 1e-5;
 
@@ -447,6 +452,8 @@ export type GraphLeg = {
   source: "graph" | "memory" | "ground";
   /** When the price was seen (flights). */
   seen?: string;
+  /** Traced trips only (TripsQuery.trace): the other flights out of the same city a day either side, cheapest first. */
+  alternatives?: { to: string; toName: string; date: string; price: number; minutes: number; stops: number; same: boolean }[];
 };
 export type GraphStop = { code: string; name: string; country: string; lat: number; lon: number; arrive: string; leave: string; nights: number };
 export type GraphTrip = { legs: GraphLeg[]; stops: GraphStop[]; total: number; flights: number; ground: number; hours: number; nights: number; start: string; end: string; why: string[] };
@@ -476,6 +483,8 @@ export type TripsQuery = {
   groundMaxMin?: number;
   /** Home airports (IATA); default every airport of homeCountry within 6 h of the door by ground. */
   homeAirports?: string[];
+  /** Explain the answer (the admin's engine room): every flight of a trip lists the other flights it was chosen over. */
+  trace?: boolean;
 };
 
 const kindOfMode = (mode: string): GraphLeg["kind"] => (mode === "rail" ? "train" : mode === "ferry" ? "ferry" : "coach");
@@ -542,6 +551,8 @@ type Label = {
   leg?: GraphLeg;
   /** Stay labels: the nights just spent. */
   nights?: number;
+  /** Euros of taste on top of the fares (changes of plane, STOP_EURO): in the cost, never in a price. */
+  pen?: number;
 };
 
 class Heap {
@@ -588,6 +599,20 @@ class Heap {
     }
     return top;
   }
+}
+
+/** The other flights out of the same city a day either side of edge i, cheapest first (the trace). */
+function alternativesTo(g: FlightGraph, i: number): NonNullable<GraphLeg["alternatives"]> {
+  const e = g.edges[i];
+  const out: NonNullable<GraphLeg["alternatives"]> = [];
+  for (let d = e.dn - 1; d <= e.dn + 1; d++) {
+    for (const j of g.byFromDay.get(`${e.fc}|${d}`) ?? []) {
+      if (j === i) continue;
+      const x = g.edges[j];
+      out.push({ to: x.tc, toName: placeOf(x.tc)?.name ?? x.t, date: x.d, price: x.p, minutes: x.m, stops: x.s, same: x.tc === e.tc });
+    }
+  }
+  return out.sort((a, b) => a.price - b.price).slice(0, TRACE_ALTERNATIVES);
 }
 
 const flightLeg = (e: FlightEdge): GraphLeg => ({
@@ -662,6 +687,7 @@ export function cheapestTripsIn(g: FlightGraph, q: TripsQuery): TripsResult {
   const minPlaces = Math.max(1, Math.min(maxPlaces, Math.round(q.minPlaces ?? 1)));
   const top = Math.max(1, Math.min(30, Math.round(q.top ?? TOP)));
   const rate = HOUR_EURO[q.tradeoff ?? "price"] / 60;
+  const stopPen = (n: number | undefined) => Math.max(0, n || 0) * STOP_EURO[q.tradeoff ?? "price"];
   const groundMax = q.groundMaxMin == null ? DEFAULT_GROUND_MIN : Math.max(0, Math.min(720, Math.round(q.groundMaxMin)));
   const exclude = (q.exclude ?? []).map((c) => c.trim().toUpperCase());
   const avoid = resolveAvoid(q.avoid);
@@ -742,7 +768,7 @@ export function cheapestTripsIn(g: FlightGraph, q: TripsQuery): TripsResult {
         if (!h || !landable(e.tc, []) || e.an + lo > toN) continue;
         const euros = h.price + e.p;
         const minutes = h.minutes + e.m;
-        push({ kind: 0, city: e.tc, day: e.an, places: 1, start: d, cost: costOf(euros, minutes), euros, minutes, visited: [e.tc], parent: doorLabel(h, d), fe: i });
+        push({ kind: 0, city: e.tc, day: e.an, places: 1, start: d, cost: costOf(euros, minutes) + stopPen(e.s), euros, minutes, visited: [e.tc], parent: doorLabel(h, d), fe: i, pen: stopPen(e.s) });
       }
     }
   }
@@ -756,7 +782,7 @@ export function cheapestTripsIn(g: FlightGraph, q: TripsQuery): TripsResult {
     if (l.places < minPlaces) return;
     const euros = l.euros + close.reduce((a, x) => a + x.price, 0);
     const minutes = l.minutes + close.reduce((a, x) => a + x.minutes, 0);
-    const cost = costOf(euros, minutes);
+    const cost = costOf(euros, minutes) + (l.pen ?? 0) + close.reduce((a, x) => a + (x.kind === "fly" ? stopPen(x.stops) : 0), 0);
     const seq = l.visited.join(">");
     const prev = doneSeqs.get(seq);
     if (prev != null && done[prev].cost + TIE * done[prev].minutes <= cost + TIE * minutes) return;
@@ -807,7 +833,8 @@ export function cheapestTripsIn(g: FlightGraph, q: TripsQuery): TripsResult {
       if (e.an + lo > toN || e.an + lo - l.start > maxNights) continue;
       const euros = l.euros + e.p;
       const minutes = l.minutes + e.m;
-      push({ kind: 0, city: e.tc, day: e.an, places: l.places + 1, start: l.start, cost: costOf(euros, minutes), euros, minutes, visited: [...l.visited, e.tc], parent: li, fe: i });
+      const pen = (l.pen ?? 0) + stopPen(e.s);
+      push({ kind: 0, city: e.tc, day: e.an, places: l.places + 1, start: l.start, cost: costOf(euros, minutes) + pen, euros, minutes, visited: [...l.visited, e.tc], parent: li, fe: i, pen });
     }
     if (groundMax <= 0) continue;
     // Trains and coaches the same day: home to the door (or to a home airport and on), or on to a new place.
@@ -823,7 +850,7 @@ export function cheapestTripsIn(g: FlightGraph, q: TripsQuery): TripsResult {
       if (l.day + lo > toN || l.day + lo - l.start > maxNights) continue;
       const euros = l.euros + groundPrice(link.km);
       const minutes = l.minutes + link.minutes;
-      push({ kind: 0, city: link.code, day: l.day, places: l.places + 1, start: l.start, cost: costOf(euros, minutes), euros, minutes, visited: [...l.visited, link.code], parent: li, gl: link });
+      push({ kind: 0, city: link.code, day: l.day, places: l.places + 1, start: l.start, cost: costOf(euros, minutes) + (l.pen ?? 0), euros, minutes, visited: [...l.visited, link.code], parent: li, gl: link, pen: l.pen });
     }
   }
 
@@ -837,6 +864,7 @@ export function cheapestTripsIn(g: FlightGraph, q: TripsQuery): TripsResult {
     const stops: GraphStop[] = [];
     for (const l of chain) {
       const leg = l.leg ?? (l.fe != null ? flightLeg(g.edges[l.fe]) : l.gl ? groundLeg(labels[l.parent].city, l.city, l.day, l.gl) : undefined);
+      if (leg && q.trace && l.fe != null) leg.alternatives = alternativesTo(g, l.fe);
       if (leg) legs.push(leg);
       if (l.kind === 0 && l.city !== "HOME") {
         const p = placeOf(l.city)!;

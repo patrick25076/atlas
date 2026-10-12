@@ -126,7 +126,7 @@ export async function GET(request: Request) {
           if (e.type === "progress") say({ progress: e.text });
           else if (e.type === "node") say({ node: { code: e.code, name: e.name, lat: e.lat, lon: e.lon, date: e.date, depth: e.depth, cost: e.cost } });
           else if (e.type === "edge") say({ edge: { from: e.from, to: e.to, toName: e.toName, lat: e.lat, lon: e.lon, kind: e.kind, price: e.price, minutes: e.minutes, source: e.source, ...(e.chosen ? { chosen: true } : {}), ...(e.home ? { home: true } : {}) } });
-          else say({ loop: e.loop });
+          else if (e.type === "loop") say({ loop: e.loop });
         };
         // The signal is the first caller's: a second caller sharing the walk must not cut it short by leaving.
         const { promise, mine } = inflight.run(key, () =>
