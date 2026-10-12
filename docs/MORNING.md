@@ -1,3 +1,38 @@
+# Update, Monday 12 October: one search, and how to use Atlas now
+
+_You said there were too many features that should be one, and that the chat did not help.
+You chose "one search, plus an Advanced drawer". It is live (commit 28ea543), behind the
+access code._
+
+**How to use it**
+
+1. **Search tab.** Fill From (your airports are already in), To (Anywhere, a city or town,
+   a country, a region), When (exact dates, a flexible window with a must-include day, a
+   month, or anytime) and Nights. Press Search. Every engine runs behind it: the nightly
+   price graph first, then live searches within a budget.
+2. **The list.** One card per route, cheapest first. The big number is door to door: the
+   tickets plus the train, coach or drive to the airport and between cities, shown under
+   it. "2 more dates" means the same route on other days. Chips under the bar filter at
+   once: Direct only, Leg length, 1, 2 or 3+ cities, Trains OK, Events on, New countries,
+   Price.
+3. **Advanced.** Trip shape (return, two cities, a loop of 3+), Wild through a region,
+   Long stay, Group, and the trip style (nights a place, avoid, trains between places).
+4. **A card opens the trip page.** One booking link per ticket, Ways home (a week of
+   flights home, direct first, to any of your airports), hotels for your nights, sights and
+   food, and Make it a plan for the day by day.
+5. **Ask tab.** The chat runs the same search. Say what you want in your words ("3 or 4
+   nights in November, direct, a train between two cities") and refine it ("cheaper", "a
+   week later"). Its cards are the same cards.
+6. **My trips.** Saved plans and searches.
+
+**What changed under it.** The Deals, Explore and Trips tabs and their modes are gone; old
+links land on Search. Two-city trips and loops now come out of the price graph properly: a
+November two-city search from Brașov went from 2 trips to 21, most with a train or coach
+between (Bologna and Venice, Milan and Venice), and a loop gives Milan, Verona, Venice for
+€71 door to door.
+
+---
+
 # Update, Saturday 10 October, later still: A to B, free-form trips, tools that fall back
 
 _Your four points after the first deploy: everything scrollable, Trips and Wild not
