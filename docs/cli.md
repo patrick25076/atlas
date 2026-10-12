@@ -32,6 +32,7 @@ the research behind an itinerary). Nothing else is needed: Kiwi has no key.
 | `stay thailand 2 months`, `2 months in Bali` | long-stay bases (`long_stay`): live only with `--live-cap 16` | 0 or about 16 |
 | `place Porto`, `Porto` | facts, the guide's sights, the best months, events worth the trip there | 0 |
 | `itinerary Lisbon 3 nights from 2026-11-14`, `itinerary Lisbon 3 nights, Porto 2 nights from 14 Nov`, `itinerary Porto 2 from Brasov on 1 Dec`, or a list of stays without the word: `Lisbon 3 nights then Porto 2 nights` | a day-by-day itinerary (`make_itinerary`): the days, the food, events on those days, estimated costs | 0 (about a minute of model writing) |
+| `search Lisbon in november`, `search loop from Brasov 20 to 30 Oct 6 days --direct`, `search --window 2026-10-22..2026-11-30 --include 2026-10-26 --nights 3-5` | the one search (lib/search.ts), exactly as the Search tab and the chat's `search` tool run it: the words through `parseCommand` and `toSearchQuery` (the shell's own path), the flags over them; prints the trips cheapest first, each as a tree of legs and stays with one booking link per ticket | the nightly price graph first (0), then the live engines within the cap (the query's budget) |
 | `ask is Porto nice in October` | one turn with the agent, the same prompt and tools as the chat; prints the answer and the tools it used | what the agent spends, under the cap |
 | `style` (`/style`, `settings`) | the trip style this run uses, in the words the agent reads | 0 |
 | `help` (`/help`) | the list of examples and flags | 0 |
@@ -124,6 +125,29 @@ itinerary in the app's command bar.
 | `--all` | every suggestion the parser made, then the first is run |
 | `--engine classic` | build a wild loop with the older greedy chain by country instead of the graph walk |
 
+## The one search
+
+`atlas search` is the app's one search in a terminal (docs/plans/one-search.md). The words
+after `search` are read by the command line (any route, getaways, events, loop, wild or long
+stay line) and turned into a `SearchQuery` by `toSearchQuery` in lib/command.ts, the same
+function the top bar uses to fill the search bar. The flags say what a line cannot, and win
+over the words:
+
+| Flag | Meaning |
+| --- | --- |
+| `--to Lisbon` | a city or town, a country (`Portugal`), a region key or name (`sea`, `Balkans`), or `anywhere` |
+| `--out D --back D` | exact dates (YYYY-MM-DD) |
+| `--window D..D --include D` | a flexible window and a day the trip must include |
+| `--month YYYY-MM` | a month |
+| `--nights 3-5` | nights in all, a number or a range |
+| `--one-way`, `--shape any\|return\|two\|loop\|long` | the trip shape |
+| `--direct`, `--trains`, `--events`, `--cities 1\|2\|3`, `--max-price N` | the filter chips |
+| `--query '<json>'` | a whole SearchQuery, checked by `parseSearchQuery` (lib/trip-result.ts) |
+
+The run's `--live-cap` is the query's budget (0 to 60): with `--live-cap 0` the answer comes
+from the nightly price graph and the fare memory only. `--json` prints the query and the raw
+TripResults.
+
 ## The trip style
 
 The app keeps one trip style per browser (lib/prefs.ts, the Trip style button or `/style`):
@@ -212,3 +236,12 @@ today)`, the first is the best guess, "Ask Atlas" always last) and runs the chos
 globe. The chat dispatches `atlas:command` with a line (an event's "Show on the map" sends
 `/events Venice 2027-02-07 to 2027-02-17`), so anything the command bar can run, the chat can
 ask it to. `COMMAND_HINTS` in lib/command.ts is the list of examples both show.
+
+Since the one search (2026-10-12), a line that searches (a route, getaways, events, a loop, a
+wild loop, a long stay) becomes a `SearchQuery` through `toSearchQuery(cmd, ctx)` in
+lib/command.ts, and the shell dispatches `atlas:search` with it: the search bar fills and the
+one list runs. A place, an itinerary, the trip style, the guide and a question are not
+searches (`toSearchQuery` answers null) and keep their own actions. `ctx` carries where the
+traveller is (`here`: label, point, airports, home), the day, the trip style, and two optional
+resolvers the shell owns: `resolve` (a typed start such as "loop from Cluj" to a place with
+airports) and `destination` (a typed name to a country or a region).

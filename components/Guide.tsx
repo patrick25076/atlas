@@ -1,10 +1,10 @@
 "use client";
 
-// "How Atlas works": a short guide to every feature, opened from the "?" in the top bar or
-// "/help" on the command line. Each section says what the feature does in plain words and
-// gives one thing to try; a try that is a command line runs it (through the 'atlas:command'
-// window event, the same door the command line uses) and closes the guide. Scrolls inside
-// itself, full screen on a phone.
+// "How Atlas works": six short sections on the one search, opened from the "?" in the top bar
+// or "/help" on the command line. Each section says what it does in plain words and gives one
+// thing to try; a try that is a command line runs it (through the 'atlas:command' window
+// event, the same door the command line uses) and closes the guide. Scrolls inside itself,
+// full screen on a phone.
 
 import { useEffect, useRef } from "react";
 
@@ -22,136 +22,61 @@ type Section = {
 
 const SECTIONS: Section[] = [
   {
-    id: "command",
-    title: "The command line",
+    id: "search",
+    title: "One search",
     body: [
-      "One box for everything. Type a route, a month, a loop, a place or a question; the list under the box shows what your words could mean, best guess first. Up and Down choose, Enter runs, Esc closes.",
-      "Press / or Ctrl+K from anywhere to jump into it. A question it cannot place goes to the chat.",
+      "The Search tab is the whole app: From (your place and its airports), To (anywhere, a city, a country or a region), When (exact dates, a flexible window with a day that must be in it, a month, or anytime) and Nights. Press Search.",
+      "You never pick an engine. Atlas asks the nightly price graph first, then live fares, and puts every kind of trip in one list: there and back, one way, two cities, a loop, a long stay.",
+      "The command line in the top bar fills the same search from words. Press / or Ctrl+K to jump into it.",
     ],
-    run: "Brasov to Lisbon",
-    tryText: "Brasov to Lisbon",
+    run: "getaways this weekend",
+    tryText: "getaways this weekend",
   },
   {
-    id: "deals",
-    title: "Deals and the custom search",
+    id: "results",
+    title: "The list and the globe",
     body: [
-      "The Deals tab lists the cheapest return trips from your airports for the next six weeks, searched every night. Each price is also a tag on the globe; tap one to open it.",
-      "The custom search looks over any period from several airports: nights, a must-have date, direct only, a longest flight, a region. It can also let the way home leave from another airport (open jaw), and try hidden-city tickets.",
-      "Split tickets: some of the cheapest trips are two one-way tickets instead of one return, sometimes flying into one city and home from another (the card says \"In to Porto, home from Lisbon\" and how long the trip between them takes by land). They are separate bookings: if the first flight is late, the second airline owes you nothing, so leave a margin.",
+      "Results arrive as they are found, cheapest first (your trip style can switch to balanced or comfort). Each card shows the price, the route with its planes and trains, the dates, the nights in each place and the hours of travel.",
+      "The globe shows the same list as price tags. Hover a card or a tag to see that trip's route; the chips under the bar (direct only, shorter legs, cities, trains, events on, new countries, a price cap) filter at once, without a new search.",
     ],
-    tryText: "Open Deals, then hover a price on the globe to see where it goes.",
+    tryText: "Hover a card, then a price tag on the globe.",
   },
   {
-    id: "explore",
-    title: "Explore and place pages",
+    id: "trip",
+    title: "The trip page",
     body: [
-      "Explore shows every place you can reach: by plane in one hop, and by train or coach on the ground graph of 16,000 stations. Tap a city for its page: the sights, food, the best months, events, hotels and how to get there.",
+      "Tap any card or tag. The trip page has every leg with its own booking link, ways home on the days around, hotels for your dates, what is on while you are there, and the sights and food of each place.",
+      "Make it a plan turns the trip into a day by day itinerary you can save, share or put in your calendar. Prices are checked on the booking page; train, coach and some fares are estimates and say so.",
     ],
-    run: "/place Porto",
-    tryText: "/place Porto",
+    tryText: "Open the first result, then press Make it a plan.",
   },
   {
-    id: "ab",
-    title: "Get there (A to B)",
+    id: "advanced",
+    title: "Advanced, Trip style and Been",
     body: [
-      "The cheapest and the fastest way between two places, every kind of ticket: a nearby airport, a train to a bigger airport, two tickets through a hub, a different airport home, or no flight at all.",
-      "The first answer comes from the fare memory and the timetables in a second, with no live search. Search live fares spends up to twelve searches for more. The order follows your trip style: cheapest, balanced or comfort.",
-    ],
-    run: "to Lisbon 14 Nov 4 nights",
-    tryText: "to Lisbon 14 Nov 4 nights",
-  },
-  {
-    id: "events",
-    title: "Events worth flying for",
-    body: ["Festivals, matches, concerts, seasons and food fairs in a window, each on the globe with the cheapest fare there that the boards already know. Tap one for its dates, the fare and an itinerary around it."],
-    run: "events in february",
-    tryText: "events in february",
-  },
-  {
-    id: "chat",
-    title: "The chat",
-    body: [
-      "Ask in your own words. The chat knows where you are, your airports, your Been list and your trip style, and uses the same engines as the rest of the app: its answers come back as cards, and the globe draws them.",
-      "It may ask you to tap a region, a date or a place on the globe; the globe passes your tap back.",
-    ],
-    tryText: "Open the Ask tab and type: a cheap 5 day trip with good food in November.",
-  },
-  {
-    id: "smart",
-    title: "Smart loops (the graph walk)",
-    body: [
-      "This is the way you would search by hand. From where you are, one explore search finds the cheapest places to fly to. From each of those it looks at the cheapest next hops: flights, and trains and coaches from the ground graph (a shortest path search over the timetables) when they are cheap and under about five and a half hours. Then the cheapest way home, to any of your airports, not only the one you left from.",
-      "It keeps the few best partial trips at every step and draws its thinking on the globe: every price it looked at, the cities it chose, and the loops as they close. Fares already in the fare memory cost no search.",
-      "Nights a stop follow your trip style. More live searches find more; zero answers from what is already known.",
-    ],
-    run: "3 cities in 6 days, not Germany, unique",
-    tryText: "3 cities in 6 days, not Germany, unique",
-    cost: "runs a live search, up to 12 fare searches",
-  },
-  {
-    id: "wild",
-    title: "Wild loops",
-    body: [
-      "A long loop through a far region or your own list of countries: the way in, many stops, the way home, living costs per day, visas and a second opinion that scores the trip.",
-      "It is built with the same graph walk as Smart loops, aimed at the region: the first flight goes straight there, every later hop stays inside it, and it stays as long in each place as your trip style says (2 to 3 nights unless you change it). The Classic builder toggle uses the older country by country chain instead.",
-      "A loop holds at most 16 stops. A trip too long for your nights a place (more than about 48 nights at 3 a place) stays a little longer in each, and the form says how long before you build.",
-      "Plan the days turns the loop into a day by day plan.",
+      "Advanced, under the bar, holds the long trips: the trip shape (one place, two cities, a loop of three or more, a long stay), a wild loop through a far region, a long stay of one to six months, and a group of friends from different airports.",
+      "Trip style in the top bar sets how you travel, once: 2 to 3 nights in each place by default, cheapest or comfort, places to avoid, trains between places. Been marks the countries you know; with only new countries on, no trip sleeps there.",
     ],
     run: "/wild balkans 10",
     tryText: "/wild balkans 10",
     cost: "runs a live search, about 14 fare searches",
   },
   {
-    id: "longstay",
-    title: "Long stay",
-    body: ["One base for a month or more: the best value cities of a region, with flights in and out, rent and living costs from price levels, side trips, the climate and the visa."],
-    run: "/stay thailand 2 months",
-    tryText: "/stay thailand 2 months",
-  },
-  {
-    id: "group",
-    title: "Group",
-    body: ["Friends in different cities meeting somewhere cheap: add each person with their airports and free dates, and Atlas finds the dates that suit everyone and the city that costs the group least in total."],
-    tryText: "Trips, then Group: add a friend and their airport.",
-  },
-  {
-    id: "been",
-    title: "Been",
-    body: ["Mark the countries you already know. With Only new countries on, no search lands or sleeps there (a connection through them is still fine); with revisits on, deals there just get a small tag."],
-    tryText: "Open Been in the top bar and add a country.",
-  },
-  {
-    id: "style",
-    title: "Trip style",
+    id: "ask",
+    title: "Ask",
     body: [
-      "How you like to travel, set once: nights in each place (2 to 3 by default), pace, cheapest or comfort, popular or unique places, countries or groups to never stop in (nordics, dach), the longest flight, and whether trains and coaches between places are welcome.",
-      "Every builder starts from it: Wild loops, Smart loops, Short loops, A to B, the command line and the chat. A form can still change any of it for one search.",
+      "Ask in your own words. The chat knows where you are, your airports, Been and your trip style, and works on the same search: make it direct, add a city, cheaper, what about November. It shows the same trip cards and may ask you to tap a region, a date or a place on the globe.",
     ],
-    tryText: "Open Trip style in the top bar and set 2 to 3 nights.",
+    tryText: "Open Ask and type: a cheap 5 day trip with good food in November.",
   },
   {
-    id: "itinerary",
-    title: "Itineraries",
+    id: "mytrips",
+    title: "My trips",
     body: [
-      "Any result (a deal, a route, a loop, an event) can become a day by day plan with the food, the sights, what is on those days and the costs. Save it to keep it in this browser, Share copies a link anyone can open, and Calendar adds the days to your calendar.",
+      "Your saved itineraries and your last ten searches, kept in this browser. Tap a search to run it again with the prices of the day.",
+      "Old links to Deals, Explore or Trips still work: they open the search that answers the same question.",
     ],
-    run: "itinerary Lisbon 3 nights from 14 Nov",
-    tryText: "itinerary Lisbon 3 nights from 14 Nov",
-  },
-  {
-    id: "prices",
-    title: "Where the prices come from",
-    body: [
-      "Tonight's boards: the cheapest returns from about 150 airports, searched every night on Kiwi.com. The fare memory: every fare any search has seen, so a question asked before costs nothing. Live searches: Kiwi.com at the moment you ask, a limited number a day, which is why the forms say how many they spend.",
-      "Train and coach prices, living costs and a few fares are estimates; they are marked with a ~ or the word estimated. Always check the price on the booking page.",
-    ],
-    tryText: "Open a deal and look at the line under its price.",
-  },
-  {
-    id: "cli",
-    title: "The terminal",
-    body: ["The same command language runs in a terminal for whoever has the code: pnpm atlas followed by the words, for example pnpm atlas Brasov to Lisbon. It prints the tables the chat would have seen."],
-    tryText: "pnpm atlas loop from Brasov 6 days",
+    tryText: "Open My trips after a search.",
   },
 ];
 

@@ -1,4 +1,5 @@
-// Server-only. Everything Atlas can do, as tools the chat agent calls: the boards, the
+// Server-only. Everything Atlas can do, as tools the chat agent calls: the one search (search,
+// lib/search.ts, the same query and trip cards as the Search tab), the boards, the
 // period search, the month-by-month scan, live re-pricing, combos, the graph walk (a loop of
 // the cheapest hops, lib/graph-walk.ts), wild trips and their day
 // plans, long stays, group trips, climate, the fare memory, sights, events, rated
@@ -24,10 +25,10 @@ import visaJson from "@/public/data/visa.json";
 import airportsJson from "@/public/data/airports.json";
 import fameJson from "@/public/data/fame.json";
 import groundGraphJson from "@/public/data/ground-graph.json";
-import { driveMinutes, haversineKm, nearestGateways } from "./geo";
+import { haversineKm, nearestGateways } from "./geo";
 import { reachFrom } from "./ground";
 import { dealsFor } from "./deals-source";
-import { findDeals } from "./finder";
+import { findDeals, regionCountries } from "./finder";
 import { findCombos, neighboursOf } from "./combos";
 import { BUDGET_MESSAGE, kiwiBudgetSpent, kiwiDate, kiwiStats, kiwiThrottled, nightsOf, searchFlight, THROTTLED_MESSAGE } from "./kiwi";
 import { buildWild, customKey, findCityCode, resolveCountries, wildPath, REGIONS, STOPOVER_PROGRAMMES, type Budget, type Region, type Style, type Tradeoff, type WildTrip } from "./wild";
@@ -48,9 +49,9 @@ import { goodValueEats, hasFoursquare, sweetsNear } from "./foursquare";
 import { hasLiteApi, hotelsNear, liteApiLive } from "./liteapi";
 import { allFares, hasToken } from "./travelpayouts";
 import { hasTavily, webSearchWithReason, type WebHit } from "./tavily";
-import { countryAirports, graphEnd, graphMinutes, mainGateway, resolveGateway } from "./board";
+import { mainGateway, resolveGateway } from "./board";
 import { cheapestWay, gatewaysFor, resolvePlace, type RouteLeg, type RouteOption, type RouteResult } from "./route-finder";
-import { HOME_MAX_MIN } from "./pairs";
+import { WAY_HOME_DAYS, WAY_HOME_MAX_DAYS, WayHomeInputError, wayHome, wayHomeToolShape, type WayHomeResult } from "./way-home";
 import { isGem, type FameFile } from "./gems";
 import { scanCheapest, type ScanMonth } from "./scan";
 import { longStay, LongStayInputError } from "./longstay";
@@ -65,6 +66,8 @@ import { itineraryKey, skeletonFromDeal, skeletonFromRoute, skeletonFromWalk, sk
 import { countryGroup, walkTrips, type WalkEvent, type WalkLeg, type WalkLoop, type WalkResult, type WalkTown } from "./graph-walk";
 import type { KiwiItinerary } from "./kiwi";
 import { walkQuery, walkWindow, type WalkLiveLine } from "./chat-widgets";
+import { parseSearchQuery, skeletonFromTrip, type SearchQuery, type TripLeg, type TripResult } from "./trip-result";
+import { runSearch, SearchInputError, type SearchDone } from "./search";
 
 const CITIES = citiesJson as unknown as Record<string, City>;
 const COUNTRIES = countriesJson as unknown as Record<string, CountryInfo>;
@@ -112,9 +115,9 @@ export type AgentContext = {
 
 /** What make_itinerary can be asked to plan from: the latest of each kind shown in the thread, plus "fares", every
  * priced flight or leg the thread found (way_home's days, a walk's legs), which prices the plan's matching legs. */
-export type RecentKind = "route" | "deal" | "wild" | "walk" | "fares";
+export type RecentKind = "route" | "deal" | "wild" | "walk" | "search" | "fares";
 /** The tools whose answers are remembered, and as what. */
-const RECENT_KIND: Record<string, RecentKind> = { cheapest_way: "route", find_getaways: "deal", cheapest_deals: "deal", scan_cheapest: "deal", reprice_route: "deal", events_worth_travelling_for: "deal", wild_trip: "wild", walk_trips: "walk", way_home: "fares" };
+const RECENT_KIND: Record<string, RecentKind> = { cheapest_way: "route", find_getaways: "deal", cheapest_deals: "deal", scan_cheapest: "deal", reprice_route: "deal", events_worth_travelling_for: "deal", wild_trip: "wild", walk_trips: "walk", search: "search", way_home: "fares" };
 /** The most known fares a thread keeps for make_itinerary (the newest first). */
 const KNOWN_FARES_MAX = 80;
 /** Adds fares to the context's list, newest first, without repeating one. */
@@ -171,6 +174,22 @@ export function rememberOutput(ctx: AgentContext, toolName: string, output: unkn
         if (!(price > 0) || g.estimated || typeof g.from !== "string" || typeof g.to !== "string") continue;
         legs.push({ from: g.from, to: g.to, price, ...(typeof g.date === "string" ? { date: g.date } : {}), ...(typeof g.kind === "string" && g.kind !== "fly" ? { kind: g.kind as KnownFare["kind"] } : { kind: "fly" as const }), ...(typeof g.carrier === "string" ? { carrier: g.carrier } : {}), ...(typeof g.url === "string" ? { url: g.url } : {}), ...(typeof g.depart === "string" ? { depart: g.depart } : {}), ...(Number.isFinite(Number(g.minutes)) ? { minutes: Number(g.minutes) } : {}) });
       }
+    keepFares(recent, legs);
+  } else if (kind === "search") {
+    // The one search: the raw TripResults in this session, the compact rows of a restored thread; either way the
+    // priced flights and trains become known fares, so a plan made from a card is priced with that card's tickets.
+    const rows = Array.isArray(o.results) ? (o.results as Record<string, unknown>[]) : [];
+    if (!rows.length) return;
+    const trips = Array.isArray(raw) && raw.length ? (raw as TripResult[]) : null;
+    recent.set("search", trips ?? { compact: true, rows });
+    const legs: KnownFare[] = [];
+    const legList = trips ? trips.flatMap((t) => t.legs.map((g) => ({ kind: g.kind, from: g.fromName || g.from, to: g.toName || g.to, date: g.date, depart: g.depart, price: g.price, estimated: g.estimated, carrier: g.carrier, url: g.url, minutes: g.minutes }))) : rows.flatMap((r) => (Array.isArray(r.legs) ? (r.legs as Record<string, unknown>[]) : []));
+    for (const g of legList as Record<string, unknown>[]) {
+      const price = Number(g.price);
+      const k = String(g.kind ?? "fly");
+      if (!(price > 0) || g.estimated || typeof g.from !== "string" || typeof g.to !== "string" || !["fly", "train", "coach", "ferry"].includes(k)) continue;
+      legs.push({ from: g.from, to: g.to, price, kind: k as KnownFare["kind"], ...(typeof g.date === "string" ? { date: g.date } : {}), ...(typeof g.carrier === "string" ? { carrier: g.carrier } : {}), ...(typeof g.url === "string" ? { url: g.url } : {}), ...(typeof g.depart === "string" ? { depart: g.depart } : {}), ...(Number.isFinite(Number(g.minutes)) && Number(g.minutes) > 0 ? { minutes: Number(g.minutes) } : {}) });
+    }
     keepFares(recent, legs);
   } else if (kind === "fares") {
     // way_home: the best direct, the cheapest and every day's cheapest and direct, so a plan home from there is priced.
@@ -520,11 +539,7 @@ const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 /** Web searches one turn may make in all (web_search and the events tool's "what's on" search): the owner's
  * conversation of 2026-10-12 ran five in a row and answered nothing better for it. One decisive search, then answer. */
 const WEB_MAX = 2;
-/** way_home: the days of the window when none is given, the most it searches in one go, and the home airports one
- * search aims at (Kiwi takes a comma list; the same ceiling lib/pairs.ts uses). */
-const WAY_HOME_DAYS = 8;
-const WAY_HOME_MAX_DAYS = 14;
-const HOME_LIST_MAX = 10;
+/* way_home's window (the days of the window when none is given, two weeks at most) is lib/way-home.ts's. */
 /** The curated kinds of events_worth_travelling_for (lib/purpose-events.ts): anything else that names a place is a city. */
 const EVENT_KINDS = ["festival", "sport", "culture", "season", "music", "food"];
 /**
@@ -609,7 +624,7 @@ export const RATE_NOTE = "live prices are rate-limited, this is from tonight's b
  * a new message searches at once. Never joined with RATE_NOTE. */
 export const TURN_NOTE = "this turn's search budget is spent; ask again in a new message for live prices";
 /** Where a result came from; the model is told to say so when it quotes a price. */
-export type Source = "live" | "memo" | "boards" | "memory" | "stored" | "data" | "feed" | "web" | "liteapi" | "foursquare" | "travelpayouts" | "model" | "none";
+export type Source = "live" | "memo" | "graph" | "boards" | "memory" | "stored" | "data" | "feed" | "web" | "liteapi" | "foursquare" | "travelpayouts" | "model" | "none";
 type Plain = { searched: number; source: Source; note: string; count: 0 };
 /** A plain note answer: no data, but a sentence the model can act on. Never an empty object.
  * `count: 0` is what the chat's chip reads to show the note in amber instead of a tick. */
@@ -815,6 +830,218 @@ const withoutClientFields = ({ output }: { output: unknown }): { type: "json"; v
   }
   return { type: "json", value: (output ?? null) as JSONValue };
 };
+
+// ---------------------------------------------------------------------------------------
+// The one search as a chat tool (`search`, docs/plans/one-search.md): the same SearchQuery the Search tab builds,
+// run by lib/search.ts, answered with TripResults the chat draws as the app's own trip cards.
+
+/** What the model writes for one search: plain words and days, turned into a SearchQuery by the tool. */
+type SearchIn = {
+  to?: string;
+  origin?: string;
+  out?: string;
+  back?: string;
+  windowFrom?: string;
+  windowTo?: string;
+  includeDay?: string;
+  month?: string;
+  minNights?: number;
+  maxNights?: number;
+  oneWay?: boolean;
+  shape?: "any" | "return" | "two" | "loop" | "long";
+  direct?: boolean;
+  maxLegHours?: number;
+  cities?: number;
+  trainsOk?: boolean;
+  eventsOn?: boolean;
+  newCountries?: boolean;
+  maxPrice?: number;
+  wild?: { region: string; nights: number };
+  longStayMonths?: number;
+  group?: { name: string; origins: string[]; available?: { from: string; to: string }[] }[];
+  nightsPerStop?: number;
+  nightsPerStopMax?: number;
+  tradeoff?: Tradeoff;
+  exclude?: string[];
+  allow?: string[];
+};
+/** The searches one chat search may spend: the one search's own default, never past what the turn has left. */
+const SEARCH_BUDGET_DEFAULT = 25;
+/** The longest flexible window a search takes (the engines search a window in one call; past this it is a calendar). */
+const SEARCH_WINDOW_MAX_DAYS = 62;
+/** Results the browser gets in full (the cards), and results the model reads as compact rows. */
+const SEARCH_RAW_MAX = 12;
+const SEARCH_ROWS_MAX = 6;
+/** Rows whose legs keep their booking links for the model (the cards carry every link anyway). */
+const SEARCH_LINKED_ROWS = 3;
+
+/** What one search answered, gathered from lib/search.ts's stream: the trips merged by id (a later line improves an
+ * earlier one) and ranked as the Search tab ranks them, the engines that ran, the note, whether the graph answered. */
+export type SearchFinal = { results: TripResult[]; engines: string[]; note?: string; graph: boolean; searched: number; timedOut?: boolean };
+/** Euros an hour of travel is worth by trade-off, the same as lib/search.ts (hours only break ties on price). */
+const SEARCH_HOUR_EURO: Record<Tradeoff, number> = { price: 0, balanced: 6, comfort: 18 };
+
+/**
+ * lib/search.ts's runSearch (the engine behind GET /api/search) as an async stream for the chat tool and the terminal:
+ * each progress line as it comes, then one final answer. runSearch streams results as each engine answers, with
+ * stable ids; they are merged here and ranked money first (a long stay by its whole cost), and each result's engine
+ * payload (`raw`) is dropped, since the chat and the terminal never read it and it can be large. After `waitMs` the
+ * stream ends with what came back and says so (the run itself keeps going and fills the memo for the Search tab).
+ * A query the engines cannot run throws SearchInputError, which the tool turns into a note.
+ */
+export async function* searchStream(q: SearchQuery, waitMs = 280_000): AsyncGenerator<{ progress: string } | { final: SearchFinal }> {
+  const queue: string[] = [];
+  const byId = new Map<string, TripResult>();
+  let graph = false;
+  let done: SearchDone | null = null;
+  let failure: unknown = null;
+  let finished = false;
+  let wake: (() => void) | null = null;
+  const ping = () => {
+    const w = wake;
+    wake = null;
+    w?.();
+  };
+  const before = kiwiStats().today;
+  runSearch(q, (line) => {
+    if ("progress" in line) queue.push(line.progress);
+    else if ("results" in line) for (const t of line.results) byId.set(t.id, t);
+    else if ("graph" in line) graph = true;
+    ping();
+  })
+    .then(
+      (d) => {
+        done = d;
+      },
+      (err: unknown) => {
+        failure = err;
+      },
+    )
+    .finally(() => {
+      finished = true;
+      ping();
+    });
+  const until = Date.now() + waitMs;
+  let timedOut = false;
+  for (;;) {
+    while (queue.length) yield { progress: queue.shift()! };
+    if (finished) break;
+    const left = until - Date.now();
+    if (left <= 0) {
+      timedOut = true;
+      break;
+    }
+    await new Promise<void>((resolve) => {
+      wake = resolve;
+      setTimeout(resolve, Math.min(left, 15_000));
+    });
+  }
+  if (failure) throw failure;
+  const rate = SEARCH_HOUR_EURO[cleanPrefs(q.prefs ?? {}).tradeoff] ?? 0;
+  const money = (t: TripResult) => {
+    const whole = t.kind === "long-stay" ? (t.raw as { total?: number } | undefined)?.total : undefined;
+    return (typeof whole === "number" ? whole : t.price + (t.groundPrice ?? 0)) + rate * (t.hours ?? 0);
+  };
+  const results = [...byId.values()]
+    .sort((a, b) => money(a) - money(b) || (a.hours ?? 0) - (b.hours ?? 0) || a.id.localeCompare(b.id))
+    .map((t) => {
+      const { raw: _raw, ...rest } = t;
+      void _raw;
+      return rest as TripResult;
+    });
+  const d = done as SearchDone | null;
+  const searched = d?.searched ?? Math.max(0, kiwiStats().today - before);
+  const late = timedOut ? "the search was still running when the turn's time ran out; these are the trips found so far, and the Search tab shows the rest" : "";
+  yield { final: { results, engines: d?.engines ?? [], note: [d?.note ?? "", late].filter(Boolean).join("; ") || undefined, graph, searched, ...(timedOut ? { timedOut: true } : {}) } };
+}
+
+/** Parts of the world people name that are neither a region the one search takes nor a place: the tool says what to
+ * search instead, rather than matching a village of the same name or refusing it as an unknown city. */
+const NOT_A_SEARCH_REGION = /^(?:(?:the )?(?:scandinavia|nordics?|nordic countries|baltics?|baltic states|mediterranean|med|benelux|iberia|british isles)|(?:eastern|western|central|southern|northern|south ?eastern|north ?western) europe)$/;
+
+/** A region written loosely ("Southeast Asia", "south east asia", "SEA", "balkans") as its key in lib/wild.ts. */
+function regionKeyOf(raw: string): Region | undefined {
+  const f = fold(raw).replace(/\s+/g, " ").trim();
+  if (!f) return undefined;
+  const keys = Object.keys(REGIONS) as Region[];
+  const hit = keys.find((k) => k !== "custom" && (fold(k) === f || fold(k.replace(/-/g, " ")) === f || fold(REGIONS[k].label) === f));
+  if (hit) return hit;
+  const words: [RegExp, Region][] = [
+    [/^south ?east asia$|^se asia$/, "sea"],
+    [/^east asia$|^far east$/, "east-asia"],
+    [/^south asia$|^indian subcontinent$/, "south-asia"],
+    [/^central asia$|^the stans$/, "central-asia"],
+    [/^(?:the )?caucasus$/, "caucasus"],
+    [/^(?:the )?balkans?$/, "balkans"],
+    [/^north africa$|^(?:the )?levant$|^maghreb$/, "north-africa"],
+    [/^(?:the )?gulf$|^middle east$/, "gulf"],
+    [/^east africa$/, "east-africa"],
+    [/^southern africa$/, "southern-africa"],
+    [/^north america$|^central america$|^(?:the )?americas$/, "americas"],
+    [/^(?:the )?caribbean$/, "caribbean"],
+    [/^south america$|^latin america$|^latam$/, "south-america"],
+    [/^oceania$|^(?:the )?pacific$|^australasia$/, "oceania"],
+  ];
+  return words.find(([re]) => re.test(f))?.[1];
+}
+
+/** A month written as YYYY-MM or a name ("November", "nov 2026"): the next such month from today, YYYY-MM. */
+function monthArg(raw: string, today: string): string | null {
+  const s = raw.trim().toLowerCase();
+  if (/^\d{4}-\d{2}$/.test(s)) return s >= today.slice(0, 7) ? s : null;
+  const i = MONTH_ABBR.findIndex((m) => s.startsWith(m));
+  if (i < 0) return null;
+  const year = Number(s.match(/\b(20\d{2})\b/)?.[1] ?? today.slice(0, 4));
+  let m = `${year}-${pad2(i + 1)}`;
+  if (m < today.slice(0, 7)) m = `${year + 1}-${pad2(i + 1)}`;
+  return m;
+}
+
+const LEG_WORD: Record<TripLeg["kind"], string> = { fly: "plane", train: "train", coach: "coach", ferry: "ferry", road: "road", walk: "walk" };
+/** The route as a line of hops in the traveller's words: "Brașov, plane, Warsaw, train, Gdańsk, plane, Bucharest". */
+function tripRoute(t: TripResult): string {
+  const legs = t.legs.filter((g) => g.kind !== "road" && g.kind !== "walk");
+  if (!legs.length) return t.title;
+  return [legs[0].fromName || legs[0].from, ...legs.flatMap((g) => [LEG_WORD[g.kind], g.toName || g.to])].join(", ");
+}
+/** One TripResult as the model reads it: what to say, without the payload. Booking links only on the first rows. */
+function searchRow(t: TripResult, i: number) {
+  const linked = i < SEARCH_LINKED_ROWS;
+  return {
+    id: t.id,
+    kind: t.kind,
+    title: t.title,
+    price: Math.round(t.price),
+    ...(t.groundPrice ? { groundPrice: Math.round(t.groundPrice) } : {}),
+    out: t.out,
+    ...(t.back ? { back: t.back } : {}),
+    nights: t.nights,
+    ...(t.hours != null ? { hours: Math.round(t.hours * 10) / 10 } : {}),
+    direct: t.direct,
+    route: tripRoute(t),
+    // Each stop keeps its point and code: a restored chat thread keeps only these rows, and the trip page a card
+    // opens looks up hotels, food and events at the stop's point (0,0 would be the sea off Africa).
+    stops: t.stops.map((s) => ({ name: s.name, ...(s.code ? { code: s.code } : {}), country: s.country, lat: Math.round(s.lat * 1e4) / 1e4, lon: Math.round(s.lon * 1e4) / 1e4, nights: s.nights, arrive: s.arrive, leave: s.leave })),
+    legs: t.legs.map((g) => ({
+      kind: g.kind,
+      from: g.fromName || g.from,
+      to: g.toName || g.to,
+      ...(g.date ? { date: g.date } : {}),
+      ...(g.depart ? { depart: g.depart } : {}),
+      ...(g.minutes ? { minutes: Math.round(g.minutes) } : {}),
+      ...(g.price != null ? { price: Math.round(g.price) } : {}),
+      ...(g.estimated ? { estimated: true } : {}),
+      ...(g.carrier ? { carrier: g.carrier } : {}),
+      ...(g.stops != null ? { stops: g.stops } : {}),
+      ...(linked && g.url ? { url: g.url } : {}),
+    })),
+    badges: t.badges.slice(0, 4),
+    why: t.why.slice(0, 3),
+    source: t.source,
+    engine: t.engine,
+    ...(t.seen ? { seen: t.seen } : {}),
+  };
+}
 
 /** The city a destination airport belongs to, for pins: cities.json first, then the airports file. */
 const CITY_OF_AIRPORT = new Map<string, string>();
@@ -1473,6 +1700,262 @@ export function atlasTools(ctx: AgentContext) {
       toModelOutput: withoutRaw,
     }),
 
+    search: tool({
+      description:
+        "The app's one search, the same one the Search tab runs: from the traveller's airports (or origin) to anywhere, a city or town, a country or a region, on exact dates, inside a flexible window (with a day that must be inside the trip), in a month, or anytime, for a range of nights; the trip shape (return to one place, two cities, a loop of 3 or more, a long stay), a wild loop through a far region, a group from several cities; filters (direct only, longest leg, number of cities, trains between places, events on, only new countries, a price cap). It picks the engines itself: the nightly price graph first (no live search), then paired one-way tickets, the A to B route finder, the graph walk for loops, the wild builder, long stays and group matching, within the turn's search budget (25 searches at most; when the nightly graph has nothing for the search, the paired search or the group matching may run past it, about 30, and the result's note says so). Returns the trips ranked by price (hours break ties), each with its route line, dates, nights a place, total, travel hours, booking links, badges and why lines, plus the query itself; the chat shows them as the app's trip cards with 'Show all in Search'. Use it ONCE per question for 'where can I go', 'the cheapest', 'from X to Y', 'X in November', 'a weekend somewhere', 'a loop', 'two cities'; refine the same query for 'make it direct', 'cheaper', 'what about November' instead of starting over.",
+      inputSchema: jsonSchema<SearchIn>({
+        type: "object",
+        properties: {
+          to: { type: "string", description: "'anywhere' (default), a city or town (Lisbon, Torun), a country (Portugal), or a region (Southeast Asia, Balkans, East Asia, South America)" },
+          origin: { type: "string", description: "a city to leave from when it is not where the traveller is ('from Cluj'); default their own airports" },
+          out: { type: "string", description: "exact day out, YYYY-MM-DD (or words such as '14 Nov')" },
+          back: { type: "string", description: "exact day back, YYYY-MM-DD; leave out for one way or when only the nights are known" },
+          windowFrom: { type: "string", description: "a flexible window's first day ('between 22 Oct and 30 Nov' is 2026-10-22)" },
+          windowTo: { type: "string", description: "the window's last day" },
+          includeDay: { type: "string", description: "a day the trip must include ('including the 26th'), YYYY-MM-DD" },
+          month: { type: "string", description: "a month, YYYY-MM or its name ('November')" },
+          minNights: { type: "number", description: "least nights in all (N days is N-1 to N nights)" },
+          maxNights: { type: "number", description: "most nights in all" },
+          oneWay: { type: "boolean", description: "one way only" },
+          shape: { type: "string", enum: ["any", "return", "two", "loop", "long"], description: "any (default), return to one place, two cities, a loop of 3 or more, a long stay" },
+          direct: { type: "boolean", description: "direct flights only ('make it direct')" },
+          maxLegHours: { type: "number", description: "the longest single leg, hours" },
+          cities: { type: "number", enum: [1, 2, 3], description: "how many places: 1, 2, or 3 for three or more" },
+          trainsOk: { type: "boolean", description: "trains and coaches between places welcome" },
+          eventsOn: { type: "boolean", description: "only trips with an event on while there" },
+          newCountries: { type: "boolean", description: "only countries the traveller has not been to" },
+          maxPrice: { type: "number", description: "the most the whole trip may cost, euros ('under 150')" },
+          wild: { type: "object", properties: { region: { type: "string" }, nights: { type: "number" } }, required: ["region", "nights"], description: "a wild loop through a far region (sea, balkans, south-america, ... or country names), 5 to 90 nights" },
+          longStayMonths: { type: "number", description: "a long stay of 1 to 6 months somewhere (bases, rent, flights)" },
+          group: {
+            type: "array",
+            items: { type: "object", properties: { name: { type: "string" }, origins: { type: "array", items: { type: "string" } }, available: { type: "array", items: { type: "object", properties: { from: { type: "string" }, to: { type: "string" } }, required: ["from", "to"] } } }, required: ["name", "origins"] },
+            description: "several people from different cities: each with their own cities or airports and free dates",
+          },
+          nightsPerStop: { type: "number", description: "nights in each place for this search, when the message says so (default the trip style)" },
+          nightsPerStopMax: { type: "number", description: "with nightsPerStop, the most nights in each place" },
+          tradeoff: { type: "string", enum: ["price", "balanced", "comfort"], description: "default the trip style's (price: the cheapest first)" },
+          ...BEEN_PROPS,
+        },
+      }),
+      execute: async function* (a) {
+        try {
+          const corrections: string[] = [];
+          // Where from: the traveller's own place and airports, or a named city with the airports around it.
+          const here = ctx.origin ?? (() => {
+            const g = resolveGateway(gateways[0]);
+            return g ? { lat: g.lat, lon: g.lon, label: g.label } : null;
+          })();
+          let from: SearchQuery["from"] | null = here ? { label: here.label, lat: here.lat, lon: here.lon, airports: gateways, home: ctx.home } : null;
+          const named = String(a.origin ?? "").trim();
+          if (named && fold(named) !== fold(ctx.origin?.label ?? "")) {
+            const p = findPlace(named);
+            if (!p) {
+              yield { ...unknownPlace("place to leave from", named), count: 0, results: [] };
+              return;
+            }
+            const near = here ? haversineKm(here.lat, here.lon, p.lat, p.lon) : Infinity;
+            if (near > 40) {
+              const airports = p.airports.length ? p.airports.slice(0, 4) : nearestGateways(AIRPORTS, p.lat, p.lon, { maxKm: 250, limit: 3 }).map((g) => g.airport.iata);
+              if (!airports.length) {
+                yield { ...plain(`no airport within 250 km of ${p.name}; name a bigger city nearby to leave from`, "data"), count: 0, results: [] };
+                return;
+              }
+              from = { label: p.name, lat: p.lat, lon: p.lon, airports, home: ctx.home };
+            }
+          }
+          if (!from) {
+            yield { ...plain("the traveller's place is unknown and so are their airports; ask where they leave from"), count: 0, results: [] };
+            return;
+          }
+          // Where to: anywhere, a region, a country, or a place (a town without an airport is fine: the engines reach it by train or coach).
+          const toRaw = String(a.to ?? "").trim();
+          let to: SearchQuery["to"] = { kind: "anywhere" };
+          if (toRaw && !/^(?:anywhere|everywhere|somewhere|any ?where)$/i.test(toRaw)) {
+            const region = regionKeyOf(toRaw);
+            // A continent the Search tab takes as a region (Europe, Asia, Africa): checked before any place lookup,
+            // since the gazetteer has villages called Asia and the like.
+            const continent = region ? undefined : regionCountries(toRaw) ? toRaw.trim().toLowerCase() : undefined;
+            const cc = countryCode(toRaw);
+            if (region) to = { kind: "region", key: region };
+            else if (continent) to = { kind: "region", key: continent };
+            else if (NOT_A_SEARCH_REGION.test(fold(toRaw).trim())) {
+              yield { ...plain(`"${toRaw.slice(0, 40)}" is not a region the search takes; search Europe (or another of: europe, asia, africa, ${Object.keys(REGIONS).filter((k) => k !== "custom").join(", ")}), or one country at a time (for Scandinavia: Norway, Sweden or Denmark)`, "data"), count: 0, results: [] };
+              return;
+            } else if (cc && !findCity(toRaw)) to = { kind: "country", name: COUNTRIES[cc]?.name ?? toRaw, code: cc };
+            else if (findPlace(toRaw)) to = { kind: "place", name: findPlace(toRaw)!.name };
+            else {
+              yield { ...unknownPlace("destination", toRaw), count: 0, results: [] };
+              return;
+            }
+          }
+          // When: exact dates, a window (with a day to include), a month, or anytime. Past or oddly written days are
+          // corrected in one line, as the other tools do.
+          let when: SearchQuery["when"] = { kind: "anytime" };
+          const has = (v: unknown) => v != null && String(v).trim() !== "";
+          if (has(a.out)) {
+            const o = futureDay(a.out, ctx.today, "the day out");
+            if (!o.day) return void (yield { error: `${o.note}; next: pass the day out as YYYY-MM-DD` });
+            if (o.note) corrections.push(o.note);
+            let back: string | undefined;
+            if (has(a.back) && !a.oneWay) {
+              const b = readDay(a.back, ctx.today, "the day back");
+              if (b.day && b.day > o.day) back = b.day;
+              else corrections.push(b.day ? `the day back ${b.day} is not after the day out; searched without it` : (b.note ?? "the day back was not read"));
+            }
+            when = { kind: "dates", out: o.day, ...(back ? { back } : {}) };
+          } else if (has(a.windowFrom) || has(a.windowTo)) {
+            const f = has(a.windowFrom) ? futureDay(a.windowFrom, ctx.today, "the window's first day") : { day: ctx.today };
+            if (!f.day) return void (yield { error: `${(f as { note?: string }).note}; next: pass windowFrom as YYYY-MM-DD` });
+            if ((f as { note?: string }).note) corrections.push((f as { note: string }).note);
+            const t = has(a.windowTo) ? readDay(a.windowTo, ctx.today, "the window's last day") : { day: null as string | null };
+            let end = t.day && t.day >= f.day ? t.day : addDays(f.day, 14);
+            if (!t.day || t.day < f.day) corrections.push(`no usable last day; searched ${f.day} to ${end}`);
+            if (daysBetweenIso(f.day, end) > SEARCH_WINDOW_MAX_DAYS) {
+              end = addDays(f.day, SEARCH_WINDOW_MAX_DAYS);
+              corrections.push(`the window was cut to ${SEARCH_WINDOW_MAX_DAYS} days, ${f.day} to ${end}`);
+            }
+            let include: string | undefined;
+            if (has(a.includeDay)) {
+              const i = readDay(a.includeDay, ctx.today, "the day to include");
+              if (i.day && i.day >= f.day && i.day <= end) include = i.day;
+              else corrections.push(i.day ? `the day to include ${i.day} is outside the window; searched without it` : (i.note ?? "the day to include was not read"));
+            }
+            when = { kind: "window", from: f.day, to: end, ...(include ? { include } : {}) };
+          } else if (has(a.month)) {
+            const m = monthArg(String(a.month), ctx.today);
+            if (m) when = { kind: "month", month: m };
+            else corrections.push(`the month "${String(a.month).slice(0, 20)}" was not read; searched anytime`);
+          }
+          const q: SearchQuery = { from, to, when };
+          const nIn = [a.minNights, a.maxNights].map((n) => (Number.isFinite(Number(n)) && Number(n) >= 1 ? Math.min(90, Math.round(Number(n))) : null));
+          if (nIn[0] != null || nIn[1] != null) {
+            const lo = nIn[0] ?? nIn[1]!;
+            q.nights = [lo, Math.max(lo, nIn[1] ?? lo)];
+          }
+          if (a.oneWay) q.oneWay = true;
+          if (a.shape && ["any", "return", "two", "loop", "long"].includes(a.shape)) q.shape = a.shape;
+          // The Advanced drawer: a wild loop, a long stay, a group.
+          if (a.wild && typeof a.wild === "object" && String(a.wild.region ?? "").trim()) {
+            const nights = Math.min(90, Math.max(5, Math.round(Number(a.wild.nights) || 14)));
+            // A region key, or a country: then the loop is region custom and the country is the destination.
+            const words = String(a.wild.region);
+            const key = regionKeyOf(words);
+            const cc = key ? undefined : countryCode(words.split(",")[0].trim());
+            if (!key && !cc) {
+              yield { ...plain(`the region "${words.slice(0, 40)}" is not one of ${Object.keys(REGIONS).filter((k) => k !== "custom").join(", ")} and not a country; pick one`, "data"), count: 0, results: [] };
+              return;
+            }
+            // The one search's wild loop takes a region key only; a country is a loop kept to that country.
+            if (key) q.advanced = { ...q.advanced, wild: { region: key, nights } };
+            else {
+              q.to = { kind: "country", name: COUNTRIES[cc!]?.name ?? words, code: cc };
+              q.shape = "loop";
+              q.nights = [nights, nights];
+            }
+          }
+          if (Number(a.longStayMonths) >= 1) q.advanced = { ...q.advanced, longStay: { months: Math.min(6, Math.round(Number(a.longStayMonths))) } };
+          if (Array.isArray(a.group) && a.group.length) {
+            const members = a.group
+              .filter((m) => m && typeof m.name === "string" && Array.isArray(m.origins) && m.origins.length)
+              .slice(0, 8)
+              .map((m) => ({
+                name: m.name.slice(0, 40),
+                // Each person's own cities or airports, as airport codes (the group engine takes codes).
+                origins: [...new Set(m.origins.flatMap((o) => (/^[A-Za-z]{3}$/.test(String(o).trim()) && AIRPORT_BY_IATA.has(String(o).trim().toUpperCase()) ? [String(o).trim().toUpperCase()] : (findPlace(String(o))?.airports ?? []))))].slice(0, 3),
+                available: (Array.isArray(m.available) ? m.available : []).filter((w) => w && isoDay(w.from) && isoDay(w.to)).slice(0, 6),
+              }));
+            if (members.length) q.advanced = { ...q.advanced, group: { members } };
+          }
+          // Filters: only what was said, so the list stays the plain cheapest when nothing was.
+          const f: NonNullable<SearchQuery["filters"]> = {};
+          if (a.direct) f.direct = true;
+          if (Number(a.maxLegHours) > 0) f.maxLegHours = Number(a.maxLegHours);
+          if ([1, 2, 3].includes(Number(a.cities))) f.cities = Number(a.cities) as 1 | 2 | 3;
+          if (a.trainsOk) f.trainsOk = true;
+          if (a.eventsOn) f.eventsOn = true;
+          if (a.newCountries) f.newCountries = true;
+          if (Number(a.maxPrice) > 0) f.maxPrice = Math.round(Number(a.maxPrice));
+          if (Object.keys(f).length) q.filters = f;
+          // The trip style, with this message's own nights a place or tradeoff over it for this search only.
+          const nps = Number(a.nightsPerStop);
+          const npsMax = Number(a.nightsPerStopMax);
+          const style: Prefs = {
+            ...prefs,
+            ...(nps >= 1 ? { nightsPerPlace: [Math.min(14, Math.round(nps)), Math.min(14, Math.max(Math.round(nps), npsMax >= 1 ? Math.round(npsMax) : Math.round(nps)))] as [number, number] } : {}),
+            ...(a.tradeoff && ["price", "balanced", "comfort"].includes(a.tradeoff) ? { tradeoff: a.tradeoff } : {}),
+          };
+          q.prefs = style;
+          // The Been filter: the lasting list plus what the model adds; "only new countries" adds the whole Been list.
+          const exclude = excludeOf(a.exclude, a.allow);
+          const been = a.newCountries ? (ctx.been?.countries ?? []) : [];
+          const allExcluded = cleanCodes([...exclude, ...been]);
+          if (allExcluded.length) q.exclude = allExcluded;
+          // The searches this search may spend: the one search's default (25), never past what the turn has left. With
+          // nothing left it still answers from the nightly graph and the fare memory.
+          const left = searchesLeft();
+          q.budget = Math.min(SEARCH_BUDGET_DEFAULT, left);
+          // The same checks the Search tab's route makes (lib/trip-result.ts parseSearchQuery): a query the route
+          // would refuse is answered here with the reason, so the chat and the Search tab never disagree.
+          const checked = parseSearchQuery(q);
+          if ("error" in checked && checked.error) {
+            yield { ...plain(`${checked.error}; fix that part of the search or ask the traveller for it (a group needs each person's airport and free dates)`, "data"), count: 0, results: [] };
+            return;
+          }
+          trace("search", { query: q });
+          const { budget: _turnBudget, ...queryOut } = q;
+          void _turnBudget;
+          const before = kiwiStats().today;
+          // Progress lines arrive while the engines run; the chip shows the newest one (a preliminary output). The
+          // turn's own clock bounds the whole search, so a slow engine never outlives the chat turn.
+          let res: SearchFinal | null = null;
+          for await (const ev of searchStream(q, Math.max(10_000, turnLeftMs() - DEADLINE_MARGIN_MS))) {
+            if ("progress" in ev) yield { running: true, progress: ev.progress };
+            else res = ev.final;
+          }
+          if (!res) throw new Error("the search ended without an answer");
+          // This process's own count: a memo hit or a run shared with the Search tab cost this turn nothing.
+          // Both counts are deltas of the process's daily count, so each can include a search the Search tab ran at the
+          // same moment: the smaller is the closer to this run's own (a memo hit's `searched` is the first run's,
+          // while the delta during it is about 0). A per-run counter belongs in the engine (see the handoff).
+          const sentNow = Math.min(Math.max(0, kiwiStats().today - before), res.searched);
+          spend(sentNow);
+          const trips = res.results.slice(0, SEARCH_RAW_MAX);
+          const rows = trips.slice(0, SEARCH_ROWS_MAX).map(searchRow);
+          const sources = new Set(trips.map((t) => t.source));
+          // "live" only when a trip shown is itself live: searches made elsewhere never relabel graph prices as live.
+          const source: Source = sentNow > 0 && sources.has("live") ? "live" : sources.has("graph") ? "graph" : sources.has("memory") ? "memory" : sources.has("boards") ? "boards" : trips.length ? "memo" : left === 0 ? "none" : "memo";
+          const spentNote = left === 0 ? `${TURN_NOTE}; shown from the nightly price graph and the fare memory` : "";
+          // The engine runs a search it must (the graph had nothing) past the budget; say so rather than claim the cap held.
+          const overNote = q.budget != null && sentNow > q.budget ? `this search made ${sentNow} live searches, more than its budget of ${q.budget}, because the nightly price graph had nothing for it` : "";
+          const note = [res.note ?? "", spentNote, overNote, !trips.length ? "nothing came back for this search; next: widen the window, allow one stop, or try a country or anywhere instead of one city" : ""].filter(Boolean).join("; ");
+          yield {
+            searched: sentNow,
+            source,
+            count: res.results.length,
+            ...(trips.length < res.results.length ? { shownHere: trips.length } : {}),
+            engines: res.engines,
+            ...(res.timedOut ? { partial: true } : {}),
+            ...(res.graph ? { fromGraph: true } : {}),
+            ...(corrections.length ? { corrected: corrections.join("; ") } : {}),
+            ...excludedSummary(exclude, [], a.exclude),
+            ...(note ? { note } : {}),
+            results: rows,
+            // The query without this turn's budget: "Show all in Search" hands it to the Search tab, where a budget of
+            // 0 or 12 would stick to every later search made from the bar.
+            query: queryOut,
+            raw: trips,
+          };
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          // A query the engines refuse in a sentence (a past month, a window shorter than the nights) is a note to repeat.
+          if (err instanceof SearchInputError) yield { ...plain(`${msg}; fix that part of the search or ask the traveller`, "data"), count: 0, results: [] };
+          else yield isRateLimit(msg) ? { ...plain(`${msg}; ${RATE_NOTE}. Offer to try again in a few minutes.`), results: [] } : { error: `${msg.slice(0, 200) || "the search failed"}; next: try the same search with fewer filters, or a single tool for one part of it` };
+        }
+      },
+      toModelOutput: withoutRaw,
+    }),
+
     way_home: tool({
       description:
         "The way back home from where the traveller is going, over a range of days, as a calendar: 'how do I get back from Gdansk', 'which day is cheapest to come home', 'I want a direct flight back'. from is a city, town or airport (a town without an airport, such as Torun or Sopot, uses the airports a train or coach reaches). One or two Kiwi one-way searches from the place's own airports, and from the airports a train or coach reaches within 3 hours, to every home airport of the traveller's country within 6 hours of them, over the whole window; then, when they want direct, no direct came back or most days are empty, up to 2 more (4 with direct_only) aimed at one home airport each, where a nonstop shows among that pair's cheapest. Returns per day the cheapest flight and the cheapest DIRECT flight (times, airline, booking link), the best direct overall, the cheapest overall, and the ground leg from each home airport to the traveller's door. Use it whenever the traveller already has their way out (chosen or booked) and asks how or when to come back; keep their way out exactly as they gave it and never re-plan it.",
@@ -1517,179 +2000,46 @@ export function atlasTools(ctx: AgentContext) {
           toDay = addDays(fromDay, WAY_HOME_MAX_DAYS - 1);
           corrections.push(`the window was cut to ${WAY_HOME_MAX_DAYS} days, ${fromDay} to ${toDay}`);
         }
-        // Home: the traveller's own airports first, then every airport of their country (large or medium, the list
-        // lib/pairs.ts aims its ways home at) within HOME_MAX_MIN of them by train, coach or road.
+        // The engine is lib/way-home.ts, shared with the trip page's Ways home (GET /api/way-home), so the chat and
+        // the page answer the same question the same way. The place goes in as the chat's gazetteer placed it (a town
+        // such as Torun keeps the airports around it); home is the traveller's airports first, then every airport of
+        // their country within six hours of their door.
         const me = originPoint();
-        const meEnd = me ? { key: `me:${me.lat.toFixed(3)},${me.lon.toFixed(3)}`, lat: me.lat, lon: me.lon } : null;
         const hereName = ctx.origin?.label ?? resolveGateway(gateways[0])?.label ?? "home";
-        type Ground = { minutes: number; km: number; euros: number; how: string };
-        const groundMemo = new Map<string, Ground | null>();
-        const groundHome = (code: string): Ground | null => {
-          if (groundMemo.has(code)) return groundMemo.get(code)!;
-          const ap = AIRPORT_BY_IATA.get(code);
-          let g: Ground | null = null;
-          if (ap && me && meEnd) {
-            const km = haversineKm(ap.lat, ap.lon, me.lat, me.lon);
-            const end = graphEnd(code);
-            const graph = km >= 35 && end ? graphMinutes(end, meEnd, 40) : null;
-            g = km < 35 ? { minutes: driveMinutes(km), km, euros: 0, how: "a short drive" } : graph != null ? { minutes: graph, km, euros: Math.max(3, Math.round(km * 0.1)), how: "train or coach" } : { minutes: driveMinutes(km), km, euros: Math.max(3, Math.round(km * 0.1)), how: "by road" };
-          }
-          groundMemo.set(code, g);
-          return g;
-        };
         const given = Array.isArray(a.to) ? a.to.map((x) => String(x ?? "").trim()).filter(Boolean) : [];
-        let homes: string[];
-        if (given.length) {
-          homes = given.flatMap((x) => (/^[A-Za-z]{3}$/.test(x) ? [x.toUpperCase()] : (findCity(x)?.[1].airports ?? []))).filter((x, i, l) => l.indexOf(x) === i).slice(0, HOME_LIST_MAX);
-          if (!homes.length) return { ...unknownPlace("the home airport", given.join(", ")), calendar: [] };
-        } else {
-          const own = gateways.filter((g) => /^[A-Z]{3}$/.test(g));
-          const others = countryAirports(ctx.home)
-            .filter((c) => !own.includes(c))
-            .map((c) => ({ c, g: groundHome(c) }))
-            .filter((x) => x.g && x.g.minutes <= HOME_MAX_MIN)
-            .sort((x, y) => x.g!.minutes - y.g!.minutes)
-            .map((x) => x.c);
-          homes = [...own, ...others].slice(0, HOME_LIST_MAX);
-        }
-        // Where the flight home leaves from: the place's own airports, and (a second search) the airports a train
-        // or coach reaches within three hours, with that ground hop as an estimate.
-        const access = new Map<string, { minutes: number; km: number; kind: string; via?: string }>();
-        try {
-          for (const g of gatewaysFor({ lat: place.lat, lon: place.lon }, { max: 12 })) if (g.minutes <= 180) access.set(g.code, { minutes: g.minutes, km: g.km, kind: g.kind, via: g.via });
-        } catch {
-          // the graph is optional: the place's own airports still fly
-        }
-        const ownAirports = place.airports.filter((c) => /^[A-Z]{3}$/.test(c) && !homes.includes(c)).slice(0, 4);
-        const groundAirports = [...access.entries()]
-          .filter(([c, x]) => (x.kind === "train" || x.kind === "coach" || x.kind === "ferry") && !ownAirports.includes(c) && !homes.includes(c) && AIRPORT_BY_IATA.get(c)?.country !== ctx.home && !unsafeAirport(c, place.country))
-          .map(([c]) => c)
-          .slice(0, 4);
-        if (!ownAirports.length && !groundAirports.length) return { ...plain(`no airport near ${place.name} that flies home; next: use cheapest_way from ${place.name} to ${hereName}`, "data"), calendar: [] };
-        const windowLine = `${fromDay} to ${toDay}`;
-        const label = (code: string) => AIRPORT_BY_IATA.get(code)?.city ?? CITIES[CITY_OF_AIRPORT.get(code) ?? ""]?.name ?? code;
-        const homeLegs = homes.map((c) => ({ airport: c, name: label(c), ground: groundHome(c) })).map((h) => ({ airport: h.airport, name: h.name, ...(h.ground ? { toYou: h.ground.km < 35 ? "a short drive" : `${h.ground.how} to ${hereName}, about ${Math.round((h.ground.minutes / 60) * 10) / 10} h, about €${h.ground.euros} (estimate)` } : {}) }));
-        const corrected = corrections.length ? { corrected: corrections.join("; ") } : {};
-        const base = { from: place.name, ...(place.kind !== "city" ? { placeNote: `${place.name} has no airport of its own; flights leave from ${[...ownAirports, ...groundAirports].map(label).join(", ")}` } : {}), window: windowLine, homeAirports: homeLegs, ...corrected };
-        // Live prices off, or the turn's budget spent: the fare memory's cheapest one-way home in the window.
+        // Live prices off, or the turn's budget spent: the fare memory alone, no search leaves.
         const over = exhausted();
-        if (liveOff() || over) {
-          let fare: FareSeen | null = null;
-          try {
-            fare = await cheapestSeen([...ownAirports, ...groundAirports], homes, fromDay, toDay, 7);
-          } catch {
-            // the memory is optional
-          }
-          const one = fare && !fare.back ? fare : null;
-          const note = over ? `${TURN_NOTE}; ${one ? "shown from the fare memory" : "nothing remembered for this window"}` : `${RATE_NOTE}; ${one ? "a remembered fare is shown" : "nothing remembered for this window"}. Offer to try again in a few minutes.`;
-          return { searched: 0, source: (one ? "memory" : "none") as Source, ...base, count: one ? 1 : 0, note, calendar: [], ...(one ? { cheapest: { day: one.out, from: one.src, to: one.dst, price: Math.round(one.price), stops: one.stops, direct: one.stops === 0, carrier: one.carriers.join(", "), url: one.url, remembered: true } } : {}) };
+        const live = !liveOff() && !over;
+        let r: WayHomeResult;
+        try {
+          r = await wayHome({
+            from: { kind: place.kind === "city" ? "city" : "town", ...(place.code ? { code: place.code } : {}), name: place.name, country: place.country, lat: place.lat, lon: place.lon, airports: place.airports },
+            fromDate: fromDay,
+            toDate: toDay,
+            ...(a.direct_only ? { direct: true } : {}),
+            home: ctx.home,
+            ...(me ? { origin: { lat: me.lat, lon: me.lon, label: hereName } } : {}),
+            gateways,
+            ...(given.length ? { to: given } : {}),
+            maxSearches: Math.min(6, searchesLeft()),
+            live,
+          });
+        } catch (err) {
+          if (err instanceof WayHomeInputError) return { ...plain(`${err.message}; next: ask for the nearest city or airport`, "data"), calendar: [] };
+          throw err;
         }
-        const before = kiwiStats().today;
-        const failures: string[] = [];
-        let jobsRun = 0;
-        const search = (flyFrom: string[], flyTo: string[]) => {
-          jobsRun++;
-          return searchFlight({ flyFrom: flyFrom.join(","), flyTo: flyTo.join(","), departureDate: kiwiDate(fromDay), departureDateTo: kiwiDate(toDay) }).then(
-            (r) => r.itineraries,
-            (err: unknown) => {
-              failures.push(err instanceof Error ? err.message : String(err));
-              return [] as KiwiItinerary[];
-            },
-          );
-        };
-        // Two searches at most, never more than the turn has left: the place's own airports go first.
-        const jobs = [ownAirports, groundAirports].filter((l) => l.length).slice(0, Math.max(1, searchesLeft()));
-        const answers = await Promise.all(jobs.map((list) => search(list, homes)));
-        const homeSet = new Set(homes);
-        type Row = { day: string; depart: string; arrive: string; from: string; fromName: string; to: string; toName: string; price: number; direct: boolean; stops: number; hours: number; carrier: string; url: string; first?: string; last?: string; door: number };
-        const seen = new Set<string>();
-        const rows: Row[] = [];
-        const addRows = (its: KiwiItinerary[]) => {
-          for (const it of its) {
-            const o = it.outbound;
-            if (it.inbound || !(homeSet.has(o.to) || homeSet.has(CITY_OF_AIRPORT.get(o.to) ?? ""))) continue;
-            if (a.direct_only && o.stops > 0) continue;
-            const key = `${o.from}|${o.to}|${o.departureTime}|${Math.round(it.price)}`;
-            if (seen.has(key)) continue;
-            seen.add(key);
-            const acc = ownAirports.includes(o.from) ? null : access.get(o.from);
-            const g = groundHome(o.to);
-            const firstEuros = acc ? Math.max(3, Math.round(acc.km * 0.1)) : 0;
-            rows.push({
-              day: o.departureTime.slice(0, 10),
-              depart: o.departureTime.slice(11, 16),
-              arrive: o.arrivalTime.slice(11, 16),
-              from: o.from,
-              fromName: label(o.from),
-              to: o.to,
-              toName: label(o.to),
-              price: Math.round(it.price),
-              direct: o.stops === 0,
-              stops: o.stops,
-              hours: Math.round((o.durationSeconds / 3600) * 10) / 10,
-              carrier: [...new Set(o.segments.map((s) => s.carrierName || s.carrier))].join(", "),
-              url: it.bookingUrl,
-              ...(acc ? { first: `${acc.kind} from ${place.name} to ${label(o.from)} airport, about ${Math.round((acc.minutes / 60) * 10) / 10} h${acc.via ? ` via ${acc.via}` : ""}, about €${firstEuros} (estimate)` } : {}),
-              ...(g && g.km >= 35 ? { last: `${g.how} from ${label(o.to)} to ${hereName}, about ${Math.round((g.minutes / 60) * 10) / 10} h, about €${g.euros} (estimate)` } : {}),
-              door: Math.round(it.price) + firstEuros + (g?.euros ?? 0),
-            });
-          }
-        };
-        addRows(answers.flat());
-        // One search to every home airport returns the cheapest 15 fares of the whole window, which on a busy route are
-        // all one-stop: the owner's direct Ryanair Gdansk to Otopeni at 32 euro never showed until he said "direct". So
-        // when a direct is asked for, none came back, or most days are empty, the same window is searched again one home
-        // airport at a time (the big airports first), where a nonstop is among that pair's cheapest. Within the turn's
-        // budget: up to 4 more for direct_only, 2 otherwise.
-        const dayCount = daysBetweenIso(fromDay, toDay) + 1;
-        const emptyDays = () => {
-          const days = new Set(rows.map((r) => r.day));
-          let n = 0;
-          for (let d = fromDay; d <= toDay; d = addDays(d, 1)) if (!days.has(d)) n++;
-          return n;
-        };
-        const firstFailedAll = failures.length === jobs.length && failures.some(isRateLimit);
-        const wantNarrow = !firstFailedAll && (a.direct_only || !rows.some((r) => r.direct) || emptyDays() * 2 >= dayCount);
-        const narrowFrom = ownAirports.length ? ownAirports : groundAirports;
-        if (wantNarrow && narrowFrom.length && homes.length > 1 && !liveOff()) {
-          const sizeRank = (c: string) => { const z = AIRPORT_BY_IATA.get(c)?.size; return z === "large" ? 0 : z === "medium" ? 1 : 2; };
-          const targets = [...homes].sort((x, y) => sizeRank(x) - sizeRank(y)).slice(0, Math.min(a.direct_only ? 4 : 2, searchesLeft() - jobs.length));
-          if (targets.length > 0) addRows((await Promise.all(targets.map((h) => search(narrowFrom, [h])))).flat());
-        }
-        const sentNow = Math.max(0, kiwiStats().today - before);
-        spend(sentNow);
-        rows.sort((x, y) => x.price - y.price);
-        const allFailed = failures.length === jobsRun;
-        if (allFailed && failures.some(isRateLimit)) return { searched: sentNow, source: "none" as Source, ...base, count: 0, calendar: [], note: `${RATE_NOTE}; the live search was refused. Offer to try again in a few minutes.` };
-        const short = (r: Row) => ({ from: r.from, to: r.to, depart: r.depart, arrive: r.arrive, price: r.price, ...(r.direct ? { direct: true } : { stops: r.stops }), hours: r.hours, carrier: r.carrier, url: r.url });
-        const calendar: { day: string; cheapest: ReturnType<typeof short> | null; direct: ReturnType<typeof short> | null; none?: string }[] = [];
-        // An empty day is one where nothing was among the cheapest fares returned, never proof that nothing flies.
-        for (let d = fromDay; d <= toDay; d = addDays(d, 1)) {
-          const day = rows.filter((r) => r.day === d);
-          const direct = day.filter((r) => r.direct)[0] ?? null;
-          calendar.push({ day: d, cheapest: day[0] ? short(day[0]) : null, direct: direct ? short(direct) : null, ...(day.length ? {} : { none: "not among the cheapest fares found" }) });
-        }
-        const directs = rows.filter((r) => r.direct);
-        const bestDirect = directs[0] ?? null;
-        const cheapest = rows[0] ?? null;
-        const cheapestDoor = [...rows].sort((x, y) => x.door - y.door)[0] ?? null;
-        const full = (r: Row | null) => (r ? { day: r.day, ...short(r), ...(r.first ? { first: r.first } : {}), ...(r.last ? { last: r.last } : {}), doorToDoor: r.door } : null);
-        const failedLine = failures.length ? `${failures.length} of ${jobsRun} searches failed; ` : "";
-        const note = !rows.length
-          ? `${failedLine}no ${a.direct_only ? "direct " : ""}flight from ${place.name} to ${homes.join(", ")} between ${fromDay} and ${toDay} among the cheapest fares of ${jobsRun} search${jobsRun === 1 ? "" : "es"}, which is not proof there is none; next: widen the window${a.direct_only ? ", allow one stop" : ""}, or try cheapest_way for a train or coach`
-          : `each search returns the cheapest 15 fares of the window (${jobsRun} search${jobsRun === 1 ? "" : "es"} here, some aimed at one home airport each), so a day marked none had nothing among the cheapest, not nothing at all${!bestDirect ? "; no direct was among them, which is not proof there is none" : ""}${failures.length ? `; ${failedLine.slice(0, -2)}` : ""}`;
-        return {
-          searched: sentNow,
-          source: (sentNow > 0 ? "live" : "memo") as Source,
-          ...base,
-          count: rows.length,
-          searchedFrom: [...ownAirports, ...groundAirports],
-          bestDirect: full(bestDirect),
-          cheapest: full(cheapest),
-          ...(cheapestDoor && cheapestDoor !== cheapest ? { cheapestDoorToDoor: full(cheapestDoor) } : {}),
-          calendar,
-          note,
-        };
+        spend(r.searched);
+        const shaped = wayHomeToolShape(r, hereName);
+        const corrected = corrections.length ? { corrected: corrections.join("; ") } : {};
+        // The notes the model has always read: a spent turn is not a rate limit, a refused search is.
+        const note = !live
+          ? over
+            ? `${TURN_NOTE}; ${r.count ? "shown from the fare memory" : "nothing remembered for this window"}`
+            : `${RATE_NOTE}; ${r.count ? "a remembered fare is shown" : "nothing remembered for this window"}. Offer to try again in a few minutes.`
+          : r.refused
+            ? `${RATE_NOTE}; the live search was refused. Offer to try again in a few minutes.`
+            : r.note;
+        return { ...shaped, source: shaped.source as Source, ...corrected, ...(note ? { note } : {}) };
       }),
     }),
 
@@ -2947,11 +3297,11 @@ export function atlasTools(ctx: AgentContext) {
 
     make_itinerary: tool({
       description:
-        "Turns a trip into a day-by-day itinerary: what to see, do and eat each morning, afternoon and evening, with the travel legs in place, the weather, events on those days and the estimated costs. Two ways in. (1) from: 'last_route' (the latest cheapest_way answer; option 1 is the first option shown, default the cheapest), 'last_deal' (the latest deals shown; option picks the card, default the first), 'last_wild' (the latest wild_trip), 'last_walk' (the latest walk_trips; option picks the loop, default the first). (2) stops: places by name with nights each, in order (towns without an airport such as Torun are fine), plus start (YYYY-MM-DD, default three weeks out) and origin (default the traveller's place). Fares already found in this conversation (way_home's days, a walk's legs) price the matching legs by themselves; pass fares for any other price the traveller chose (their own flight out). Legs with no known fare are estimated and the answer says how many. Optional wishes (the traveller's words: 'street food, no museums'), pace (slow, balanced, packed) and budget (backpacker, mid, comfort). No Kiwi search; about a minute of writing. Returns the days in short and the costs; the app opens the full itinerary. Saving it is the traveller's click in that view, never yours.",
-      inputSchema: jsonSchema<{ from?: "last_route" | "last_deal" | "last_wild" | "last_walk"; option?: number; origin?: string; start?: string; stops?: { place: string; nights: number }[]; fares?: { from: string; to: string; date?: string; price: number; url?: string }[]; wishes?: string; pace?: Pace; budget?: BudgetTier }>({
+        "Turns a trip into a day-by-day itinerary: what to see, do and eat each morning, afternoon and evening, with the travel legs in place, the weather, events on those days and the estimated costs. Two ways in. (1) from: 'last_route' (the latest cheapest_way answer; option 1 is the first option shown, default the cheapest), 'last_deal' (the latest deals shown; option picks the card, default the first), 'last_wild' (the latest wild_trip), 'last_walk' (the latest walk_trips; option picks the loop, default the first). 'last_search' (the latest search results; option picks the card, default the first). (2) stops: places by name with nights each, in order (towns without an airport such as Torun are fine), plus start (YYYY-MM-DD, default three weeks out) and origin (default the traveller's place). Fares already found in this conversation (way_home's days, a walk's legs) price the matching legs by themselves; pass fares for any other price the traveller chose (their own flight out). Legs with no known fare are estimated and the answer says how many. Optional wishes (the traveller's words: 'street food, no museums'), pace (slow, balanced, packed) and budget (backpacker, mid, comfort). No Kiwi search; about a minute of writing. Returns the days in short and the costs; the app opens the full itinerary. Saving it is the traveller's click in that view, never yours.",
+      inputSchema: jsonSchema<{ from?: "last_route" | "last_deal" | "last_wild" | "last_walk" | "last_search"; option?: number; origin?: string; start?: string; stops?: { place: string; nights: number }[]; fares?: { from: string; to: string; date?: string; price: number; url?: string }[]; wishes?: string; pace?: Pace; budget?: BudgetTier }>({
         type: "object",
         properties: {
-          from: { type: "string", enum: ["last_route", "last_deal", "last_wild", "last_walk"], description: "plan the latest thing of that kind shown in this conversation" },
+          from: { type: "string", enum: ["last_route", "last_deal", "last_wild", "last_walk", "last_search"], description: "plan the latest thing of that kind shown in this conversation" },
           fares: {
             type: "array",
             items: { type: "object", properties: { from: { type: "string" }, to: { type: "string" }, date: { type: "string" }, price: { type: "number" }, url: { type: "string" } }, required: ["from", "to", "price"] },
@@ -2987,10 +3337,10 @@ export function atlasTools(ctx: AgentContext) {
         try {
           if (!a.from && stopsIn.length) skeleton = byNames(a.origin?.trim() || undefined, a.start, stopsIn);
           else if (a.from) {
-            const kind = ({ last_route: "route", last_deal: "deal", last_wild: "wild", last_walk: "walk" } as const)[a.from];
-            if (!kind) return { error: "from must be last_route, last_deal, last_wild or last_walk" };
+            const kind = ({ last_route: "route", last_deal: "deal", last_wild: "wild", last_walk: "walk", last_search: "search" } as const)[a.from];
+            if (!kind) return { error: "from must be last_search, last_route, last_deal, last_wild or last_walk" };
             const got = recent.get(kind);
-            const what = { route: "way from A to B (cheapest_way)", deal: "deal", wild: "wild trip (wild_trip)", walk: "loop (walk_trips)" }[kind];
+            const what = { route: "way from A to B (cheapest_way)", deal: "deal", wild: "wild trip (wild_trip)", walk: "loop (walk_trips)", search: "search result (search)" }[kind];
             if (!got) return plain(`no ${what} has been shown in this conversation yet; find one first, or pass stops (places and nights) with a start day`);
             if (kind === "route") {
               const r = got as Partial<RouteResult> & { from?: unknown; to?: unknown; depart?: string; nights?: number | null; compact?: { kind: string; title: string }[] };
@@ -3042,8 +3392,24 @@ export function atlasTools(ctx: AgentContext) {
                 if (!stops.length) return plain("the loop shown has no stops to plan; pass stops (places and nights) with a start day");
                 skeleton = byNames(undefined, typeof loop.start === "string" ? loop.start : undefined, stops);
               }
+            } else if (kind === "search") {
+              // This session's TripResults carry every leg and stop with its point; a restored thread only the
+              // compact rows: then the stops by name and nights, priced by the legs the rows kept (known fares).
+              const g = got as TripResult[] | { compact: true; rows: Record<string, unknown>[] };
+              const i = pick ?? 0;
+              if (Array.isArray(g)) {
+                const t = g[i];
+                if (!t) return plain(`the search showed ${g.length} result${g.length === 1 ? "" : "s"}; result ${i + 1} does not exist`);
+                skeleton = skeletonFromTrip(t, here);
+              } else {
+                const r = g.rows[i];
+                if (!r) return plain(`the search showed ${g.rows.length} result${g.rows.length === 1 ? "" : "s"}; result ${i + 1} does not exist`);
+                const stops = ((r.stops as { name?: string; nights?: number }[] | undefined) ?? []).filter((x) => x?.name).map((x) => ({ place: String(x.name), nights: Math.max(1, Math.round(Number(x.nights) || 2)) }));
+                if (!stops.length) return plain("the result shown has no stops to plan; pass stops (places and nights) with a start day");
+                skeleton = byNames(undefined, typeof r.out === "string" ? r.out : undefined, stops);
+              }
             } else skeleton = skeletonFromWild(got as WildTrip);
-          } else return plain("say what to plan: from 'last_route', 'last_deal', 'last_wild' or 'last_walk' for something shown in this conversation, or stops (places and nights) with a start day");
+          } else return plain("say what to plan: from 'last_search', 'last_route', 'last_deal', 'last_wild' or 'last_walk' for something shown in this conversation, or stops (places and nights) with a start day");
           // The fares the thread found (way_home, a walk) and the ones the model passes price the legs still unpriced:
           // the plan's total is then the trip the chat recommended, not distance estimates.
           const given: KnownFare[] = (Array.isArray(a.fares) ? a.fares : [])
@@ -3399,42 +3765,52 @@ ${prefsRule(ctx.prefs)}
 
 The rule that matters most: when something is unsaid, assume the sensible default, state the assumption in one line, search, show results, and only then ask at most ONE question, always through the ask tool (a widget), never as prose. Never ask two things. Never answer about prices without a tool result from this turn. Never say "no deals in the data" without a live search.
 
+The app is one search: one bar (from, to, when, nights), one list of trips ranked cheapest first, and an Advanced drawer (two cities, a loop, a wild loop through a far region, a long stay, a group). The search tool runs that same search, and its results show in the chat as the app's own trip cards with a "Show all in Search" button. So:
+- "Where can I go", "the cheapest", "cheapest 3 to 5 nights between 22 Oct and 30 Nov including the 26th", "from X to Y", "Lisbon in November", "a weekend somewhere warm", "a loop", "two cities", "3 cities in 6 days": build ONE query from the conversation and call search ONCE. to is anywhere (default), a city or town, a country or a region; the dates are out and back when exact, else windowFrom and windowTo with includeDay for a day that must be inside the trip ("including the 26th"), else month, else nothing (anytime, the cheapest dates); minNights and maxNights from what they said ("3 to 5 nights"); shape two or loop when they want more than one place; the filters only when said. Say the assumption you made in one line before the call.
+- Then refine that same query instead of starting again: "make it direct" is the same query with direct true; "cheaper" is a wider window or maxPrice; "what about November" is month; "two cities" or "a loop" is the shape; "not Germany" goes in exclude; "only places I have not been" is newCountries. Call search again only with the changed query, once.
+- "Add Torun", "through Warsaw and Gdansk" (cities the trip must pass through) is the one thing search does not take: that is walk_trips with mustInclude (and fixedOut when their way out is fixed).
+- A far region for two weeks or more ("3 weeks in Southeast Asia", backpacking) is search with wild (region and nights); a month or more somewhere is search with longStayMonths; several people from different cities is search with group (each with their own city and free dates). wild_trip, long_stay and group_trip stay for the details search does not give: the rent of each base, a wild loop's day plans (plan_days), one person's options.
+- Describe the best two or three results in your words: the route line, the dates, the nights in each place, the total, the hours, and why the winner wins (price first, then direct or fewer hours). Then say "Show all in Search" lists the rest; never list ten. When a result's source is graph, the price is from last night's price graph; say so.
+- The specialised tools stay for what search does not cover: make_itinerary (the days), hotels_near and hotel_deals, events (what is on while there), sights, eats_near, price_insight, best_months, way_home, ground_reach, place_facts, web_search.
+
 Defaults when the traveller does not say:
 - When: open or "anytime" means a price calendar, the next 6 months month by month (scan_cheapest). A period of dates means find_getaways with those dates. A single month means that month.
 - How long: 2 to 4 nights for a weekend, 3 to 7 nights inside Europe, 7 to 14 nights long-haul (another continent), 14 nights for a wild loop, 2 months for a long stay. The tools pick these by distance when you leave nights out.
 - Where from: all their nightly airports at once (the tools take several origins). Mention a nearby airport only when it beats theirs by a clear margin.
+- Never ask whether to include their other airports (Bucharest, Sibiu) or whether the flights must leave from one of them: every search already used all of them. Ask only about something that would change the search.
+- "A train between two cities", "overland between them": a train or a coach between two places of the trip both count (the search's results say which, and the trip shape two cities or a loop finds them); say which one each leg is, never call a coach a miss.
 - The traveller already has their way out (they found, chose or booked a flight: "I found Brasov to Warsaw on the 24th") and asks how, when or where to come back: keep that flight exactly as they gave it, never search or re-plan the way out, and call way_home from the city they want to fly back from (their preferred city first: "I would prefer Gdansk" is from Gdansk) with a window of about a week starting two or three nights after they land (from_date, to_date). Show the direct options first when there are any (bestDirect, and the days with a direct in the calendar), then the cheapest overall and the cheapest door to door; name the day, the times, the airline, the price and the link, and the ground leg home from the landing airport. For the hop between their landing city and the city they fly back from (Warsaw to Gdansk), use ground_reach from the landing city or cheapest_way between the two, and say a leg's trainHint when it has one. Only when they want several stops planned around their own flight use walk_trips, with fixedOut set to their flight.
-- More than one city, a loop, "go from X and come back from Y", "plane then train", "cheapest loop", "3 cities in 6 days", or a chain of hops the traveller writes out ("Brasov to Warsaw by plane, Warsaw to Gdansk by train, then another city and back to Brasov or Bucharest"): walk_trips ONCE. It searches the way they do it by hand with Skyscanner Explore: one 'anywhere' search from where they are, the cheapest next hops by plane, train or coach from each stop, the cheapest way home to any of their airports. Never price such legs one by one with reprice_route or cheapest_way, and never call walk_trips twice in a turn unless its note asks for a change. Cities they name go in mustInclude (Warsaw, Gdansk), the first city they fly to too; a way home they name (Brasov, Sibiu, Otopeni) is their airports already. origin is only a start away from where they are ("loop from Cluj"); "fly to Warsaw then train to Gdansk" or "Brasov-Warsaw plane" while in Brasov has no origin. Places they dislike go in avoid: "not Germany" is DE, "countries like Germany" or "I don't like countries like Germany" is like:DE (a group word works too: dach, benelux, nordics, baltics, balkans, iberia). "Unique", "not touristy", "hidden gems", "smaller places" is style 'unique'. N days is N-1 to N nights (minNights, maxNights); "2 days a city" is nightsPerStop 2. With no dates, leave from and to out and say the assumed window from its corrected line. Then explain the best loop in their terms: its route line, the cheapest edge out of each stop and where a train or coach beat a flight, the nights per stop, the total and the hours, a booking link per flight; name the second loop in one line. To plan its days, call make_itinerary with the loop's stops (places with nights, in order) and its start day. reprice_route stays for one named leg the traveller asks to check.
-- Two places named ("Brasov to Lisbon", "from Cluj to Paris"), how to get from one place to another, or the cheapest way somewhere ("cheapest way to Lisbon", "how do I get from Brasov to Vienna"): cheapest_way FIRST; it already checks nearby airports, trains to a bigger airport, hubs on two tickets and open-jaw, so never rebuild that by hand with reprice_route calls. Say what was considered (its considered list) in one line, name the cheapest and the fastest, and the tradeoff between them. When the traveller says "search harder", "look harder", "exhaust", "every option", call it again with harder: true (twice the searches). An option's kind "direct" means the nearest airports, not a nonstop flight: say nonstop only when its nonstop field is true. When placed says an end could not be placed, do not write "from X" or "to X" for it; say the place was not found and ask for the nearest city or airport.
+- A chain of hops the traveller writes out with the cities named, or a loop through cities they name ("Brasov to Warsaw by plane, Warsaw to Gdansk by train, then another city and back to Brasov or Bucharest"): walk_trips ONCE. It searches the way they do it by hand with Skyscanner Explore: one 'anywhere' search from where they are, the cheapest next hops by plane, train or coach from each stop, the cheapest way home to any of their airports. Never price such legs one by one with reprice_route or cheapest_way, and never call walk_trips twice in a turn unless its note asks for a change. Cities they name go in mustInclude (Warsaw, Gdansk), the first city they fly to too; a way home they name (Brasov, Sibiu, Otopeni) is their airports already. origin is only a start away from where they are ("loop from Cluj"); "fly to Warsaw then train to Gdansk" or "Brasov-Warsaw plane" while in Brasov has no origin. Places they dislike go in avoid: "not Germany" is DE, "countries like Germany" or "I don't like countries like Germany" is like:DE (a group word works too: dach, benelux, nordics, baltics, balkans, iberia). "Unique", "not touristy", "hidden gems", "smaller places" is style 'unique'. N days is N-1 to N nights (minNights, maxNights); "2 days a city" is nightsPerStop 2. With no dates, leave from and to out and say the assumed window from its corrected line. Then explain the best loop in their terms: its route line, the cheapest edge out of each stop and where a train or coach beat a flight, the nights per stop, the total and the hours, a booking link per flight; name the second loop in one line. To plan its days, call make_itinerary with the loop's stops (places with nights, in order) and its start day. reprice_route stays for one named leg the traveller asks to check.
+- How to get from one place to another as a journey ("how do I get from Brasov to Vienna", by train or by plane, every way of travelling, a one-way transfer): cheapest_way; a trip there and back to compare dates and prices is search with to set. cheapest_way already checks nearby airports, trains to a bigger airport, hubs on two tickets and open-jaw, so never rebuild that by hand with reprice_route calls. Say what was considered (its considered list) in one line, name the cheapest and the fastest, and the tradeoff between them. When the traveller says "search harder", "look harder", "exhaust", "every option", call it again with harder: true (twice the searches). An option's kind "direct" means the nearest airports, not a nonstop flight: say nonstop only when its nonstop field is true. When placed says an end could not be placed, do not write "from X" or "to X" for it; say the place was not found and ask for the nearest city or airport.
 - What is on where they are going, events or experiences while they are in a city ("any events in Warsaw on those days", "what can we do there"): events_worth_travelling_for with city (the cities of their trip, at most 3) and the dates they are there; it reads the city's feed, the curated events and makes at most one web search per city itself, so do not add web_search for the same question. Name the dated items with their links and say the web ones need checking. Add sights for the standing things to do.
 - Something to fly to, festivals, carnivals, marathons, concerts, "worth flying for": events_worth_travelling_for without city, with the window they gave (default the next three months; a single month means that month), kinds only from festival, sport, culture, season, music, food (or a word of an event's name); a city name never goes in kinds. Say which events are within reach: the ones priced from their airports, cheapest first, with the dates and the fare; the unpriced ones in one line.
 - Places: every tool takes cities, towns and villages by name (Torun, Sopot, Malbork, Hallstatt): a town without an airport is reached by train or coach, so pass it as named and never say it is unknown before a tool says so.
 - The web: at most ${WEB_MAX} web searches a turn in all. Write one decisive query, read it, answer. Never run searches in a row hoping for better words.
-- "Anywhere", "the cheapest possible", "wherever is cheapest": find_getaways with exhaustive=true (it goes through many more targets and nearby origins).
-- Named destination not on the boards (San Francisco, Tokyo, Bali, a country): ONE scan_cheapest call. When the destination is in a big country (${OPEN_JAW_COUNTRIES.join(", ")}) set openJawFrom to that country in that same single call, so coming home from another big city is priced too; never a second scan_cheapest for the open-jaw. Then reprice_route on the best month if a precise day matters.
+- "Anywhere", "the cheapest possible", "wherever is cheapest": search with to anywhere.
+- A named far destination with open dates (San Francisco, Tokyo, Bali) is search with to set and no dates (anytime). When the traveller wants the month-by-month price calendar itself: ONE scan_cheapest call. When the destination is in a big country (${OPEN_JAW_COUNTRIES.join(", ")}) set openJawFrom to that country in that same single call, so coming home from another big city is priced too; never a second scan_cheapest for the open-jaw. Then reprice_route on the best month if a precise day matters.
 - Where is cheap to stay, hotel deals, hotels in general with no city named: hotel_deals (instant, from the nightly hotel snapshots). When it says it is warming up, say plainly that the hotel history is not there yet and how many nights it has; for a named city and dates use hotels_near.
 - "Return from another city": open-jaw via openJawFrom (a country or city), not a question.
-- A far region word (Southeast Asia, South America, Central Asia), a loop of two weeks or more, "a trip through" a far country, backpacking, overland: wild_trip with 14 nights unless told; a loop of a few cities over a week or so, in Europe or nearby, is walk_trips; named countries go in countries, and the trip is then keyed as region custom (the key it returns says so, pass it on unchanged). A month or more somewhere: long_stay.
-- Several people from different cities: group_trip at once with what is known, each person from their OWN city or airport; when a person's dates or airport are missing or the tool says a place is unknown, show the result for the others and ask with ONE people widget prefilled with what you know.
-- Open "where could I go": cheapest_deals (tonight's boards, instant), then follow with find_getaways only when they give dates.
+- When wild_trip is used for its details: 14 nights unless told; named countries go in countries, and the trip is then keyed as region custom (the key it returns says so, pass it on unchanged).
+- Several people from different cities: search with group at once with what is known, each person from their OWN city or airport; when a person's dates or airport are missing or a place is unknown, show the result for the others and ask with ONE people widget prefilled with what you know.
+- Open "where could I go" with no dates: search with to anywhere and no dates (the nightly graph answers at once).
 - Cool autumn, warm winter, beaches, food: pick the countries yourself (where as a comma list of at most four) rather than asking; use best_months when the traveller is flexible on when.
 
 Itineraries:
-- After you show a way from A to B, deals, a walk loop or a wild loop, close with one short line offering to make it an itinerary (the cards also carry a "Make an itinerary" button). Offer it once per result, not on every message.
-- When the traveller asks to plan the days, wants a day-by-day plan, an itinerary, or says "make it an itinerary", call make_itinerary: from 'last_route', 'last_deal' or 'last_wild' (option for which one, 1 = the first shown) for what was shown, or stops (places with nights, in order) plus start when they name places ("3 nights in Lisbon from 14 November"). Pass their wishes in their words, and pace or budget when they say. For a wild trip prefer make_itinerary over plan_days unless they ask for a month's rent per city.
+- After you show search results, a way from A to B, deals, a walk loop or a wild loop, close with one short line offering to make it an itinerary (the cards also carry a "Make an itinerary" button). Offer it once per result, not on every message.
+- When the traveller asks to plan the days, wants a day-by-day plan, an itinerary, or says "make it an itinerary", call make_itinerary: from 'last_search' (a search result; option 1 is the first card), 'last_route', 'last_deal', 'last_wild' or 'last_walk' (option for which one, 1 = the first shown) for what was shown, or stops (places with nights, in order) plus start when they name places ("3 nights in Lisbon from 14 November"). Pass their wishes in their words, and pace or budget when they say. For a wild trip prefer make_itinerary over plan_days unless they ask for a month's rent per city.
 - After make_itinerary, say the shape in two or three lines (the days' highlights, the estimated total) and that the full itinerary opens in the app, where they can change the pace, regenerate, save and share it. Never offer to save it yourself.
-- The app has a command line: "/" in the top bar opens it and runs things like "Brasov to Lisbon", "loop from Brasov 20 to 30 Oct 6 days", "events in february", "/wild sea 21" or "itinerary Lisbon 3 nights from 14 Nov" directly. Mention it once in a thread, in one line, when the request was exactly such a shape; never again after that.
+- The app has a command line: "/" in the top bar opens it and fills the search with things like "Brasov to Lisbon", "loop from Brasov 20 to 30 Oct 6 days", "events in february", "/wild sea 21" or "itinerary Lisbon 3 nights from 14 Nov" directly. Mention it once in a thread, in one line, when the request was exactly such a shape; never again after that.
 
 Working with results:
 - Rank by price per night for comparable trips, and say why the winner wins (price, direct, better dates, the right airport). Show the best three, never ten.
-- When the dates are open, show the price calendar: the months with their cheapest fare. The client draws it from the scan_cheapest result; you name the best month and the best dates in words.
+- When the dates are open and the traveller asked for the calendar, show it: the months with their cheapest fare. The client draws it from the scan_cheapest result; you name the best month and the best dates in words.
 - Name the one or two tradeoffs that matter: a better layover or direct for €20 more, a stopover programme when the route goes through Istanbul, Doha, Lisbon, Reykjavik, Helsinki or Singapore (stopover_programmes), a nearby airport, open-jaw home from another city.
 - Mention the fare memory's verdict (price_insight on the winning route with the fare's date and the price in hand) only when its verdict is great, good, typical or high, and say its basis in a few words ("based on 12 fares"); when it says not enough history or unknown, say nothing about whether the price is good. Call it once per route in a turn.
 - An itinerary's costs: say the total and which parts are estimates (its costs.note); never quote a figure a day unless the total includes the stay and the transport.
 - Remember stated preferences for the whole thread: "that one", "the second", "make it direct", "from Cluj too" refer to what you showed. Keep them for later searches too.
 - Prices are return fares in euros unless you say one-way; say when a price is live versus searched nightly. Be honest about gaps (events only in 20 cities, trains only in Europe, hotels in sandbox).
 - A tool answering with { error } is a fact to state in one line, then carry on with the next best tool; never retry the same call unchanged more than once.
-- Every result says where it came from in source: live (searched now), memo (the same search within the hour), boards (searched last night), memory (a fare someone saw in the last days), stored (a trip built earlier), data (the static files), model (written now). Say which when you quote a price, in a few words ("searched now", "from last night's boards", "a remembered fare").
+- Every result says where it came from in source: live (searched now), memo (the same search within the hour), graph (last night's price graph), boards (searched last night), memory (a fare someone saw in the last days), stored (a trip built earlier), data (the static files), model (written now). Say which when you quote a price, in a few words ("searched now", "from last night's boards", "a remembered fare").
 - When a result carries a note saying live prices are rate-limited (Kiwi is throttling, today's budget is spent), say so in ONE plain line, say the prices shown come from tonight's boards, the fare memory or a stored trip, and offer to try live again in a few minutes. Do not call the same live tool again in this turn. A result with a note and no data is still an answer: state the note and suggest the next step it names.
 - A note saying this turn's search budget is spent is NOT a rate limit: nothing is blocked, a new message searches at once; say that in one line and never say "in a few minutes" for it.
 - A note written as a plain sentence about the request (a city on the been list, nights not enough to pass through the cities asked, an unknown start airport, region custom without countries) is the engine's own refusal: repeat it to the traveller in your words and fix the input or ask, never call the same tool again unchanged.
@@ -3442,9 +3818,9 @@ Working with results:
 - Dates: write them as YYYY-MM-DD when you can; the tools also read "tomorrow", "next friday", "14 November", "Nov 14 2026" and say how they read them. Vague words ("this weekend", "Christmas", "end of October") are not dates: pick the day yourself and state it.
 - plan_days takes the key object wild_trip returned, unchanged.
 
-Searches cost: every live tool says how many Kiwi searches it makes, and a turn has ${TURN_SEARCH_BUDGET} in all; when a tool says the budget is used up, answer with what you have. Prefer one scan over many reprices and one walk over many legs; never call the same live tool twice with the same input in one turn.
+Searches cost: every live tool says how many Kiwi searches it makes, and a turn has ${TURN_SEARCH_BUDGET} in all; when a tool says the budget is used up, answer with what you have. Prefer one search over several tools, one scan over many reprices and one walk over many legs; never call the same live tool twice with the same input in one turn.
 
-Before a slow tool (scan_cheapest, find_getaways, cheapest_way, walk_trips, wild_trip, long_stay, group_trip, plan_days, make_itinerary) write one short line saying what you are searching and the assumption you made, then call it. A long build (wild_trip, long_stay, group_trip) may answer with what it had when its time ran out: partial: true with the engine's note (a shorter loop, bases or windows not priced in time), or a stored copy under a note (undated: true means that copy was built for no particular dates, so never present its days as the ones asked; its key is its own, pass it to plan_days as is); say so in one line and offer to ask again in two minutes.
+Before a slow tool (search, scan_cheapest, find_getaways, cheapest_way, walk_trips, wild_trip, long_stay, group_trip, plan_days, make_itinerary) write one short line saying what you are searching and the assumption you made, then call it. A long build (wild_trip, long_stay, group_trip) may answer with what it had when its time ran out: partial: true with the engine's note (a shorter loop, bases or windows not priced in time), or a stored copy under a note (undated: true means that copy was built for no particular dates, so never present its days as the ones asked; its key is its own, pass it to plan_days as is); say so in one line and offer to ask again in two minutes.
 
 Style: plain words, short paragraphs, no bullet symbols, no headings, no em dashes (use commas or full stops), links as [text](url). Name the city, the price, the dates and the airport. End with the one question, if any, through the ask tool, and nothing after it.`;
 }

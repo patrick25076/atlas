@@ -15,6 +15,15 @@
 // (atlas:walk-result); its loops are cards with the route as a line of hops, and its progress
 // lines show on the tool's chip while it runs (preliminary tool outputs). The event details
 // are built in lib/chat-widgets.ts.
+//
+// The one search (docs/plans/one-search.md): the agent's `search` tool answers with the same
+// TripResults the Search tab lists, drawn here with the same trip card (compact). A card opens
+// the trip page (atlas:trip) and "Show all in Search" hands the query to the shell (atlas:search),
+// which fills the search bar and lists everything. The query goes without the chat turn's budget,
+// so the Search tab runs it on its own default; that run may search again (the tab applies its own
+// trip style and Been list). A restored thread has no raw results (the browser keeps the compact
+// rows only), so its cards are rebuilt from those rows; a row from before the rows carried each
+// stop's point is placed from cities.json before its trip page opens.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport, type UIMessage } from "ai";
@@ -27,7 +36,9 @@ import { countryName, dateRange, monthLabel, monthOptions } from "@/lib/format";
 import { formatDuration } from "@/lib/geo";
 import { WILD_REGIONS } from "@/lib/ui-types";
 import { DEFAULT_PREFS, PREFS_EVENT, loadPrefs, prefsSummary, sameAsDefault, type Prefs } from "@/lib/prefs";
-import { FOLLOWUPS, ISO_DAY_RE, LOCAL_DAY, LONG_TOOLS, NIGHT_OPTIONS, ROUTE_KIND_LABEL, TOOL_LABEL, addDays, dispatchAtlas, eventCommand, eventDays, eventRoute, eventTripDays, quickDateRanges, routeDetail, routeResultDetail, toolProgress, walkResultDetail, widgetAnswer, type ChatEvent, type PersonRow, type WalkLiveLine, type WalkQuery, type WidgetKind, type WidgetSpec } from "@/lib/chat-widgets";
+import { FOLLOWUPS, followupsFor, ISO_DAY_RE, LOCAL_DAY, LONG_TOOLS, NIGHT_OPTIONS, ROUTE_KIND_LABEL, TOOL_LABEL, addDays, dispatchAtlas, eventCommand, eventDays, eventRoute, eventTripDays, quickDateRanges, routeDetail, routeResultDetail, toolProgress, walkResultDetail, widgetAnswer, type ChatEvent, type PersonRow, type WalkLiveLine, type WalkQuery, type WidgetKind, type WidgetSpec } from "@/lib/chat-widgets";
+import type { SearchQuery, TripLeg, TripResult } from "@/lib/trip-result";
+import TripCard from "@/components/search/TripCard";
 import s from "./ChatPanel.module.css";
 
 /** What rides along with every turn. `prefs` is the trip style (lib/prefs.ts); when the shell does not pass it, the
@@ -72,6 +83,28 @@ type WalkOut = { from: string; window?: string; nights?: string; nightsPerStop?:
 /** walk_trips while it runs: each preliminary output is the walk's latest progress line, and its newest lines for
  * the globe (`live`, from index `at`) with the query that draws them. */
 type WalkProgress = { running: true; progress: string; lines?: string[]; loops?: number; edges?: number; searched?: number; live?: { at: number; lines: WalkLiveLine[] }; params?: WalkQuery };
+/** One result of the search tool as the model reads it (lib/agent-tools.ts compacts each TripResult this way). */
+type SearchRow = {
+  id: string;
+  kind: TripResult["kind"];
+  title: string;
+  price: number;
+  groundPrice?: number;
+  out: string;
+  back?: string;
+  nights: number;
+  hours?: number;
+  direct: boolean;
+  route?: string;
+  stops?: { name: string; code?: string; country: string; lat?: number; lon?: number; nights: number; arrive?: string; leave?: string }[];
+  legs?: { kind: TripLeg["kind"]; from: string; to: string; date?: string; depart?: string; minutes?: number; price?: number | null; carrier?: string; stops?: number; url?: string; estimated?: boolean }[];
+  badges?: string[];
+  why?: string[];
+  source: TripResult["source"];
+  engine?: string;
+  url?: string;
+};
+type SearchOut = { query?: SearchQuery; count: number; results: SearchRow[]; note?: string; searched?: number; source?: string; raw?: TripResult[] };
 /** A tool part still at work: the input is streaming or waiting, or the output so far is a preliminary one. */
 const isRunning = (p: ToolPart) => p.state === "input-streaming" || p.state === "input-available" || (p.state === "output-available" && p.preliminary === true);
 /** The traveller's own point as an itinerary place, when the browser knows it. */
@@ -804,6 +837,85 @@ function WalkCards({ out, origin, onAsk }: { out: WalkOut; origin?: ItinPlace; o
 /** The ways from A to B as cards: a kind badge, the title, the total and the hours, the legs
  * as small pills, cheapest and fastest marked, and one button that asks the globe to draw the
  * route (the UI's A-to-B mode listens for atlas:route). */
+/** A compact row back as a TripResult the card can draw: a restored thread kept only the rows. Rows carry each stop's
+ * point; a row stored before they did has 0,0 there, which placeStops fixes before the trip page opens. */
+function tripFromRow(r: SearchRow): TripResult {
+  const stops = (r.stops ?? []).map((x) => ({ name: x.name, ...(x.code ? { code: x.code } : {}), country: x.country, lat: Number(x.lat) || 0, lon: Number(x.lon) || 0, arrive: x.arrive ?? r.out, leave: x.leave ?? r.back ?? r.out, nights: x.nights }));
+  // A leg's ends take the point of the stop of the same name, so the trip page can draw and match them.
+  const at = new Map(stops.filter(hasPoint).map((x) => [x.name, x]));
+  const legs: TripLeg[] = (r.legs ?? []).map((g) => {
+    const a = at.get(g.from);
+    const b = at.get(g.to);
+    return { kind: g.kind, from: a?.code ?? g.from, fromName: g.from, to: b?.code ?? g.to, toName: g.to, ...(g.date ? { date: g.date } : {}), ...(g.depart ? { depart: g.depart } : {}), ...(g.minutes ? { minutes: g.minutes } : {}), ...(g.price != null ? { price: g.price } : {}), ...(g.carrier ? { carrier: g.carrier } : {}), ...(g.stops != null ? { stops: g.stops } : {}), ...(g.url ? { url: g.url } : {}), ...(g.estimated ? { estimated: true } : {}), ...(a ? { fromLat: a.lat, fromLon: a.lon } : {}), ...(b ? { toLat: b.lat, toLon: b.lon } : {}) };
+  });
+  const urls = [...new Set([...legs.map((g) => g.url ?? ""), r.url ?? ""].filter(Boolean))];
+  return { id: r.id, kind: r.kind, title: r.title, price: r.price, ...(r.groundPrice ? { groundPrice: r.groundPrice } : {}), ...(r.hours != null ? { hours: r.hours } : {}), stops, legs, out: r.out, ...(r.back ? { back: r.back } : {}), nights: r.nights, direct: r.direct, badges: r.badges ?? [], why: r.why ?? [], source: r.source, engine: r.engine ?? "chat", urls };
+}
+
+/** True when a stop has a real point (no stop sits at 0,0; that is the placeholder of an old stored row). */
+const hasPoint = (p: { lat: number; lon: number }) => Number.isFinite(p.lat) && Number.isFinite(p.lon) && (p.lat !== 0 || p.lon !== 0);
+const foldName = (x: string) => x.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().trim();
+let citiesOnce: Promise<Record<string, { name: string; country: string; lat: number; lon: number }> | null> | null = null;
+/** A trip whose stops have no point (a card rebuilt from an old stored row) placed from cities.json: by code, then by
+ * name and country. A stop still without a point is left out, so the trip page never looks up hotels or events at 0,0. */
+async function placeStops(t: TripResult): Promise<TripResult> {
+  if (t.stops.every(hasPoint)) return t;
+  citiesOnce ??= fetch("/data/cities.json", { cache: "force-cache" })
+    .then((r) => (r.ok ? r.json() : null))
+    .catch(() => null);
+  const cities = (await citiesOnce) ?? {};
+  const byName = new Map<string, { lat: number; lon: number; code: string }>();
+  for (const [code, c] of Object.entries(cities)) {
+    const k = `${foldName(c.name)}|${c.country}`;
+    if (!byName.has(k)) byName.set(k, { lat: c.lat, lon: c.lon, code });
+  }
+  const stops = t.stops.flatMap((st) => {
+    if (hasPoint(st)) return [st];
+    const c = (st.code && cities[st.code] ? { ...cities[st.code], code: st.code } : null) ?? byName.get(`${foldName(st.name)}|${st.country}`);
+    return c ? [{ ...st, lat: c.lat, lon: c.lon, code: st.code ?? c.code }] : [];
+  });
+  return { ...t, stops };
+}
+
+/** A chat query without the turn's budget (threads stored before the tool dropped it still carry one): the Search tab
+ * then runs on its own default instead of keeping a budget of 0 or 12 for every later search from the bar. */
+function withoutBudget(q: SearchQuery): SearchQuery {
+  const { budget: _b, ...rest } = q;
+  void _b;
+  return rest;
+}
+
+/** Opens a card's trip page, placing its stops first when it came from an old stored row. */
+const openTrip = (t: TripResult) => void placeStops(t).then((trip) => dispatchAtlas("atlas:trip", { trip }));
+
+/** The search tool's results as the one search's trip cards (compact), four at first; each opens the trip page,
+ * and "Show all in Search" runs the same query in the Search tab. */
+function SearchCards({ out }: { out: SearchOut }) {
+  const [all, setAll] = useState(false);
+  const trips = useMemo(() => (Array.isArray(out.raw) && out.raw.length ? out.raw : (out.results ?? []).filter((r) => r && typeof r.id === "string" && typeof r.price === "number").map(tripFromRow)), [out]);
+  if (!trips.length) return null;
+  const shown = all ? trips : trips.slice(0, 4);
+  return (
+    <div className={s.cards}>
+      {shown.map((t) => (
+        <TripCard key={t.id} trip={t} compact onOpen={openTrip} />
+      ))}
+      <div className={s.actions}>
+        {!all && trips.length > shown.length && (
+          <button className={s.mini} onClick={() => setAll(true)}>
+            {trips.length - shown.length} more here
+          </button>
+        )}
+        {out.query && (
+          <button className={s.mini} onClick={() => dispatchAtlas("atlas:search", { query: withoutBudget(out.query!) })}>
+            Show all in Search
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function RouteCards({ out, onAsk }: { out: RouteOut; onAsk: (text: string) => void }) {
   const options = out.options ?? [];
   // The computed result is drawn as it is (no second search) while this session has it; a
@@ -1314,16 +1426,19 @@ export default function ChatPanel(p: Props) {
   const active = store.threads.find((t) => t.id === store.active);
   const last = messages.at(-1);
   const lastUserIndex = messages.reduce((acc, m, i) => (m.role === "user" ? i : acc), -1);
-  const lastTool = useMemo(() => {
+  // The last main tool (one with chips of its own), so a web search or a lookup after a search
+  // does not turn the chips generic; its input drops the chips it already did.
+  const lastToolPart = useMemo(() => {
     for (let i = messages.length - 1; i >= 0; i--) {
       if (messages[i].role !== "assistant") continue;
-      const tools = (messages[i].parts as ToolPart[]).filter((x) => x.type.startsWith("tool-") && x.type !== "tool-ask");
-      if (tools.length) return tools.at(-1)!.type.slice(5);
+      const tools = (messages[i].parts as ToolPart[]).filter((x) => x.type.startsWith("tool-") && x.type !== "tool-ask" && x.type.slice(5) in FOLLOWUPS);
+      if (tools.length) return tools.at(-1)!;
     }
     return null;
   }, [messages]);
+  const lastTool = lastToolPart ? lastToolPart.type.slice(5) : null;
   const openWidget = !busy && last?.role === "assistant" && (last.parts as ToolPart[]).some((x) => x.type === "tool-ask" && x.state === "output-available");
-  const followups = FOLLOWUPS[lastTool ?? ""] ?? FOLLOWUPS.default;
+  const followups = followupsFor(lastTool, lastToolPart?.input);
 
   const renderTool = (tp: ToolPart, i: number, answered: boolean, skipCalendar = false) => {
     const name = tp.type.slice(5);
@@ -1373,6 +1488,7 @@ export default function ChatPanel(p: Props) {
             {name === "group_trip" && Array.isArray(out.options) && <GroupOptions out={out as unknown as GroupOut} />}
             {name === "reprice_route" && Array.isArray(out.itineraries) && <Itineraries items={out.itineraries as Itin[]} />}
             {name === "best_months" && Array.isArray(out.months) && <MonthStrip out={out as unknown as MonthsOut} />}
+            {name === "search" && Array.isArray(out.results) && <SearchCards out={out as unknown as SearchOut} />}
             {name === "cheapest_way" && Array.isArray(out.options) && <RouteCards out={out as unknown as RouteOut} onAsk={send} />}
             {name === "walk_trips" && Array.isArray(out.loops) && out.loops.length > 0 && <WalkCards out={out as unknown as WalkOut} origin={herePlace(p.context)} onAsk={send} />}
             {name === "make_itinerary" && Array.isArray(out.days) && <ItineraryCard out={out as unknown as ItinOut} />}

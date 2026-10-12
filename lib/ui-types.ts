@@ -3,11 +3,19 @@
 import type { BoardMeta } from "./boards-client";
 import type { Deal } from "./types";
 import type { WalkLeg, WalkLoop, WalkResult } from "./graph-walk";
+import type { SearchQuery, TripResult } from "./trip-result";
+import type { Prefs } from "./prefs";
+import type { BeenPrefs } from "./been";
+import { dateRange, monthLabel, shortDate } from "./format";
 
 export type Origin = { lat: number; lon: number; label: string; source: "gps" | "ip" | "default" | "search" };
 
-/** "wild" stays a valid view for old links; the globe maps it to the Trips tab in Wild mode. */
-export type View = "chat" | "deals" | "all" | "fly" | "ground" | "trips" | "wild";
+/**
+ * The panel's three tabs: the one search, the chat, and what this browser kept. The old views
+ * (deals, explore, trips and their modes) are not places any more: an old link to one opens
+ * the Search tab with the query that answers the same question (components/Globe.tsx).
+ */
+export type Tab = "search" | "chat" | "trips";
 
 /**
  * The modes of the Trips tab: the trip builders only. "A to B" and "events worth flying for"
@@ -311,3 +319,96 @@ export const WILD_REGION_COUNTRIES: Record<string, string[]> = {
   "south-america": ["BR", "AR", "CL", "PE", "CO", "BO", "EC"],
   oceania: ["AU", "NZ", "FJ"],
 };
+
+// ---- The one search (docs/plans/one-search.md). The shell (components/Globe.tsx) owns where
+// the traveller is, the trip style, Been, the globe and the trip page; the Search tab
+// (components/search/SearchTab.tsx) owns the bar, the Advanced drawer, the filter chips, the
+// /api/search stream and the list. These are the props the shell hands it.
+
+/** A query handed to the Search tab from outside the bar: 'atlas:search', the command line, an old link, a saved search. n changes on every hand-over, so the same query twice runs twice; auto false only fills the bar. */
+export type SearchRun = { query: SearchQuery; n: number; auto: boolean };
+/** Where the Search tab's stream is, for the progress line and the globe's framing. */
+export type SearchStatus = { status: "idle" | "loading" | "ok" | "error"; note?: string; searched?: number; graph?: boolean };
+export type SearchTabProps = {
+  /** The traveller's place as the query's From: label, point, the airports searched and the home country. Null while it loads. */
+  from: SearchQuery["from"] | null;
+  prefs: Prefs;
+  been: BeenPrefs;
+  /** A query to fill the bar with (and run, when auto). */
+  run: SearchRun | null;
+  /** The trip the globe has lit (hovered on the globe or open), so the card can light too. */
+  active: string | null;
+  /** Every change of the list (merged, filtered, ranked as shown), and the stream's state. The globe draws the same list. */
+  onResults: (results: TripResult[], status: SearchStatus) => void;
+  /** A search started (from the bar or from run): the shell keeps it in the saved searches and the address bar. */
+  onQuery: (q: SearchQuery) => void;
+  /** A card opened: the shell shows the trip page. */
+  onOpen: (t: TripResult) => void;
+  /** A card hovered (null when the pointer leaves): the globe draws that trip's route. */
+  onHover: (t: TripResult | null) => void;
+};
+
+/** A search this browser ran, for My trips. */
+export type SavedSearch = { query: SearchQuery; label: string; at: number };
+/** The last ten searches, newest first, in this browser only. */
+export const SEARCHES_KEY = "atlas-searches-v1";
+const SEARCHES_MAX = 10;
+
+/** The query without what belongs to the browser rather than to the question (the trip style rides along on every run). */
+function searchIdentity(q: SearchQuery): string {
+  const { prefs: _p, ...rest } = q;
+  return JSON.stringify(rest);
+}
+
+/** The saved searches; empty when storage is off or holds something else. */
+export function loadSearches(): SavedSearch[] {
+  try {
+    const raw = window.localStorage.getItem(SEARCHES_KEY);
+    const list = raw ? (JSON.parse(raw) as unknown) : [];
+    if (!Array.isArray(list)) return [];
+    return list.filter((x): x is SavedSearch => !!x && typeof x === "object" && "query" in x && typeof (x as SavedSearch).label === "string").slice(0, SEARCHES_MAX);
+  } catch {
+    return [];
+  }
+}
+
+function storeSearches(list: SavedSearch[]): void {
+  try {
+    window.localStorage.setItem(SEARCHES_KEY, JSON.stringify(list.slice(0, SEARCHES_MAX)));
+  } catch {
+    // Storage off or full: the list lives for this page only.
+  }
+}
+
+/** Puts a search at the top of the list (the same question asked again moves up, never twice). */
+export function rememberSearch(q: SearchQuery): SavedSearch[] {
+  const id = searchIdentity(q);
+  const list = [{ query: q, label: searchLabel(q), at: Date.now() }, ...loadSearches().filter((s) => searchIdentity(s.query) !== id)].slice(0, SEARCHES_MAX);
+  storeSearches(list);
+  return list;
+}
+
+export function forgetSearch(at: number): SavedSearch[] {
+  const list = loadSearches().filter((s) => s.at !== at);
+  storeSearches(list);
+  return list;
+}
+
+/** A search in a few words: "Anywhere, 22 Oct to 30 Nov, 3 to 5 nights". */
+export function searchLabel(q: SearchQuery): string {
+  const to =
+    q.advanced?.group ? `Group of ${q.advanced.group.members.length}` :
+    q.to.kind === "anywhere" ? "Anywhere" :
+    q.to.kind === "region" ? (WILD_REGIONS.find((r) => r.key === (q.to as { key: string }).key)?.label ?? q.to.key) :
+    q.to.name;
+  const w = q.when;
+  const when =
+    w.kind === "dates" ? (w.back ? dateRange(w.out, w.back) : `${shortDate(w.out)}, one way`) :
+    w.kind === "window" ? `${dateRange(w.from, w.to)}${w.include ? `, with ${shortDate(w.include)}` : ""}` :
+    w.kind === "month" ? monthLabel(w.month) :
+    "any time";
+  const n = q.nights;
+  const nights = q.advanced?.longStay ? `${q.advanced.longStay.months} month${q.advanced.longStay.months === 1 ? "" : "s"}` : q.advanced?.wild ? `${q.advanced.wild.nights} nights` : q.oneWay ? "" : n ? (n[0] === n[1] ? `${n[0]} nights` : `${n[0]} to ${n[1]} nights`) : "";
+  const shape = q.shape === "loop" ? "a loop" : q.shape === "two" ? "two cities" : q.shape === "long" ? "long stay" : "";
+  return [`${to}`, when, nights, shape].filter(Boolean).join(", ");
+}

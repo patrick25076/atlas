@@ -463,6 +463,10 @@ export type TripsQuery = {
   /** Nights each place takes, both ends included: [2, 3] is 2 or 3. */
   nightsPerPlace: [number, number];
   maxPlaces: number;
+  /** The fewest places a trip may have (default 1): 2 asks for two-city trips only, so cheap returns cannot fill the list. */
+  minPlaces?: number;
+  /** How many trips to answer (default 10, at most 30), each a different sequence of cities. */
+  top?: number;
   tradeoff?: Tradeoff;
   /** "Been" countries (ISO2): never a stop. */
   exclude?: string[];
@@ -655,6 +659,8 @@ export function cheapestTripsIn(g: FlightGraph, q: TripsQuery): TripsResult {
   const lo = Math.max(1, Math.round(Math.min(q.nightsPerPlace[0], q.nightsPerPlace[1])));
   const hi = Math.max(lo, Math.round(Math.max(q.nightsPerPlace[0], q.nightsPerPlace[1])));
   const maxPlaces = Math.max(1, Math.min(12, Math.round(q.maxPlaces)));
+  const minPlaces = Math.max(1, Math.min(maxPlaces, Math.round(q.minPlaces ?? 1)));
+  const top = Math.max(1, Math.min(30, Math.round(q.top ?? TOP)));
   const rate = HOUR_EURO[q.tradeoff ?? "price"] / 60;
   const groundMax = q.groundMaxMin == null ? DEFAULT_GROUND_MIN : Math.max(0, Math.min(720, Math.round(q.groundMaxMin)));
   const exclude = (q.exclude ?? []).map((c) => c.trim().toUpperCase());
@@ -747,6 +753,7 @@ export function cheapestTripsIn(g: FlightGraph, q: TripsQuery): TripsResult {
   let worstTop = Infinity;
   const finish = (li: number, close: GraphLeg[], endDay: number) => {
     const l = labels[li];
+    if (l.places < minPlaces) return;
     const euros = l.euros + close.reduce((a, x) => a + x.price, 0);
     const minutes = l.minutes + close.reduce((a, x) => a + x.minutes, 0);
     const cost = costOf(euros, minutes);
@@ -759,7 +766,7 @@ export function cheapestTripsIn(g: FlightGraph, q: TripsQuery): TripsResult {
       doneSeqs.set(seq, done.length);
       done.push(item);
     }
-    if (done.length >= TOP) worstTop = done.map((x) => x.cost).sort((a, b) => a - b)[TOP - 1];
+    if (done.length >= top) worstTop = done.map((x) => x.cost).sort((a, b) => a - b)[top - 1];
   };
 
   let explored = 0;
@@ -821,7 +828,7 @@ export function cheapestTripsIn(g: FlightGraph, q: TripsQuery): TripsResult {
   }
 
   // The trips, rebuilt from their labels.
-  const ranked = done.sort((a, b) => a.cost - b.cost || a.minutes - b.minutes).slice(0, TOP);
+  const ranked = done.sort((a, b) => a.cost - b.cost || a.minutes - b.minutes).slice(0, top);
   const trips = ranked.map((d): GraphTrip => {
     const chain: Label[] = [];
     for (let i = d.label; i >= 0; i = labels[i].parent) chain.push(labels[i]);

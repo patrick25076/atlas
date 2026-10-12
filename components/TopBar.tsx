@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Airport, CountryInfo } from "@/lib/types";
 import type { Origin } from "@/lib/ui-types";
 import type { BeenPrefs } from "@/lib/been";
-import { countryName, monthLabel, monthOptions } from "@/lib/format";
+import { countryName } from "@/lib/format";
 import BeenEditor from "./BeenEditor";
 import CommandBar from "./CommandBar";
 import PrefsEditor from "./PrefsEditor";
@@ -16,12 +16,10 @@ type Props = {
   origin: Origin | null;
   airports: Airport[];
   onOrigin: (a: Airport) => void;
-  month: string | null;
-  onMonth: (m: string | null) => void;
   searching: boolean;
   /** Something is searching anywhere in the app: the command line shows a spinner. */
   busy: boolean;
-  /** Run a command from the command line (the globe runs it, like an atlas:command event). */
+  /** Run a command from the command line: the shell turns it into one search (or a place, a plan, a question for the chat). */
   onCommand: (c: Command) => void;
   onShare: () => void;
   copied: boolean;
@@ -66,7 +64,8 @@ function useDismiss(open: boolean, close: () => void) {
 }
 
 export default function TopBar(p: Props) {
-  const [open, setOpen] = useState<"from" | "when" | "been" | "style" | null>(null);
+  // When lives in the search bar now; the top bar keeps where you are, Been and the trip style.
+  const [open, setOpen] = useState<"from" | "been" | "style" | null>(null);
   // "How Atlas works": the "?" button, "/help" on the command line, or anyone through 'atlas:guide'.
   const [guide, setGuide] = useState(false);
   const closeGuide = useCallback(() => setGuide(false), []);
@@ -85,7 +84,6 @@ export default function TopBar(p: Props) {
   const [query, setQuery] = useState("");
   const hits = useMemo(() => searchAirports(p.airports, query), [p.airports, query]);
   const ref = useDismiss(open !== null, () => setOpen(null));
-  const months = useMemo(monthOptions, []);
   const inputRef = useRef<HTMLInputElement>(null);
   useEffect(() => {
     if (open === "from") inputRef.current?.focus();
@@ -98,7 +96,7 @@ export default function TopBar(p: Props) {
         <h1>
           atlas<span>.</span>
         </h1>
-        <small>cheapest getaways from wherever you are</small>
+        <small>the cheapest trips from wherever you are</small>
       </div>
 
       <div ref={open ? ref : undefined} style={{ display: "contents" }}>
@@ -154,37 +152,6 @@ export default function TopBar(p: Props) {
           )}
         </button>
 
-        <button className={`pill${open === "when" ? " on" : ""}`} onClick={() => setOpen(open === "when" ? null : "when")} title="When">
-          <span className="k">When</span>
-          {p.month ? monthLabel(p.month) : "Next 6 weeks"}
-          <span className="caret">▾</span>
-          {open === "when" && (
-            <div className="popover" style={{ minWidth: 220 }} onClick={(e) => e.stopPropagation()}>
-              <button
-                className={`opt${p.month == null ? " on" : ""}`}
-                onClick={() => {
-                  p.onMonth(null);
-                  setOpen(null);
-                }}
-              >
-                Next 6 weeks <small>searched nightly</small>
-              </button>
-              {months.map((m) => (
-                <button
-                  key={m}
-                  className={`opt${p.month === m ? " on" : ""}`}
-                  onClick={() => {
-                    p.onMonth(m);
-                    setOpen(null);
-                  }}
-                >
-                  {monthLabel(m)} <small>live search</small>
-                </button>
-              ))}
-            </div>
-          )}
-        </button>
-
         {/* The editor holds inputs and buttons, so it sits next to the pill rather than inside it: a button cannot contain buttons. */}
         <div className="pillwrap">
           <button
@@ -227,7 +194,7 @@ export default function TopBar(p: Props) {
         </div>
       </div>
 
-      {/* The command line: routes, events, trips, places and questions, all from one box. */}
+      {/* The command line: any search in words, a place or a question; it fills the search bar and runs it. */}
       <CommandBar onRun={p.onCommand} busy={p.busy} onHelp={() => setGuide(true)} />
 
       <span className="spacer" />

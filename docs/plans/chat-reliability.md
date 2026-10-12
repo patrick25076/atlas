@@ -585,6 +585,103 @@ Tested: the harness's `owner` section, 17 rows, 0 failed, 0 Kiwi searches; `--ow
 above), 6 Kiwi searches; every section but the live table at `--live-cap=0 --itin-stub`, 223 rows, 0 failed; POST /api/chat
 with a 5,000-character message answered 413.
 
+## The one search in the chat (added 2026-10-12, late)
+
+The app became one search (docs/plans/one-search.md): one bar, one list of trips, an Advanced
+drawer. The chat now drives that same search instead of choosing among a dozen tools.
+
+**The `search` tool** (lib/agent-tools.ts) takes plain words the model can write (to: anywhere,
+a city or town, a country or a region; out and back, or windowFrom, windowTo and includeDay,
+or month, or nothing for anytime; minNights and maxNights; oneWay; shape; the filter chips;
+wild, longStayMonths and group for the drawer; nightsPerStop and tradeoff for this search only;
+exclude and allow for the Been list) and builds one `SearchQuery` (lib/trip-result.ts): from
+the traveller's place and airports, or a named start placed by the chat's gazetteer; the
+destination classified (a region word to its key, a country to its code, a place by name, an
+unknown word answered with close matches); past days moved and said in `corrected`; a group's
+cities turned into airport codes. The query is checked with `parseSearchQuery`, the same rules
+as the Search tab's route, and a refusal is a note, not an error. It then runs lib/search.ts's
+`runSearch` (the library, not the route) through `searchStream`, which turns its NDJSON lines
+into progress lines for the chip and one final answer: the results merged by id, ranked money
+first exactly as the library ranks them (a long stay by its whole cost; hours only break ties
+unless the trip style weighs time), each result's engine payload dropped. The budget is the one
+search's default, 25 searches, never past what the turn has left; at 0 the nightly price graph
+and the fare memory answer and nothing leaves. A query the engines refuse in a sentence
+(`SearchInputError`: a past month, a window shorter than the nights) comes back as a note.
+
+What the model reads: up to six compact rows (route line, dates, nights a place, price, ground
+estimate apart, hours, direct, badges, why, source, booking links on the first three only) plus
+the query itself, so "make it direct" refines the same query. What the browser gets besides:
+`raw`, the first twelve TripResults, which the route strips from the model's history and the
+browser strips from what it stores. `source` gains `graph` (last night's price graph).
+
+**The cards.** components/ChatPanel.tsx draws a search answer with the one search's own
+`TripCard` (components/search/TripCard.tsx), compact, four at first with "N more here", and a
+"Show all in Search" button that dispatches `atlas:search` with the query (the shell fills the
+bar and lists everything). The query goes without the turn's budget, which would otherwise
+stick to every later search from the bar; the Search tab applies its own trip style and Been
+list, so it may run the search again rather than hit the chat's memo. Each card dispatches
+`atlas:trip` to open the trip page. A restored thread has no raw results, so its cards are
+rebuilt from the compact rows (`tripFromRow`): the rows carry each stop's code and point, the
+ground estimate, and each leg's minutes and stops, and a row stored before they did is placed
+from cities.json (a stop with no point is left out) before the trip page opens. Both events
+are typed in lib/chat-widgets.ts (`SearchDetail`, `TripDetail`).
+
+**Fixes after review (2026-10-12).** `to` takes Europe, Asia and Africa as regions (the
+Search tab's continents, lib/finder.ts REGION_COUNTRIES) before any place lookup ("Asia" had
+matched a village in the Philippines), and Scandinavia, the Nordics, the Baltics and the like
+get a note saying what to search instead. The turn is charged the smaller of the run's own
+count and the delta during the call, and `source` is live only when a live trip is shown. When
+the flight graph is empty the engine still runs the paired search or group matching past the
+budget; the tool's description and a note say so (a per-run cap is the engine's to add).
+
+**The prompt.** A new paragraph says the app is one search: for "where can I go", "the
+cheapest", "from X to Y", "Lisbon in November", "a loop", "two cities", build ONE query and call
+search ONCE, state the assumption, then refine the same query ("make it direct" is direct true,
+"what about November" is month, "not Germany" is exclude, "only new countries" is
+newCountries). Cities the trip must pass through ("add Torun") are the one thing search does
+not take: walk_trips with mustInclude. A far region, a long stay and a group go through search's
+drawer fields; wild_trip, long_stay and group_trip stay for their details (rent, day plans). The
+specialised tools stay for what search does not cover: itineraries, hotels, events, sights,
+food, price insight, best months, the way home, ground reach, facts, the web. The old rules that
+sent "anywhere" to find_getaways, a far destination to scan_cheapest and two named places to
+cheapest_way first now send them to search (cheapest_way stays for a journey as such, scan for
+an explicit price calendar).
+
+**Plans from a card.** make_itinerary takes `from: 'last_search'` (option picks the card):
+`skeletonFromTrip` on this session's TripResult, or the stops by name from a restored row. The
+search's priced legs become known fares, so the plan is priced with that card's tickets.
+
+**The way home.** way_home now calls lib/way-home.ts (`wayHome`, shared with the trip page's
+Ways home and GET /api/way-home) with the place as the chat placed it, and answers in
+`wayHomeToolShape`, the shape it always had (calendar, bestDirect, cheapest, homeAirports), so
+the prompt, the cards, rememberOutput and the harness read it unchanged. With live prices off or
+the turn spent it passes `live: false` (the fare memory only) and keeps its own notes: a spent
+turn is not a rate limit; a refused search is.
+
+**The command line.** lib/command.ts gains `toSearchQuery(cmd, ctx)`: every command kind that
+searches (route, getaways, events, walk, wild, long stay) becomes a SearchQuery for the shell to
+dispatch; a place, an itinerary, the style, the guide and a question are null. It stays pure:
+`ctx.resolve` places a typed start and `ctx.destination` classifies a typed destination when the
+caller can. A wild line with countries is a loop kept to the first country (the one search's
+wild loop takes a region key only). `atlas search ...` (scripts/atlas.ts) runs the same path in
+a terminal: the words through parseCommand and toSearchQuery, flags for what words cannot say
+(`--window D..D --include D --nights 3-5 --direct --shape two`), or `--query` with a whole
+SearchQuery; the cap is the query's budget.
+
+**The harness** has a `search` section (`--only=search`), zero Kiwi searches: toSearchQuery on
+typed lines and every query it builds passing parseSearchQuery; the tool's query read through
+the trace (a window with a day to include and its budget, a country and a month, a region, a
+town, a named start with filters, a wild loop, a past day moved); an unknown place and a group
+without dates as notes; the budget-0 run (nothing leaves, the graph answers, rows and raw
+bounded); make_itinerary from last_search; the prompt's rule; the `atlas:search` detail.
+
+Tested: `--live-cap=0 --itin-stub`, every section, 331 rows, 0 failed, 0 Kiwi searches. One chat
+turn, "cheapest 3 to 5 nights from Brasov between 22 Oct and 30 Nov including the 26th", with
+`x-atlas-turn-searches: 12`: one search call (window 22 Oct to 30 Nov, include 26 Oct, 3 to 5
+nights), answered from the price graph (Chisinau 53 euros, Pescara 76, Budapest 92), 0 live
+searches, nine cards; in the browser the cards drew from the stored rows and "Show all in
+Search" filled the Search tab with the same query.
+
 ## What cannot be guaranteed
 
 - **Kiwi's throttle.** The public search has no key, no SLA and no published terms. After a

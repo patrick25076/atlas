@@ -4,12 +4,13 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { COMMAND_HINTS, parseCommand, type Command } from "@/lib/command";
 import { todayIso } from "@/lib/format";
 
-// The command line in the top bar: one box for everything Atlas can do at once. As the
-// visitor types, lib/command.ts ranks what the words could mean (a route, events, getaways,
-// a loop, a long stay, a place, an itinerary, or a question for the chat, always last); the
+// The command line in the top bar: the one search in words. As the visitor types,
+// lib/command.ts ranks what the words could mean (a trip to a place, getaways, events, a loop,
+// a long stay, a place page, an itinerary, or a question for the chat, always last); the
 // dropdown shows them, Up and Down move, Enter runs the highlighted one, Escape closes. With
-// the box empty it shows examples. "/" or Ctrl+K focus it from anywhere on the page. The
-// globe runs the command (onRun), the same way it runs one sent as an atlas:command event.
+// the box empty it shows examples. "/" or Ctrl+K focus it from anywhere on the page. The shell
+// runs the command (onRun): every search kind becomes one SearchQuery that fills the search
+// bar and runs, the same as an 'atlas:search' event; a place, a plan and a question do not.
 
 // Keyed by plain strings, not Command["kind"]: the brain stream adds the 'walk' kind to
 // lib/command.ts, and this file must build both before and after it lands.
@@ -25,13 +26,13 @@ const ICON: Record<string, string> = {
   ask: "?",
 };
 const WHAT: Record<string, string> = {
-  walk: "cheapest loop, city by city",
-  route: "the cheapest way",
-  events: "events worth flying for",
-  getaways: "getaways from your airports",
-  wild: "a wild loop",
-  longstay: "a long stay",
-  place: "a place",
+  walk: "search: a loop, city by city",
+  route: "search: trips to this place",
+  events: "search: trips with events on",
+  getaways: "search: trips from your airports",
+  wild: "search: a long loop",
+  longstay: "search: a long stay",
+  place: "a place page",
   itinerary: "a day by day plan",
   ask: "ask the chat",
 };
@@ -135,8 +136,8 @@ export default function CommandBar({ onRun, busy, onHelp }: { onRun: (c: Command
       <input
         ref={input}
         value={text}
-        placeholder="Brasov to Lisbon, events in february, /wild sea 21, or ask anything"
-        aria-label="Command line: a route, events, a trip, a place, or a question"
+        placeholder="Lisbon in november, getaways this weekend, or ask anything"
+        aria-label="Search in words: a place, dates, a loop, or a question"
         aria-expanded={showList || showHints}
         aria-controls="cmdlist"
         aria-autocomplete="list"
@@ -211,7 +212,7 @@ export default function CommandBar({ onRun, busy, onHelp }: { onRun: (c: Command
       )}
       {showHints && (
         <div className="cmdlist" id="cmdlist" role="listbox">
-          <div className="cmdhead">Type a route, an event, a trip or a question. For example:</div>
+          <div className="cmdhead">Type a search in your own words, or a question. For example:</div>
           {COMMAND_HINTS.map((h, i) => (
             <button
               key={h.example}

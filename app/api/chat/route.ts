@@ -9,8 +9,9 @@ import { allowUsage, chatRateLimit } from "@/lib/usage-caps";
 // The loop stops after ten steps, or as soon as the agent asks the traveller a question with
 // the ask tool: the widget needs the traveller's answer before anything else makes sense.
 // One turn may spend TURN_SEARCH_BUDGET Kiwi searches in all (lib/agent-tools.ts counts them).
-// walk_trips (the graph walk) streams its progress lines to the browser as preliminary tool
-// outputs; only its last answer reaches the model, without the raw result.
+// walk_trips (the graph walk) and search (the one search, lib/search.ts) stream their progress
+// lines to the browser as preliminary tool outputs; only the last answer reaches the model,
+// without the raw result (search's raw TripResults draw the chat's trip cards).
 export const maxDuration = 300;
 /** The browser posts the whole thread; past this many bytes it is not a thread but a payload. */
 const MAX_BODY_BYTES = 512 * 1024;

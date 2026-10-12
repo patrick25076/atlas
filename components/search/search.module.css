@@ -1,0 +1,1081 @@
+/* The one search: bar, Advanced drawer, filter chips, results list and trip card.
+   Dark glass on the tokens of app/globals.css. Mobile first (390 px), the panel is 439 to 468 px
+   on a desktop. Chips wrap, never scroll sideways. Motion is light and goes away for anyone who
+   asked their system for less. */
+
+.tab {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+
+/* ---------- shared bits ---------- */
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+.chip {
+  flex: 0 0 auto;
+  min-height: 34px;
+  font: inherit;
+  font-size: 13.5px;
+  font-weight: 500;
+  padding: 6px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  color: var(--ink-2);
+  background: rgba(255, 255, 255, 0.03);
+  cursor: pointer;
+  white-space: nowrap;
+  transition:
+    background 0.15s,
+    border-color 0.15s,
+    color 0.15s;
+}
+.chip:hover:not(:disabled) {
+  border-color: var(--line-2);
+  color: var(--ink);
+}
+.chip:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.chipOn,
+.chipOn:hover:not(:disabled) {
+  color: var(--mint-ink);
+  border-color: var(--mint);
+  background: var(--mint);
+  font-weight: 650;
+}
+.chipGhost {
+  border-style: dashed;
+}
+.chipSuggest {
+  border-color: rgba(111, 240, 196, 0.28);
+  color: var(--ink);
+}
+
+.chip:focus-visible,
+.segBtn:focus-visible,
+.go:focus-visible,
+.linkBtn:focus-visible,
+.summary:focus-visible,
+.advToggle:focus-visible,
+.switch:focus-visible,
+.sortBtn:focus-visible,
+.card:focus-visible,
+.iconBtn:focus-visible,
+.clearBtn:focus-visible,
+.stepper button:focus-visible {
+  outline: 2px solid var(--mint);
+  outline-offset: 2px;
+}
+
+.hint {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--ink-3);
+}
+
+.linkBtn {
+  align-self: flex-start;
+  border: 0;
+  padding: 6px 2px;
+  background: none;
+  color: var(--sky);
+  font: inherit;
+  font-size: 13.5px;
+  cursor: pointer;
+}
+.linkBtn:hover {
+  text-decoration: underline;
+}
+
+.iconBtn,
+.clearBtn {
+  flex: 0 0 auto;
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--ink-2);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  align-self: flex-end;
+}
+
+/* ---------- the bar ---------- */
+.bar {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 12px;
+  border-radius: var(--radius-s);
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.035);
+  animation: rise 0.22s ease-out;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+.fieldLabel {
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+
+.input {
+  width: 100%;
+  min-width: 0;
+  min-height: 42px;
+  padding: 9px 12px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--ink);
+  font: inherit;
+  /* 16 px stops iOS from zooming into the field on focus */
+  font-size: 16px;
+  outline: none;
+  color-scheme: dark;
+  transition: border-color 0.15s;
+}
+.input::placeholder {
+  color: var(--ink-3);
+}
+.input:focus {
+  border-color: rgba(111, 240, 196, 0.55);
+}
+
+.fromBox {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.02);
+}
+.fromPlace {
+  font-weight: 600;
+  font-size: 15px;
+}
+.fromAirports {
+  font-family: var(--mono);
+  font-size: 12.5px;
+  color: var(--ink-3);
+  letter-spacing: 0.04em;
+}
+
+/* the To typeahead */
+.combo {
+  position: relative;
+  display: flex;
+  gap: 6px;
+}
+.combo .clearBtn {
+  position: absolute;
+  right: 4px;
+  top: 4px;
+  width: 34px;
+  height: 34px;
+  border: 0;
+  background: transparent;
+}
+.combo .input {
+  padding-right: 40px;
+}
+.options {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 6px);
+  left: 0;
+  right: 0;
+  margin: 0;
+  padding: 6px;
+  list-style: none;
+  max-height: min(340px, 50vh);
+  overflow-y: auto;
+  border-radius: 14px;
+  border: 1px solid var(--line-2);
+  background: var(--glass-2);
+  backdrop-filter: blur(22px) saturate(140%);
+  -webkit-backdrop-filter: blur(22px) saturate(140%);
+  box-shadow: var(--shadow);
+  animation: drop 0.14s ease-out;
+}
+.option {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 10px;
+  padding: 9px 10px;
+  border-radius: 10px;
+  cursor: pointer;
+  font-size: 15px;
+}
+.option small {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ink-3);
+  font-size: 12.5px;
+}
+.optionOn {
+  background: rgba(111, 240, 196, 0.12);
+  color: var(--mint);
+}
+
+/* When */
+.segment {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 3px;
+  padding: 3px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.04);
+}
+.segBtn {
+  min-height: 36px;
+  padding: 6px 4px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--ink-2);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition:
+    background 0.15s,
+    color 0.15s;
+}
+.segOn {
+  background: rgba(255, 255, 255, 0.12);
+  color: var(--ink);
+}
+
+.row {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  min-width: 0;
+}
+.dateField {
+  flex: 1 1 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.dateField > span {
+  font-size: 12.5px;
+  color: var(--ink-3);
+}
+
+/* Nights */
+.nightsRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 12px;
+}
+.nights {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.to {
+  color: var(--ink-3);
+  font-size: 13.5px;
+}
+.stepper {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.04);
+}
+.stepper button {
+  width: 34px;
+  height: 34px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: 18px;
+  cursor: pointer;
+}
+.stepper button:disabled {
+  color: var(--ink-3);
+  cursor: default;
+}
+.stepper output {
+  min-width: 22px;
+  text-align: center;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+
+.problem {
+  margin: 0;
+  font-size: 13.5px;
+  color: var(--amber);
+}
+
+.go {
+  min-height: 46px;
+  border: 0;
+  border-radius: 12px;
+  background: var(--mint);
+  color: var(--mint-ink);
+  font: inherit;
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  cursor: pointer;
+  transition:
+    transform 0.12s,
+    filter 0.15s,
+    opacity 0.15s;
+}
+.go:hover:not(:disabled) {
+  filter: brightness(1.06);
+}
+.go:active:not(:disabled) {
+  transform: scale(0.985);
+}
+.go:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* the bar folded into one line after a search */
+.summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 52px;
+  padding: 8px 12px;
+  border-radius: var(--radius-s);
+  border: 1px solid var(--line-2);
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--ink);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  animation: rise 0.2s ease-out;
+}
+.summary:hover {
+  border-color: rgba(111, 240, 196, 0.4);
+}
+.summaryIcon {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 999px;
+  background: rgba(111, 240, 196, 0.14);
+  color: var(--mint);
+}
+.summaryText {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.summaryText b {
+  font-size: 15px;
+  font-weight: 650;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.summaryText span {
+  font-size: 13px;
+  color: var(--ink-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.summaryEdit {
+  flex: 0 0 auto;
+  font-size: 13.5px;
+  color: var(--sky);
+}
+
+/* ---------- Advanced ---------- */
+.advanced {
+  display: flex;
+  flex-direction: column;
+}
+.advToggle {
+  display: inline-flex;
+  align-items: center;
+  align-self: flex-start;
+  gap: 8px;
+  min-height: 34px;
+  padding: 4px 4px;
+  border: 0;
+  background: none;
+  color: var(--ink-2);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.advToggle:hover {
+  color: var(--ink);
+}
+.advCount {
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: rgba(111, 240, 196, 0.16);
+  color: var(--mint);
+  font-size: 12px;
+}
+.chevron {
+  transition: transform 0.2s;
+}
+.advToggle[aria-expanded="true"] .chevron {
+  transform: rotate(180deg);
+}
+
+/* Opens by growing its row from 0fr to 1fr: a height animation without measuring. Hidden
+   content leaves the tab order through visibility, after the closing animation ends. */
+.drawer {
+  display: grid;
+  grid-template-rows: 0fr;
+  visibility: hidden;
+  transition:
+    grid-template-rows 0.24s ease,
+    visibility 0s linear 0.24s;
+}
+.drawerOpen {
+  grid-template-rows: 1fr;
+  visibility: visible;
+  transition: grid-template-rows 0.24s ease;
+}
+.drawerInner {
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.drawerOpen .drawerInner {
+  padding-top: 4px;
+}
+.advSection {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border-radius: var(--radius-s);
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.025);
+}
+.advSection h4 {
+  margin: 0;
+  font-size: 14.5px;
+  font-weight: 650;
+}
+.advHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.subRow {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  animation: rise 0.18s ease-out;
+}
+.styleLink {
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 13.5px;
+  color: var(--ink-2);
+}
+.styleLink b {
+  color: var(--ink);
+  font-weight: 650;
+  margin-right: 4px;
+}
+.styleLink .linkBtn {
+  align-self: center;
+}
+
+.switch {
+  position: relative;
+  flex: 0 0 auto;
+  width: 44px;
+  height: 26px;
+  border-radius: 999px;
+  border: 1px solid var(--line-2);
+  background: rgba(255, 255, 255, 0.08);
+  cursor: pointer;
+  transition: background 0.18s;
+}
+.switch span {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  background: var(--ink-2);
+  transition:
+    transform 0.18s,
+    background 0.18s;
+}
+.switchOn {
+  background: var(--mint);
+  border-color: var(--mint);
+}
+.switchOn span {
+  transform: translateX(18px);
+  background: var(--mint-ink);
+}
+
+.rangeField {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13.5px;
+  color: var(--ink-2);
+}
+.rangeField b {
+  color: var(--ink);
+}
+.rangeField input[type="range"] {
+  width: 100%;
+  accent-color: var(--mint);
+}
+
+.member {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 10px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  min-width: 0;
+}
+.member .row + .row {
+  margin-top: 6px;
+}
+.memberActions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 4px 12px;
+}
+
+/* ---------- filters ---------- */
+.filters {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.filters .chip {
+  min-height: 32px;
+  padding: 5px 11px;
+  font-size: 13px;
+}
+.picker {
+  padding: 10px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.03);
+  animation: rise 0.16s ease-out;
+}
+
+/* ---------- the start of a fresh tab ---------- */
+.start {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 4px 2px;
+}
+.startLead {
+  margin: 0;
+  font-size: 14.5px;
+  color: var(--ink-2);
+}
+
+/* ---------- results ---------- */
+.results {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+.resultsHead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px 10px;
+}
+.count {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 650;
+}
+.stillLooking {
+  font-weight: 400;
+  color: var(--ink-3);
+}
+.sorts {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.03);
+}
+.sortBtn {
+  min-height: 28px;
+  padding: 3px 10px;
+  border: 0;
+  border-radius: 999px;
+  background: none;
+  color: var(--ink-2);
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.sortOn {
+  background: rgba(255, 255, 255, 0.12);
+  color: var(--ink);
+}
+
+.progress {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 13px;
+  color: var(--ink-2);
+}
+.graphNote {
+  align-self: flex-start;
+  padding: 2px 9px;
+  border-radius: 999px;
+  background: rgba(124, 196, 255, 0.12);
+  color: var(--sky);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+.progressLine {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  animation: fade 0.25s ease-out;
+}
+.pulse {
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--mint);
+  animation: pulse 1.2s ease-in-out infinite;
+}
+
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.item {
+  animation: rise 0.26s ease-out both;
+}
+
+.skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+  border-radius: var(--radius-s);
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.03);
+}
+.skLine {
+  display: block;
+  height: 12px;
+  border-radius: 6px;
+  background: linear-gradient(90deg, rgba(255, 255, 255, 0.05) 0%, rgba(255, 255, 255, 0.12) 50%, rgba(255, 255, 255, 0.05) 100%);
+  background-size: 200% 100%;
+  animation: shimmer 1.3s linear infinite;
+}
+.skLine:first-child {
+  height: 16px;
+}
+
+.empty {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 14px;
+  border-radius: var(--radius-s);
+  border: 1px dashed var(--line-2);
+  font-size: 14px;
+  color: var(--ink-2);
+  line-height: 1.45;
+}
+.empty p {
+  margin: 0;
+}
+.empty b {
+  color: var(--ink);
+}
+.error {
+  border-color: rgba(255, 107, 138, 0.4);
+}
+.note {
+  font-size: 13px;
+  color: var(--ink-3);
+}
+.footer {
+  margin: 4px 0 0;
+  font-size: 12.5px;
+  color: var(--ink-3);
+}
+
+/* ---------- the trip card ---------- */
+.card {
+  display: flex;
+  gap: 12px;
+  width: 100%;
+  padding: 12px;
+  border-radius: var(--radius-s);
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--ink);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    border-color 0.15s,
+    background 0.15s,
+    transform 0.15s,
+    box-shadow 0.2s;
+}
+.card:hover {
+  border-color: var(--line-2);
+  background: rgba(255, 255, 255, 0.06);
+}
+.card:active {
+  transform: scale(0.995);
+}
+.cardActive,
+.cardActive:hover {
+  border-color: var(--mint);
+  background: rgba(111, 240, 196, 0.07);
+  box-shadow: 0 0 0 1px rgba(111, 240, 196, 0.35), 0 8px 28px rgba(111, 240, 196, 0.08);
+}
+.cardCompact {
+  padding: 10px;
+  gap: 8px;
+}
+
+.cardPhoto {
+  flex: 0 0 auto;
+  width: 64px;
+  height: 64px;
+  border-radius: 12px;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.05);
+}
+.cardPhoto img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.cardBody {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.cardTop {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+.cardTitle {
+  min-width: 0;
+  font-size: 15px;
+  font-weight: 650;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+.cardPrice {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  font-size: 22px;
+  font-weight: 750;
+  letter-spacing: -0.02em;
+  line-height: 1.05;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+.cardActive .cardPrice {
+  color: var(--mint);
+}
+.cardCompact .cardPrice {
+  font-size: 19px;
+}
+.cardGround {
+  margin-top: 3px;
+  font-size: 11.5px;
+  font-weight: 500;
+  letter-spacing: 0;
+  color: var(--ink-3);
+  white-space: nowrap;
+}
+
+/* the route line wraps between places, never inside one */
+.route {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 6px;
+  font-size: 13.5px;
+  color: var(--ink-2);
+  line-height: 1.4;
+}
+.routeHop {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.routePlace {
+  color: var(--ink);
+}
+.routeMode {
+  display: inline-grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+}
+.legIcon {
+  color: var(--sky);
+}
+.legIcon[data-kind="train"],
+.legIcon[data-kind="coach"],
+.legIcon[data-kind="ferry"],
+.legIcon[data-kind="road"],
+.legIcon[data-kind="walk"] {
+  color: var(--amber);
+}
+.legIcon[data-kind="fly"] {
+  transform: rotate(90deg);
+}
+/* A group card: one short line per person travelling, stacked. */
+.routeGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.routeGroupCount {
+  font-size: 12.5px;
+  color: var(--ink-3);
+}
+.routeMore {
+  padding: 0 6px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  font-size: 12px;
+  color: var(--ink-3);
+}
+
+.facts {
+  font-size: 13px;
+  color: var(--ink-2);
+}
+.perPlace {
+  font-size: 12.5px;
+  color: var(--ink-3);
+  overflow-wrap: anywhere;
+}
+.badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 1px;
+}
+.badge {
+  padding: 1px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--ink-2);
+  white-space: nowrap;
+}
+.toneMint {
+  border-color: rgba(111, 240, 196, 0.35);
+  color: var(--mint);
+}
+.toneAmber {
+  border-color: rgba(255, 180, 84, 0.35);
+  color: var(--amber);
+}
+.toneSky {
+  border-color: rgba(124, 196, 255, 0.35);
+  color: var(--sky);
+}
+.toneRose {
+  border-color: rgba(255, 107, 138, 0.35);
+  color: var(--rose);
+}
+.badgeTickets {
+  border-style: dashed;
+  color: var(--ink-2);
+}
+.why {
+  font-size: 12.5px;
+  color: var(--ink-3);
+  line-height: 1.4;
+}
+.source {
+  font-size: 11.5px;
+  color: var(--ink-3);
+}
+
+/* ---------- motion ---------- */
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes drop {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@keyframes pulse {
+  0%,
+  100% {
+    opacity: 0.35;
+    transform: scale(0.8);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+@keyframes shimmer {
+  from {
+    background-position: 200% 0;
+  }
+  to {
+    background-position: -200% 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bar,
+  .summary,
+  .options,
+  .subRow,
+  .picker,
+  .item,
+  .progressLine,
+  .pulse,
+  .skLine {
+    animation: none;
+  }
+  .drawer,
+  .drawerOpen,
+  .chevron,
+  .card,
+  .chip,
+  .switch,
+  .switch span,
+  .go {
+    transition: none;
+  }
+}
+
+/* a desktop panel has room for the dates side by side with a label; phones keep them tight */
+@media (max-width: 380px) {
+  .segBtn {
+    font-size: 13px;
+  }
+  .cardPhoto {
+    width: 52px;
+    height: 52px;
+  }
+}

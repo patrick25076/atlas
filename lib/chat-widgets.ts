@@ -11,6 +11,7 @@ import type { BudgetTier, Itinerary, Pace, Skeleton } from "./itinerary";
 import type { WalkLoop, WalkResult } from "./graph-walk";
 import type { Command } from "./command";
 import type { Prefs } from "./prefs";
+import type { SearchQuery, TripResult } from "./trip-result";
 
 export type WidgetKind = "dates" | "month" | "nights" | "region" | "choices" | "people" | "map-region" | "map-place";
 
@@ -125,11 +126,12 @@ export const TOOL_LABEL: Record<string, string> = {
   walk_trips: "Walking the cheapest hops",
   way_home: "Finding the way home",
   make_itinerary: "Writing the itinerary",
+  search: "Searching every way",
   ask: "One question",
 };
 
 /** The tools that can take a while: their chip shows the seconds elapsed while they run. */
-export const LONG_TOOLS = new Set(["wild_trip", "long_stay", "group_trip", "plan_days", "find_getaways", "scan_cheapest", "cheapest_way", "walk_trips", "way_home", "two_city_combos", "events_worth_travelling_for", "make_itinerary"]);
+export const LONG_TOOLS = new Set(["search", "wild_trip", "long_stay", "group_trip", "plan_days", "find_getaways", "scan_cheapest", "cheapest_way", "walk_trips", "way_home", "two_city_combos", "events_worth_travelling_for", "make_itinerary"]);
 
 /** A short word for each kind of route option, for the badge on its card. */
 export const ROUTE_KIND_LABEL: Record<string, string> = {
@@ -152,6 +154,8 @@ export function toolProgress(name: string, input: unknown): string {
   const skipping = Array.isArray(a.exclude) && a.exclude.length ? ` (skipping ${a.exclude.length} countr${a.exclude.length === 1 ? "y" : "ies"} you have been to)` : "";
   const line = (() => {
     switch (name) {
+      case "search":
+        return searchProgress(a);
       case "scan_cheapest":
         return `Searching ${a.months ?? 6} months${a.origins ? ` from ${list(a.origins)}` : ""} to ${a.to ?? "there"}${a.openJawFrom ? `, then open-jaw via ${a.openJawFrom}` : ""}`;
       case "find_getaways":
@@ -206,10 +210,21 @@ export function toolProgress(name: string, input: unknown): string {
   return `${line}${name === "wild_trip" ? "" : skipping}...`;
 }
 
+/** The search tool's progress line, from the input the model wrote (lib/agent-tools.ts `search`). */
+function searchProgress(a: Record<string, unknown>): string {
+  const to = typeof a.to === "string" && a.to.trim() && !/^anywhere$/i.test(a.to.trim()) ? a.to.trim() : "anywhere";
+  const when = a.out ? `${a.out}${a.back ? ` to ${a.back}` : ""}` : a.windowFrom && a.windowTo ? `${a.windowFrom} to ${a.windowTo}${a.includeDay ? ` including ${a.includeDay}` : ""}` : a.month ? String(a.month) : "";
+  const nights = a.minNights || a.maxNights ? `, ${a.minNights ?? a.maxNights}${a.maxNights && a.maxNights !== a.minNights ? ` to ${a.maxNights}` : ""} nights` : "";
+  const shape = a.shape === "two" ? ", two cities" : a.shape === "loop" ? ", a loop" : a.shape === "long" ? ", a long stay" : "";
+  const direct = a.direct ? ", direct only" : "";
+  return `Searching ${to}${a.origin ? ` from ${a.origin}` : ""}${when ? `, ${when}` : ""}${nights}${shape}${direct}, cheapest first`;
+}
+
 /** Follow-up chips, chosen from the last tool the agent used. */
 export const FOLLOWUPS: Record<string, string[]> = {
+  search: ["Make it direct", "Cheaper dates", "Two cities instead", "A week later", "Make the first one a plan"],
   scan_cheapest: ["Show the best month in detail", "Direct or one stop only", "Try my other airports", "Fewer nights", "Is this a good price?"],
-  find_getaways: ["Make the first one an itinerary", "Direct flights only", "Try my other airports too", "Two-city version", "Hotels for those dates"],
+  find_getaways: ["Make the first one an itinerary", "Direct flights only", "Cheaper dates", "Two-city version", "Hotels for those dates"],
   cheapest_deals: ["Warm places only", "Hidden gems", "Direct flights only", "Next month instead", "Two-city version"],
   reprice_route: ["A day earlier or later", "Make it a week", "Is this a good price?", "Hotels for those dates"],
   wild_trip: ["Make it an itinerary", "Cheaper version", "Fewer stops, longer stays", "Skip the hub", "Show two variants"],
@@ -224,8 +239,28 @@ export const FOLLOWUPS: Record<string, string[]> = {
   walk_trips: ["Make the first loop an itinerary", "One more city", "Smaller places, fewer hubs", "Trains between cities where they exist", "A week later"],
   make_itinerary: ["Slower pace", "More food, fewer museums", "Make it cheaper", "Hotels for the first stop"],
   events_worth_travelling_for: ["Get to the first one", "Only in Europe", "Make the first one an itinerary", "Next month instead"],
-  default: ["Direct flights only", "Try my other airports too", "Two-city version", "What do I eat there?", "Hotels for those dates"],
+  default: ["Direct flights only", "Cheaper dates", "Two-city version", "What do I eat there?", "Hotels for those dates"],
 };
+
+/**
+ * The follow-up chips for the last main tool, without the ones its input already did: no
+ * "direct" chip after a direct-only search, no "two cities" chip after a two-city one, no loop
+ * chip after a loop. Helper tools (a web search, a place lookup) do not set the chips.
+ */
+export function followupsFor(tool: string | null, input?: unknown): string[] {
+  const list = FOLLOWUPS[tool ?? ""] ?? FOLLOWUPS.default;
+  const a = (input && typeof input === "object" ? input : {}) as Record<string, unknown>;
+  const filters = (a.filters && typeof a.filters === "object" ? a.filters : {}) as Record<string, unknown>;
+  const direct = a.direct === true || filters.direct === true || a.directOnly === true || a.maxStops === 0;
+  const shape = typeof a.shape === "string" ? a.shape : "";
+  return list.filter((c) => {
+    const w = c.toLowerCase();
+    if (direct && /direct/.test(w) && !/one stop/.test(w)) return false;
+    if (shape === "two" && /two[- ]cit/.test(w)) return false;
+    if (shape === "loop" && /one more city|loop/.test(w) && !/itinerary/.test(w)) return false;
+    return true;
+  });
+}
 
 // ---------------------------------------------------------------------------------------
 // The UI event bus, as the chat speaks it (the globe and the shell listen).
@@ -286,7 +321,15 @@ export type WalkLiveLine =
  */
 export type WalkLiveDetail = { id: string; params?: WalkQuery; lines: WalkLiveLine[] };
 
+/** `atlas:search`: fill the search bar with this query and run it (the shell listens; the chat and the command line
+ * dispatch it). */
+export type SearchDetail = { query: SearchQuery };
+/** `atlas:trip`: open the trip page of one result. */
+export type TripDetail = { trip: TripResult };
+
 export type AtlasEventMap = {
+  "atlas:search": SearchDetail;
+  "atlas:trip": TripDetail;
   "atlas:route": RouteDetail;
   "atlas:route-result": RouteResultDetail;
   "atlas:itinerary": ItineraryDetail;

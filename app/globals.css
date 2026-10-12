@@ -3767,3 +3767,51 @@ textarea.search.wishes {
     display: none;
   }
 }
+
+/* ---------- the one search in the panel (components/Panel.tsx) ---------- */
+/* The Search tab (bar, Advanced drawer, chips and the list) scrolls as one column inside the panel. */
+.panel .searchwrap {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  margin: 0 -8px;
+  padding: 0 8px 8px;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.22) transparent;
+}
+.panel .searchwrap > * {
+  flex: 0 0 auto;
+}
+/* The trip page scrolls on its own once its parent gives it a height. */
+.panel .trippagewrap {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+.panel .mytrips {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.savedsearch {
+  cursor: pointer;
+}
+.savedsearch:focus-visible {
+  outline: 2px solid var(--mint);
+  outline-offset: 2px;
+}
+.savedsearch .name {
+  white-space: normal;
+}
+.savedsearch .meta .iconbtn {
+  opacity: 0.6;
+}
+.savedsearch:hover .meta .iconbtn,
+.savedsearch .meta .iconbtn:focus-visible {
+  opacity: 1;
+}

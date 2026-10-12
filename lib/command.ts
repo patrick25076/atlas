@@ -10,6 +10,11 @@
 // search, "/wild sea 21" is a loop. The first suggestion is the best guess; an `ask`
 // suggestion (hand the words to the chat agent) always closes the list, and a plain question
 // ("is Porto nice in October") is only that.
+//
+// toSearchQuery (at the end) turns a command into the one search's SearchQuery (lib/trip-result.ts), so the shell
+// runs every search-shaped line through the Search tab. Type-only imports: nothing reaches the browser bundle.
+import type { SearchQuery } from "./trip-result";
+import type { Prefs } from "./prefs";
 
 export type Command =
   | { kind: "route"; from?: string; to: string; depart?: string; nights?: number; oneWay?: boolean; flex?: number; label: string }
@@ -1204,4 +1209,144 @@ export function parseCommand(text: string, today: string): Command[] {
     return finish();
   }
   return finish();
+}
+
+// ---------------------------------------------------------------------------------------
+// The one search (docs/plans/one-search.md): every command kind that searches becomes one SearchQuery, so the shell
+// fills the search bar and runs it (`atlas:search`) instead of opening a separate mode. Pure like the rest of this
+// file: the places stay the words typed, and the caller hands in where the traveller is and, when it can, a way to
+// place a typed "from" (the shell has the gazetteer; this file does not).
+
+/** Where a search leaves from, as SearchQuery['from'] wants it. */
+export type SearchHere = { label: string; lat: number; lon: number; airports: string[]; home: string };
+/** What toSearchQuery needs besides the command: the traveller's place and day, their trip style, and optional
+ * resolvers for a typed start ("loop from Cluj") and for what a typed destination is (a country, a region). */
+export type SearchCtx = {
+  here: SearchHere;
+  today: string;
+  prefs?: Prefs;
+  /** A typed start as a place with airports; null when it cannot be placed (the search then leaves from `here`). */
+  resolve?: (name: string) => SearchHere | null;
+  /** What a typed destination is; without it every name is a place and the search engine decides. */
+  destination?: (name: string) => SearchQuery["to"] | null;
+};
+
+/** The SearchQuery a command stands for, or null for the kinds that are not a search (a place page, an itinerary,
+ * the trip style, the guide, a question for the chat). Each choice follows the engine table in the plan. */
+export function toSearchQuery(cmd: Command, ctx: SearchCtx): SearchQuery | null {
+  const day = ISO_RE.test(ctx.today) ? ctx.today : new Date().toISOString().slice(0, 10);
+  const fromOf = (name?: string): SearchQuery["from"] => (name && ctx.resolve?.(name)) || ctx.here;
+  const toOf = (name?: string): SearchQuery["to"] => {
+    const n = (name ?? "").trim();
+    if (!n || /^(?:anywhere|everywhere|somewhere)$/i.test(n)) return { kind: "anywhere" };
+    return ctx.destination?.(n) ?? { kind: "place", name: n };
+  };
+  const countryTo = (name: string): SearchQuery["to"] => ctx.destination?.(name) ?? { kind: "country", name };
+  // The trip style with this line's own words over it ("2 nights a stop", "unique", "not Germany"): the line wins
+  // for this search only, the saved style stays as it is.
+  const styled = (over: Partial<Prefs>): Prefs | undefined => {
+    const given = Object.fromEntries(Object.entries(over).filter(([, v]) => v !== undefined)) as Partial<Prefs>;
+    if (!Object.keys(given).length) return ctx.prefs;
+    const base: Prefs = ctx.prefs ?? STYLE_DEFAULTS;
+    return { ...base, ...given, avoid: [...new Set([...base.avoid, ...(given.avoid ?? [])])] };
+  };
+  const withPrefs = (q: SearchQuery, p: Prefs | undefined): SearchQuery => (p ? { ...q, prefs: p } : q);
+  const nightsOf = (a?: number, b?: number): [number, number] | undefined => {
+    const lo = a ?? b;
+    const hi = b ?? a;
+    return lo && hi ? [lo, Math.max(lo, hi)] : undefined;
+  };
+  const npsPrefs = (nps: number | [number, number] | undefined): [number, number] | undefined => (nps == null ? undefined : Array.isArray(nps) ? nps : [nps, nps]);
+  // A pace word stands for nights a place only when none were typed (the same rule the walk and the wild loop use).
+  const paceNights = (pace?: "slow" | "packed"): [number, number] | undefined => (pace === "slow" ? [3, 4] : pace === "packed" ? [1, 2] : undefined);
+
+  switch (cmd.kind) {
+    case "route": {
+      if (!cmd.to.trim()) return null;
+      const q: SearchQuery = { from: fromOf(cmd.from), to: toOf(cmd.to), when: { kind: "anytime" } };
+      if (cmd.depart) {
+        // "flexible" is a window around the day with the stay inside it; an exact day is the dates themselves.
+        if (cmd.flex != null && cmd.flex > 0) q.when = { kind: "window", from: maxDay(day, addDays(cmd.depart, -cmd.flex)), to: addDays(cmd.depart, cmd.flex + (cmd.oneWay ? 0 : (cmd.nights ?? 0))) };
+        else q.when = { kind: "dates", out: cmd.depart, ...(cmd.nights && !cmd.oneWay ? { back: addDays(cmd.depart, cmd.nights) } : {}) };
+      }
+      if (cmd.nights && !cmd.oneWay) q.nights = [cmd.nights, cmd.nights];
+      if (cmd.oneWay) q.oneWay = true;
+      return withPrefs(q, ctx.prefs);
+    }
+    case "getaways": {
+      const q: SearchQuery = { from: ctx.here, to: toOf(cmd.where), when: windowOf(cmd.from, cmd.to) };
+      const n = nightsOf(cmd.minNights, cmd.maxNights);
+      if (n) q.nights = n;
+      if (cmd.maxHours || cmd.maxPrice) q.filters = { ...(cmd.maxHours ? { maxLegHours: cmd.maxHours } : {}), ...(cmd.maxPrice ? { maxPrice: cmd.maxPrice } : {}) };
+      return withPrefs(q, ctx.prefs);
+    }
+    case "events":
+      // Events are a filter and a badge on the one list: anywhere (or the place named) in the window, events on.
+      return withPrefs({ from: ctx.here, to: toOf(cmd.where), when: windowOf(cmd.from, cmd.to), filters: { eventsOn: true } }, ctx.prefs);
+    case "walk": {
+      // A loop of cheap hops: shape loop (two when the line says two cities), the first city named as the place it
+      // goes through, a single country as the destination. Further must-include cities are the chat's walk_trips,
+      // which the one search does not express.
+      const must = cmd.mustInclude ?? [];
+      const to: SearchQuery["to"] = must.length ? toOf(must[0]) : cmd.countries?.length === 1 ? countryTo(cmd.countries[0]) : { kind: "anywhere" };
+      const q: SearchQuery = { from: fromOf(cmd.origin), to, when: windowOf(cmd.from, cmd.to), shape: cmd.maxStops === 2 ? "two" : "loop" };
+      const n = nightsOf(cmd.minNights, cmd.maxNights);
+      if (n) q.nights = n;
+      const cities = cmd.maxStops ? (Math.min(3, Math.max(1, cmd.maxStops)) as 1 | 2 | 3) : undefined;
+      const trains = cmd.ground != null && cmd.ground >= GROUND_PREFER_MIN;
+      if (cities || trains) q.filters = { ...(cities ? { cities } : {}), ...(trains ? { trainsOk: true } : {}) };
+      const p = styled({
+        nightsPerPlace: npsPrefs(cmd.nightsPerStop) ?? paceNights(cmd.pace),
+        pace: cmd.pace,
+        taste: cmd.style === "unique" ? "unique" : undefined,
+        avoid: cmd.avoid?.length ? cmd.avoid : undefined,
+        groundOk: cmd.ground === 0 ? false : undefined,
+      });
+      return withPrefs(q, p);
+    }
+    case "wild": {
+      // The Advanced drawer's wild loop: a region key and the nights (14 when unsaid, 5 to 90). The one search's wild
+      // loop takes a region only, so countries typed make a loop kept to the first country (the query has one
+      // destination; a second country is not carried, the chat's wild_trip takes a list).
+      const nights = Math.min(90, Math.max(5, cmd.nights ?? 14));
+      const countries = cmd.countries ?? [];
+      const region = cmd.region ?? "sea";
+      const q: SearchQuery = countries.length
+        ? { from: ctx.here, to: countryTo(countries[0]), when: { kind: "anytime" }, nights: [nights, nights], shape: "loop" }
+        : { from: ctx.here, to: { kind: "region", key: region }, when: { kind: "anytime" }, nights: [nights, nights], shape: "loop", advanced: { wild: { region, nights } } };
+      const p = styled({
+        nightsPerPlace: npsPrefs(cmd.nightsPerStop) ?? paceNights(cmd.pace),
+        pace: cmd.pace,
+        taste: cmd.style === "unique" ? "unique" : undefined,
+        groundOk: cmd.ground === 0 ? false : undefined,
+      });
+      return withPrefs(q, p);
+    }
+    case "longstay": {
+      const months = cmd.months ?? 2;
+      const to: SearchQuery["to"] = cmd.countries?.length ? countryTo(cmd.countries[0]) : cmd.region ? { kind: "region", key: cmd.region } : { kind: "anywhere" };
+      return withPrefs({ from: ctx.here, to, when: { kind: "anytime" }, shape: "long", advanced: { longStay: { months } } }, ctx.prefs);
+    }
+    case "place":
+    case "itinerary":
+    case "prefs":
+    case "help":
+    case "ask":
+      return null;
+  }
+}
+
+/** The trip style's defaults (lib/prefs.ts DEFAULT_PREFS, copied so this file stays free of imports a pure parser
+ * does not need at run time); only used when a line changes the style and the caller sent none. */
+const STYLE_DEFAULTS: Prefs = { nightsPerPlace: [2, 3], pace: "balanced", tradeoff: "price", taste: "mixed", avoid: [], groundOk: true };
+/** The later of two calendar days. */
+const maxDay = (a: string, b: string) => (a > b ? a : b);
+/** A typed window as SearchQuery['when']: a whole month is a month, one day starts a week with that day included,
+ * anything else a window; nothing typed is anytime (the price calendar and the graph's everywhere). */
+function windowOf(from?: string, to?: string): SearchQuery["when"] {
+  if (!from) return { kind: "anytime" };
+  if (!to || to === from) return { kind: "window", from, to: addDays(from, 7), include: from };
+  const [y, m] = from.split("-").map(Number);
+  if (from.endsWith("-01") && to === iso(y, m, monthEnd(y, m))) return { kind: "month", month: from.slice(0, 7) };
+  return { kind: "window", from, to };
 }

@@ -37,12 +37,18 @@
 //              cities, price_insight like with like and two prices in one turn, dates read from web text (ranges,
 //              26.10.), an itinerary through Torun priced with a remembered way home, the walk's params for the map, no
 //              Kaliningrad from Sopot, the prompt's way-home rule. Zero Kiwi searches.
-// --only=command,dispatch,itinerary,walk,prefs,owner runs just those; --only=tools just the live table.
+//   search     the one search: toSearchQuery (lib/command.ts) on typed lines, every query it builds passing the
+//              Search tab's own checks; the chat's search tool read through the trace (a window with a day to
+//              include, a country, a month, a region, a town, a named start, the filters, the budget); an unknown
+//              place and a group without dates as notes; the budget-0 path (nothing leaves, the nightly graph and the
+//              memory answer); make_itinerary from last_search; the prompt's one-search rule. Zero Kiwi searches.
+// --only=command,dispatch,itinerary,walk,prefs,owner,search runs just those; --only=tools just the live table.
 import { atlasTools, chatContext, chatPrefs, chatSystem, dateInText, parseDay, rememberOutput, UNIQUE_WISHES, type AgentContext } from "../lib/agent-tools";
 import type { Prefs } from "../lib/prefs";
-import { parseCommand, type Command } from "../lib/command";
+import { parseCommand, toSearchQuery, type Command, type SearchHere } from "../lib/command";
+import { parseSearchQuery, type SearchQuery, type TripResult } from "../lib/trip-result";
 import { WALK_PARAM_KEYS, walkQueryString, type WalkQuery } from "../lib/ui-types";
-import { eventCommand, eventRoute, eventTripDays, routeDetail, routeResultDetail, walkCommandQuery, walkResultDetail, walkWindow, type ChatEvent } from "../lib/chat-widgets";
+import { eventCommand, eventRoute, eventTripDays, routeDetail, routeResultDetail, walkCommandQuery, walkResultDetail, walkWindow, type ChatEvent, type SearchDetail } from "../lib/chat-widgets";
 import { skeletonFromDeal, skeletonFromRoute, skeletonFromWalk, type Itinerary } from "../lib/itinerary";
 import type { WalkLoop, WalkResult } from "../lib/graph-walk";
 import type { RouteResult } from "../lib/route-finder";
@@ -926,6 +932,137 @@ if (want("owner")) {
     for (const d of days) console.log(`    ${d.day}  ${d.direct ? `${d.direct.from}-${d.direct.to} ${d.direct.price} EUR ${d.direct.carrier}` : d.none ?? "-"}`);
     verdict("way_home live: direct only", !r.error && sent() - t0 <= cap && (!!bd || /not proof/.test(String(r.note ?? ""))), `${bd ? `best direct ${bd.day} ${bd.from}-${bd.to} ${bd.price} EUR ${bd.carrier}` : String(r.note ?? r.error).slice(0, 50)}; ${sent() - t0} searches`, sent() - t0);
   }
+  console.log("");
+}
+
+// ---------------------------------------------------------------------------------------
+// search: the one search (docs/plans/one-search.md) in the chat and the command line, zero Kiwi searches. The command
+// line's toSearchQuery on fixed lines; the search tool's query read through the trace (dates, a window with a day to
+// include, a country, a region, a town, a named start, the filters, the budget); the query checked by the same rules
+// as the Search tab's route; the budget-0 path (nothing may leave, the graph and the memory still answer); a search
+// result remembered for make_itinerary (last_search); the prompt's one-search rule.
+if (want("search")) {
+  console.log("the one search (toSearchQuery, the search tool), zero Kiwi searches:");
+  const before = sent();
+  const T = "2026-10-12";
+  const here: SearchHere = { label: "Brașov", lat: 45.657, lon: 25.601, airports: ["GHV", "SBZ", "OTP"], home: "RO" };
+  const sctx = { here, today: T };
+  const first = (line: string) => parseCommand(line, T)[0];
+  {
+    const r = toSearchQuery(first("Brasov to Lisbon 14 Nov 4 nights"), sctx);
+    verdict("toSearchQuery: route", r?.to.kind === "place" && (r.to as { name: string }).name === "Lisbon" && r.when.kind === "dates" && r.when.out === "2026-11-14" && r.when.back === "2026-11-18" && r.nights?.[0] === 4, JSON.stringify(r?.when));
+    const ow = toSearchQuery(first("Bucharest -> Rome one way"), sctx);
+    verdict("toSearchQuery: one way", ow?.oneWay === true && !ow.nights && ow.when.kind === "anytime", JSON.stringify({ oneWay: ow?.oneWay, when: ow?.when }));
+    const m = toSearchQuery(first("lisbon in november"), sctx);
+    verdict("toSearchQuery: a month", m?.when.kind === "month" && m.when.month === "2026-11", JSON.stringify(m?.when));
+    const ev = toSearchQuery(first("events in february"), sctx);
+    verdict("toSearchQuery: events", ev?.filters?.eventsOn === true && ev.to.kind === "anywhere" && ev.when.kind === "month", JSON.stringify({ f: ev?.filters, when: ev?.when }));
+    const g = toSearchQuery(first("getaways under €100 next weekend"), sctx);
+    verdict("toSearchQuery: getaways", g?.filters?.maxPrice === 100 && g.when.kind === "window", JSON.stringify({ f: g?.filters, when: g?.when }));
+    const w = toSearchQuery(first("loop from Brasov 20 to 30 Oct 5 to 6 nights 2 nights a stop"), sctx);
+    verdict("toSearchQuery: a loop", w?.shape === "loop" && w.nights?.join() === "5,6" && w.prefs?.nightsPerPlace.join() === "2,2" && w.when.kind === "window" && w.when.from === "2026-10-20", JSON.stringify({ shape: w?.shape, nights: w?.nights, nps: w?.prefs?.nightsPerPlace, when: w?.when }));
+    const two = toSearchQuery(first("2 cities 4 nights not touristy"), sctx);
+    verdict("toSearchQuery: two cities", two?.shape === "two" && two.filters?.cities === 2 && two.prefs?.taste === "unique", JSON.stringify({ shape: two?.shape, f: two?.filters, taste: two?.prefs?.taste }));
+    const wild = toSearchQuery(first("/wild sea 21"), sctx);
+    verdict("toSearchQuery: wild", wild?.advanced?.wild?.region === "sea" && wild.advanced.wild.nights === 21 && wild.to.kind === "region", JSON.stringify(wild?.advanced));
+    const ls = toSearchQuery(first("/stay thailand 2 months"), sctx);
+    verdict("toSearchQuery: long stay", ls?.advanced?.longStay?.months === 2 && ls.shape === "long" && ls.to.kind === "country", JSON.stringify({ adv: ls?.advanced, to: ls?.to }));
+    const none = ["/place Porto", "itinerary Lisbon 3 nights from 2026-11-14", "/style", "is Porto nice in October"].map((l) => toSearchQuery(first(l), sctx));
+    verdict("toSearchQuery: not a search", none.every((x) => x === null), "a place page, an itinerary, the style and a question are null");
+    // Every query it builds passes the Search tab's own checks (lib/trip-result.ts parseSearchQuery).
+    const lines = ["Brasov to Lisbon 14 Nov 4 nights", "lisbon in november", "events in february", "loop from Brasov 20 to 30 Oct 6 days", "/wild vietnam, laos 18", "/stay sea 3", "Brasov to Lisbon on 14 Nov flexible", "3 cities in 6 days"];
+    const bad = lines.map((l) => [l, toSearchQuery(first(l), sctx)] as const).map(([l, q]) => [l, q ? parseSearchQuery(q) : { error: "null" }] as const).filter(([, p]) => "error" in p);
+    verdict("toSearchQuery: valid queries", !bad.length, bad.length ? `${bad[0][0]}: ${(bad[0][1] as { error: string }).error}` : `${lines.length} lines, every query passes parseSearchQuery`);
+  }
+  {
+    // The tool's query, read through the trace: the engine never runs, nothing leaves.
+    tools = atlasTools(ctx) as unknown as Tools;
+    const q = async (input: Record<string, unknown>) => (await dry("search", input))?.params.query as SearchQuery | undefined;
+    const d = await dry("search", { minNights: 3, maxNights: 5, windowFrom: plus(10), windowTo: plus(49), includeDay: plus(14) });
+    const s1 = d?.params.query as SearchQuery | undefined;
+    verdict("search: window and a day", d?.engine === "search" && s1?.when.kind === "window" && s1.when.from === plus(10) && s1.when.include === plus(14) && s1.nights?.join() === "3,5" && s1.to.kind === "anywhere" && s1.from.airports.join() === "GHV,SBZ,OTP" && d.leaked === 0, JSON.stringify({ when: s1?.when, nights: s1?.nights }));
+    verdict("search: budget", s1?.budget === Math.min(25, ctx.budget!.max - ctx.budget!.used), `budget ${s1?.budget}`);
+    const pt = await q({ to: "Portugal", month: "November" });
+    verdict("search: a country, a month", pt?.to.kind === "country" && (pt.to as { code?: string }).code === "PT" && pt.when.kind === "month" && /^\d{4}-11$/.test(pt.when.month), JSON.stringify({ to: pt?.to, when: pt?.when }));
+    const sea = await q({ to: "Southeast Asia", minNights: 14, maxNights: 21 });
+    verdict("search: a region", sea?.to.kind === "region" && (sea.to as { key: string }).key === "sea", JSON.stringify(sea?.to));
+    // The Search tab's continents are regions too, checked before any place lookup ("Asia" is also a village).
+    const eu = await q({ to: "Europe", month: "November" });
+    const asia = await q({ to: "Asia", month: "December" });
+    verdict("search: Europe and Asia", eu?.to.kind === "region" && (eu.to as { key: string }).key === "europe" && asia?.to.kind === "region" && (asia.to as { key: string }).key === "asia", JSON.stringify({ eu: eu?.to, asia: asia?.to }));
+    const town = await q({ to: "Torun", out: plus(20), back: plus(23) });
+    verdict("search: a town", town?.to.kind === "place" && /Toru/.test((town.to as { name: string }).name) && town.when.kind === "dates" && town.when.back === plus(23), JSON.stringify({ to: town?.to, when: town?.when }));
+    const cluj = await q({ origin: "Cluj", to: "Lisbon", direct: true, maxPrice: 200, shape: "two" });
+    verdict("search: a start and filters", cluj?.from.airports.includes("CLJ") === true && cluj.filters?.direct === true && cluj.filters.maxPrice === 200 && cluj.shape === "two", JSON.stringify({ from: cluj?.from.label, ap: cluj?.from.airports, f: cluj?.filters, shape: cluj?.shape }));
+    const wild = await q({ to: "anywhere", wild: { region: "Balkans", nights: 14 } });
+    verdict("search: a wild loop", wild?.advanced?.wild?.region === "balkans" && wild.advanced.wild.nights === 14, JSON.stringify(wild?.advanced));
+    const past = await q({ out: "2026-01-02", back: "2026-01-06" });
+    verdict("search: a past day moved", past?.when.kind === "dates" && past.when.out >= today, JSON.stringify(past?.when));
+    // An unknown place is a note with close matches, a group without dates a note that says what is missing.
+    const spentTools = atlasTools({ ...ctx, budget: { used: 0, max: 0 } }) as unknown as Tools;
+    const run = async (t: Tools, input: unknown) => (await drain(await t.search!.execute!(input, { toolCallId: "search-check", messages: [] }))) as Record<string, unknown>;
+    const u = await run(spentTools, { to: "Lisbonn" });
+    verdict("search: unknown place", !u.error && /close matches|Lisbon/.test(String(u.note ?? "")), String(u.note ?? u.error).slice(0, 66));
+    const sc = await run(spentTools, { to: "Scandinavia" });
+    verdict("search: Scandinavia", !sc.error && /not a region the search takes.*Norway/.test(String(sc.note ?? "")), String(sc.note ?? sc.error).slice(0, 66));
+    const grp = await run(spentTools, { group: [{ name: "Ana", origins: ["Cluj"] }, { name: "Dan", origins: ["Iasi"] }], to: "Lisbon" });
+    verdict("search: a group without dates", !grp.error && /free window|free dates/.test(String(grp.note ?? "")), String(grp.note ?? grp.error).slice(0, 66));
+    // With the turn's budget spent the search still answers (the nightly graph, the fare memory) and sends nothing.
+    const b0 = sent();
+    const z = await run(spentTools, { minNights: 3, maxNights: 5, windowFrom: plus(10), windowTo: plus(49), includeDay: plus(14) });
+    const zl = sent() - b0;
+    verdict("search: budget 0", !z.error && zl === 0 && z.searched === 0 && Array.isArray(z.results) && !!z.query && !/rate-limited|few minutes/.test(String(z.note ?? "")), `${zl} sent; ${String(z.count ?? 0)} results from ${String(z.source)}; ${String(z.note ?? z.error ?? "").slice(0, 40)}`);
+    // What the model reads: no raw TripResults, the query kept (so "make it direct" refines it).
+    const rows = (z.results as Record<string, unknown>[] | undefined) ?? [];
+    const raw = (z.raw as unknown[] | undefined) ?? [];
+    // A restored thread keeps only the rows, so each stop keeps its point; the query handed on has no turn budget.
+    const pts = rows.flatMap((r) => (r.stops as { lat?: number; lon?: number }[] | undefined) ?? []);
+    verdict("search: rows keep points", pts.every((p) => typeof p.lat === "number" && typeof p.lon === "number" && (p.lat !== 0 || p.lon !== 0)) && (z.query as SearchQuery | undefined)?.budget === undefined, `${pts.length} stops, all placed; query budget ${String((z.query as SearchQuery | undefined)?.budget)}`);
+    verdict("search: rows and raw", rows.length <= 6 && raw.length <= 12 && rows.every((r) => typeof r.route === "string" && typeof r.price === "number"), `${rows.length} rows, ${raw.length} raw`);
+  }
+  {
+    // A search result remembered and planned (make_itinerary from last_search), through the trace: no model call.
+    const trip: TripResult = {
+      id: "two-city:warsaw-gdansk:2026-10-24",
+      kind: "two-city",
+      title: "Warsaw and Gdańsk",
+      price: 120,
+      hours: 9,
+      stops: [
+        { name: "Warsaw", code: "WAW", country: "PL", lat: 52.23, lon: 21.01, arrive: "2026-10-24", leave: "2026-10-26", nights: 2 },
+        { name: "Gdańsk", code: "GDN", country: "PL", lat: 54.35, lon: 18.65, arrive: "2026-10-26", leave: "2026-10-29", nights: 3 },
+      ],
+      legs: [
+        { kind: "fly", from: "OTP", fromName: "Bucharest", to: "WAW", toName: "Warsaw", date: "2026-10-24", price: 45, url: "https://www.kiwi.com/a" },
+        { kind: "train", from: "WAW", fromName: "Warsaw", to: "GDN", toName: "Gdańsk", date: "2026-10-26", price: null, estimated: true },
+        { kind: "fly", from: "GDN", fromName: "Gdańsk", to: "OTP", toName: "Bucharest", date: "2026-10-29", price: 75, url: "https://www.kiwi.com/b" },
+      ],
+      out: "2026-10-24",
+      back: "2026-10-29",
+      nights: 5,
+      direct: true,
+      badges: ["direct"],
+      why: ["the cheapest two cities"],
+      source: "graph",
+      engine: "graph",
+      urls: ["https://www.kiwi.com/a", "https://www.kiwi.com/b"],
+    };
+    rememberOutput(ctx, "search", { results: [{ id: trip.id, price: 120, route: "x" }], raw: [trip] });
+    tools = atlasTools(ctx) as unknown as Tools;
+    const d = await dry("make_itinerary", { from: "last_search" });
+    const stops = (d?.params.stops as string[] | undefined) ?? [];
+    verdict("itinerary: last_search", d?.engine === "generateItinerary" && stops.some((x) => /Warsaw/.test(x)) && stops.some((x) => /Gda/.test(x)) && d.leaked === 0, `stops ${stops.join(",")}`);
+    ctx.recent?.delete("search");
+    ctx.recent?.delete("fares");
+  }
+  {
+    const sys = chatSystem(chatContext({ origin: { lat: 45.657, lon: 25.601, label: "Brasov" }, gateways: ["GHV", "SBZ", "OTP"], home: "RO", today }));
+    verdict("prompt: one search", /The app is one search/.test(sys) && /call search ONCE/.test(sys) && /make it direct" is the same query with direct true/.test(sys) && /walk_trips with mustInclude/.test(sys), "one query, one call, refine it, must-include through the walk");
+    // The bus details the chat sends for a search and a trip.
+    const sd: SearchDetail = { query: { from: { label: "Brașov", lat: 45.657, lon: 25.601, airports: ["GHV"], home: "RO" }, to: { kind: "anywhere" }, when: { kind: "anytime" } } };
+    verdict("bus: atlas:search", !("error" in parseSearchQuery(sd.query)), "the detail carries a query the Search tab accepts");
+  }
+  verdict("search: no search left", sent() === before, `${sent() - before} Kiwi searches sent by the search cases`);
   console.log("");
 }
 

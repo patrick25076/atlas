@@ -12,6 +12,9 @@
 //   atlas itinerary Lisbon 3 nights from 2026-11-14
 //   atlas wild sea 14 nights --nights-per-place 2-3 --taste unique
 //   atlas ask "is Porto nice in October"
+//   atlas search Lisbon in november
+//   atlas search --window 2026-10-22..2026-11-30 --include 2026-10-26 --nights 3-5 --live-cap 0
+//   atlas search loop from Brasov 20 to 30 Oct 6 days --direct
 //   atlas style
 //   atlas help
 // Flags:
@@ -21,6 +24,10 @@
 //   --today YYYY-MM-DD       the calendar day the words are read against (default today)
 //   --json                   print the raw tool answer instead of the tables
 //   --all                    print every suggestion parseCommand made, then run the first
+// The one search (atlas search ...): the words as the command line reads them, then these, which win:
+//   --to Lisbon|Portugal|sea|anywhere   --out D --back D   --window D..D --include D   --month YYYY-MM
+//   --nights 3-5   --one-way   --shape any|return|two|loop|long   --direct   --trains   --events
+//   --cities 1|2|3   --max-price N   --query '<SearchQuery as JSON>'
 // The trip style (lib/prefs.ts), the defaults every tool starts from, as in the app's Trip style:
 //   --nights-per-place 2-3   nights in each place, a number or a range (default 2-3)
 //   --pace slow|balanced|packed          (default balanced)
@@ -35,8 +42,13 @@
 // spend from, and a command whose usual cost is above it runs from stored data instead.
 import { generateText, hasToolCall, stepCountIs } from "ai";
 import { createAmazonBedrock } from "@ai-sdk/amazon-bedrock";
-import { atlasTools, chatContext, chatSystem, UNIQUE_WISHES, type AgentContext } from "../lib/agent-tools";
-import { COMMAND_HINTS, GROUND_PREFER_MIN, parseCommand, type Command } from "../lib/command";
+import { atlasTools, chatContext, chatSystem, searchStream, UNIQUE_WISHES, type AgentContext, type SearchFinal } from "../lib/agent-tools";
+import { COMMAND_HINTS, GROUND_PREFER_MIN, parseCommand, toSearchQuery, type Command, type SearchHere } from "../lib/command";
+import { parseSearchQuery, type SearchQuery } from "../lib/trip-result";
+import { REGIONS } from "../lib/wild";
+import citiesJson from "../public/data/cities.json";
+import countriesJson from "../public/data/countries.json";
+import type { City, CountryInfo } from "../lib/types";
 import { DEFAULT_PREFS, prefsLine, prefsSummary, sameAsDefault } from "../lib/prefs";
 import { parseNightsRange } from "../lib/wild";
 import { kiwiStats } from "../lib/kiwi";
@@ -55,7 +67,7 @@ process.removeAllListeners("warning");
 const argv = process.argv.slice(2);
 const flags = new Map<string, string | true>();
 const words: string[] = [];
-const VALUED = new Set(["from", "airports", "live-cap", "today", "nights-per-place", "pace", "tradeoff", "taste", "avoid", "max-flight-hours", "engine"]);
+const VALUED = new Set(["from", "airports", "live-cap", "today", "nights-per-place", "pace", "tradeoff", "taste", "avoid", "max-flight-hours", "engine", "to", "out", "back", "window", "include", "month", "nights", "shape", "max-price", "cities", "query"]);
 for (let i = 0; i < argv.length; i++) {
   const a = argv[i];
   const m = a.match(/^--([a-z-]+)(?:=(.*))?$/);
@@ -427,15 +439,142 @@ async function runAsk(text: string) {
   out(dim(`tools used: ${used.length ? used.join(", ") : "none"}; ${r.steps.length} steps; ${Math.round((Date.now() - t0) / 1000)} s`));
 }
 
+// ---------------------------------------------------------------------------------------
+// atlas search: the one search (docs/plans/one-search.md), exactly as the Search tab and the chat's search tool run
+// it. The words are read by the command line (parseCommand, then toSearchQuery, the shell's own path), the flags
+// set what the words cannot say, and --query takes a whole SearchQuery as JSON. The run spends at most --live-cap
+// searches (the query's budget); with 0 it answers from the nightly price graph and the fare memory.
+
+const CITY_ROWS = Object.entries(citiesJson as unknown as Record<string, City>);
+const COUNTRY_ROWS = Object.entries(countriesJson as unknown as Record<string, CountryInfo>);
+const foldWord = (s: string) => s.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+/** A typed start as the search's `from`: the biggest city of that name and its airports. */
+function cityHere(name: string): SearchHere | null {
+  const q = foldWord(name);
+  const hit = CITY_ROWS.filter(([, c]) => foldWord(c.name) === q || foldWord(c.name).startsWith(`${q} `)).sort((a, b) => (b[1].pop ?? 0) - (a[1].pop ?? 0))[0];
+  return hit && hit[1].airports.length ? { label: hit[1].name, lat: hit[1].lat, lon: hit[1].lon, airports: hit[1].airports.slice(0, 4), home: "RO" } : null;
+}
+/** A typed destination: a region key or label, a country, else a place (the engines place it). */
+function destinationOf(name: string): SearchQuery["to"] | null {
+  const q = foldWord(name);
+  const region = (Object.keys(REGIONS) as (keyof typeof REGIONS)[]).find((k) => k !== "custom" && (foldWord(k) === q || foldWord(REGIONS[k].label) === q));
+  if (region) return { kind: "region", key: region };
+  const country = COUNTRY_ROWS.find(([code, c]) => foldWord(c.name) === q || code.toLowerCase() === q);
+  if (country && !CITY_ROWS.some(([, c]) => foldWord(c.name) === q)) return { kind: "country", name: country[1].name, code: country[0] };
+  return null;
+}
+const dayFlag = (k: string) => (/^\d{4}-\d{2}-\d{2}$/.test(flag(k) ?? "") ? flag(k)! : undefined);
+
+/** The query this run searches: --query as given, else the words through the command line, then the flags. */
+function searchQueryOf(text: string): { query: SearchQuery; from: string } | { error: string } {
+  const here: SearchHere = { label: origin.label, lat: origin.lat, lon: origin.lon, airports: gateways.length ? gateways : ["OTP"], home: "RO" };
+  let q: SearchQuery | null = null;
+  let from = "the flags";
+  const raw = flag("query");
+  if (raw) {
+    try {
+      const p = parseSearchQuery(JSON.parse(raw));
+      if ("error" in p) return { error: `--query: ${p.error}` };
+      q = p.query;
+      from = "--query";
+    } catch {
+      return { error: "--query must be a SearchQuery as JSON" };
+    }
+  } else if (text && !/^(?:anywhere|cheapest|the cheapest|anything)$/i.test(text)) {
+    const ctxQ = { here, today, prefs, resolve: cityHere, destination: destinationOf };
+    for (const c of parseCommand(text, today)) {
+      const got = toSearchQuery(c, ctxQ);
+      if (got) {
+        q = got;
+        from = `the words (${c.kind}: ${c.label})`;
+        break;
+      }
+    }
+    if (!q) return { error: `"${text}" is not a search the command line can read; say where and when with flags (--to, --window, --nights), or ask: atlas ask "${text}"` };
+  }
+  q ??= { from: here, to: { kind: "anywhere" }, when: { kind: "anytime" } };
+  // The flags win over the words: what a line cannot say ("including the 26th") is said here.
+  const to = flag("to");
+  if (to) q.to = /^anywhere$/i.test(to) ? { kind: "anywhere" } : (destinationOf(to) ?? { kind: "place", name: to });
+  const win = flag("window")?.split("..");
+  if (dayFlag("out")) q.when = { kind: "dates", out: dayFlag("out")!, ...(dayFlag("back") ? { back: dayFlag("back")! } : {}) };
+  else if (win && /^\d{4}-\d{2}-\d{2}$/.test(win[0] ?? "") && /^\d{4}-\d{2}-\d{2}$/.test(win[1] ?? "")) q.when = { kind: "window", from: win[0], to: win[1], ...(dayFlag("include") ? { include: dayFlag("include")! } : {}) };
+  else if (/^\d{4}-\d{2}$/.test(flag("month") ?? "")) q.when = { kind: "month", month: flag("month")! };
+  else if (dayFlag("include") && q.when.kind === "window") q.when = { ...q.when, include: dayFlag("include")! };
+  const nights = flag("nights")?.match(/^(\d{1,2})(?:-(\d{1,2}))?$/);
+  if (nights) q.nights = [Number(nights[1]), Number(nights[2] ?? nights[1])];
+  if (flags.has("one-way")) q.oneWay = true;
+  const shape = flag("shape");
+  if (shape && ["any", "return", "two", "loop", "long"].includes(shape)) q.shape = shape as SearchQuery["shape"];
+  const f = { ...q.filters };
+  if (flags.has("direct")) f.direct = true;
+  if (flags.has("trains")) f.trainsOk = true;
+  if (flags.has("events")) f.eventsOn = true;
+  const maxPrice = Number(flag("max-price"));
+  if (maxPrice > 0) f.maxPrice = Math.round(maxPrice);
+  const cities = Number(flag("cities"));
+  if (cities === 1 || cities === 2 || cities === 3) f.cities = cities;
+  if (Object.keys(f).length) q.filters = f;
+  q.prefs = q.prefs ?? prefs;
+  // The run's cap is the search's budget (the Search tab's route takes 0 to 60).
+  q.budget = Math.min(60, LIVE_CAP);
+  const checked = parseSearchQuery(q);
+  if ("error" in checked) return { error: checked.error };
+  return { query: { ...checked.query, prefs: q.prefs }, from };
+}
+
+const LEG_SIGN: Record<string, string> = { fly: "plane", train: "train", coach: "coach", ferry: "ferry", road: "drive", walk: "walk" };
+async function runSearch(text: string) {
+  const got = searchQueryOf(text);
+  if ("error" in got) return out(`Could not: ${got.error}`);
+  const q = got.query;
+  if (!JSON_OUT) {
+    out(dim(`query from ${got.from}: ${JSON.stringify({ to: q.to, when: q.when, nights: q.nights, shape: q.shape, oneWay: q.oneWay, filters: q.filters, advanced: q.advanced, budget: q.budget })}`));
+  }
+  let final: SearchFinal | null = null;
+  for await (const ev of searchStream(q, 280_000)) {
+    if ("progress" in ev) {
+      if (!JSON_OUT) out(dim(`  ... ${ev.progress}`));
+    } else final = ev.final;
+  }
+  if (!final) return out("The search ended without an answer.");
+  if (JSON_OUT) return void out(JSON.stringify({ query: q, ...final }, null, 2));
+  const where = q.to.kind === "anywhere" ? "anywhere" : q.to.kind === "region" ? q.to.key : q.to.name;
+  out(bold(`${q.from.label} to ${where}: ${final.results.length} trip${final.results.length === 1 ? "" : "s"}, cheapest first`));
+  if (!final.results.length) out("Nothing came back for this search.");
+  final.results.slice(0, 12).forEach((t, i) => {
+    out("");
+    const dates = `${t.out}${t.back ? ` to ${t.back}` : ""}, ${t.nights} night${t.nights === 1 ? "" : "s"}`;
+    out(`${i + 1}. ${bold(t.title)}  ${euro(t.price)}${t.groundPrice ? ` + ${euro(t.groundPrice)} ground (estimate)` : ""}  ${t.hours != null ? `${Math.round(t.hours)} h  ` : ""}${dates}${t.direct ? "  direct" : ""}  ${dim(`${t.source}, ${t.engine}`)}`);
+    if (t.badges.length) out(dim(`   ${t.badges.join(", ")}`));
+    const rows: string[] = [];
+    let stop = 0;
+    for (const g of t.legs) {
+      rows.push(`${LEG_SIGN[g.kind] ?? g.kind}  ${g.fromName || g.from} to ${g.toName || g.to}${g.date ? `, ${g.date}` : ""}${g.depart ? ` ${g.depart.slice(-5)}` : ""}${g.minutes ? `, ${span(g.minutes)}` : ""}${g.price != null ? `, ${euro(g.price)}` : ""}${g.estimated ? " (estimate)" : ""}${g.carrier ? `, ${g.carrier}` : ""}${g.stops ? `, ${g.stops} stop${g.stops === 1 ? "" : "s"}` : ""}`);
+      if (g.url) rows.push(dim(`  book: ${cut(g.url, 110)}`));
+      if (g.kind !== "road" && g.kind !== "walk" && stop < t.stops.length) {
+        const s = t.stops[stop++];
+        rows.push(`stay  ${s.name}, ${s.country}, ${s.nights} night${s.nights === 1 ? "" : "s"} from ${s.arrive}`);
+      }
+    }
+    rows.forEach((row, k) => out(`   ${k === rows.length - 1 ? "└─" : "├─"} ${row}`));
+    for (const w of t.why.slice(0, 3)) out(dim(`   why: ${w}`));
+  });
+  out("");
+  out(dim(`engines: ${final.engines.join(", ") || "none"}${final.graph ? "; the nightly price graph answered first" : ""}`));
+  if (final.note) out(dim(`note: ${final.note}`));
+}
+
 function help() {
   out(bold("atlas: the command line of Atlas"));
   out("");
   // "/itinerary" alone means "what is on screen", which a terminal does not have; /style and /help are below.
   const rows = COMMAND_HINTS.filter((h) => !["/itinerary", "/style", "/help"].includes(h.example)).map((h) => [`atlas ${h.example.replace(/^\//, "")}`, h.what]);
-  rows.push(["atlas ask <question>", "one turn with the agent, which picks the tools"], ["atlas style", "the trip style this run uses"], ["atlas help", "this list"]);
+  rows.push(["atlas search <words> [flags]", "the one search, as the Search tab and the chat run it: trips cheapest first"], ["atlas ask <question>", "one turn with the agent, which picks the tools"], ["atlas style", "the trip style this run uses"], ["atlas help", "this list"]);
   table(["try", "what it does"], rows, 48);
   out("");
   out("Flags: --from \"lat,lon,label\"  --airports OTP,SBZ  --live-cap N (default 12)  --today YYYY-MM-DD  --json  --all");
+  out("Search: --to Lisbon  --out D --back D  --window D..D --include D  --month YYYY-MM  --nights 3-5  --one-way  --shape two|loop  --direct  --trains  --events  --cities N  --max-price N  --query JSON");
   out("Trip style: --nights-per-place 2-3  --pace slow|balanced|packed  --tradeoff price|balanced|comfort  --taste popular|unique|mixed  --avoid dach,DE  --max-flight-hours 8  --no-ground  --engine classic");
 }
 
@@ -454,6 +593,7 @@ async function main() {
   const text = words.join(" ").trim();
   if (!text || /^(help|-h|--help|\?)$/i.test(text) || flags.has("help")) return help();
   if (/^ask\b/i.test(text)) return runAsk(text.replace(/^ask\s*/i, ""));
+  if (/^search\b/i.test(text)) return runSearch(text.replace(/^search\s*/i, ""));
   // The words after `atlas` read like the top bar's line; "itinerary ..." and "events ..."
   // work as they are, and a leading verb that names a slash command is read as one.
   const line = /^(route|events|getaways|wild|stay|place|itinerary|loop|walk|style|prefs|settings)\b/i.test(text) && !/^(events|itinerary)\b/i.test(text) ? `/${text}` : text;
