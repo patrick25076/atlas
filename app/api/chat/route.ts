@@ -2,6 +2,7 @@ import { convertToModelMessages, hasToolCall, stepCountIs, streamText, type UIMe
 import { createAmazonBedrock } from "@ai-sdk/amazon-bedrock";
 import { atlasTools, chatContext, chatSystem, rememberOutput, TURN_SEARCH_BUDGET, type AgentContext } from "@/lib/agent-tools";
 import { allowUsage, chatRateLimit } from "@/lib/usage-caps";
+import { newRun, recordTools, saveRun, small, step, withRun } from "@/lib/run-log";
 
 // POST /api/chat { messages: UIMessage[], context: { origin, gateways, home, month, today, been, prefs } }
 // The conversation with Atlas: the whole history comes with every turn (the browser keeps it),
@@ -134,17 +135,35 @@ export async function POST(request: Request) {
   const model = bedrock((process.env.ASK_MODEL ?? "us.openai.gpt-6-astra").trim());
   const system = chatSystem(ctx);
 
-  const tools = atlasTools(ctx);
+  // The run log (the engine room's Live tab): this turn's message, every tool the model called with its input,
+  // answer, time and failure, and the reply. The message is kept as typed (the owner's own private app).
+  const said = newest.role === "user" ? newest.parts.map((p) => (p.type === "text" ? p.text : "")).join(" ").trim() : "(a widget answer)";
+  const rec = newRun(request, { kind: "chat", source: "Ask", title: said.slice(0, 140) || "(empty)", input: { message: said.slice(0, 1000), turn: messages.length, origin: ctx.origin?.label, prefs: small(ctx.prefs) } });
+  const tools = recordTools(atlasTools(ctx), rec);
   // Incomplete tool calls (the traveller pressed Stop, or left the tab mid-search) are dropped
   // from the history instead of failing every later turn of the thread; `tools` lets each
   // tool's toModelOutput strip what the model does not need from past results.
-  const result = streamText({
+  const modelMessages = await convertToModelMessages(fitHistory(capUserText(slimHistory(messages))), { ignoreIncompleteToolCalls: true, tools });
+  const result = withRun(rec, () => streamText({
     model,
     system,
-    messages: await convertToModelMessages(fitHistory(capUserText(slimHistory(messages))), { ignoreIncompleteToolCalls: true, tools }),
+    messages: modelMessages,
     tools,
     stopWhen: [stepCountIs(10), hasToolCall("ask")],
     maxOutputTokens: 1400,
-  });
+    onStepFinish: (st) => {
+      if (rec && st.text?.trim()) step("say", st.text.trim().slice(0, 400), { data: { finish: st.finishReason } }, rec);
+    },
+    onFinish: async (r) => {
+      if (!rec) return;
+      rec.result = { text: r.text.slice(0, 2000), steps: r.steps.length, finish: r.finishReason, usage: small(r.totalUsage) };
+      await saveRun(rec);
+    },
+    onError: async ({ error }) => {
+      if (!rec) return;
+      rec.error = errorLine(error);
+      await saveRun(rec);
+    },
+  }));
   return result.toUIMessageStreamResponse({ onError: errorLine });
 }

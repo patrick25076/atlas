@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useRef, useState } from "react";
-import type { WalkBeamRow, WalkCandidate, WalkEvent, WalkLoop, WalkResult } from "@/lib/graph-walk";
+import type { WalkBeamRow, WalkCandidate, WalkEvent, WalkResult } from "@/lib/graph-walk";
 import { WILD_REGIONS } from "@/lib/ui-types";
 import AdminMap, { type MapDot, type MapLine } from "./AdminMap";
 import s from "./admin.module.css";
@@ -9,12 +9,26 @@ import s from "./admin.module.css";
 // Watch a loop: the graph walk with its trace on. Each depth is a column of states, the beam's kept ones solid and the
 // dropped ones faded; click one to see what it weighed: the searches made (or not), and every way out with its cost
 // split into price, hours, changes of plane and the place's worth. The map draws every edge found, the chosen ones
-// bright, the selected state's path in mint and its candidates fanned out.
+// bright, the selected state's path in mint and its candidates fanned out. WalkTrace is the drawing alone, so the
+// Live tab replays a walk the app ran with the same view.
 
-type Expand = Extract<WalkEvent, { type: "expand" }>;
-type Beam = Extract<WalkEvent, { type: "beam" }>;
-type EdgeEv = Extract<WalkEvent, { type: "edge" }>;
-type NodeEv = Extract<WalkEvent, { type: "node" }>;
+export type Expand = Extract<WalkEvent, { type: "expand" }>;
+export type Beam = Extract<WalkEvent, { type: "beam" }>;
+export type EdgeEv = Extract<WalkEvent, { type: "edge" }>;
+export type NodeEv = Extract<WalkEvent, { type: "node" }>;
+/** A loop as the trace keeps it (the engine's WalkLoop has more). */
+export type LoopLite = { id: string; title: string; total: number; nights: number; hours: number; score: number; start: string; end: string; why: string[]; stops: { code: string; name: string; nights: number; lat: number; lon: number }[] };
+export type TraceData = {
+  knobs: Record<string, string | number> | null;
+  beams: Beam[];
+  expands: Map<number, Expand>;
+  edges: EdgeEv[];
+  nodes: Map<string, NodeEv>;
+  loops: LoopLite[];
+  /** Where places are, when the trace carries them (a stored walk): code → [lon, lat, name]. */
+  places?: Record<string, [number, number, string]>;
+  origin: { lat: number; lon: number };
+};
 
 const today = () => new Date().toISOString().slice(0, 10);
 const addDays = (d: string, n: number) => new Date(Date.parse(d + "T00:00:00Z") + n * 86_400_000).toISOString().slice(0, 10);
@@ -22,20 +36,21 @@ const addDays = (d: string, n: number) => new Date(Date.parse(d + "T00:00:00Z") 
 const HOME = { label: "Brasov", lat: 45.657, lon: 25.601, gateways: "GHV,SBZ,OTP", home: "RO" };
 const COLORS = { price: "#6ff0c4", hours: "#7cc4ff", stops: "#ffb454", bonus: "#ff6b8a" };
 
+/** A stored trace (the run log's walk step) as the drawing reads it. */
+export function traceFromEvents(events: WalkEvent[], origin: { lat: number; lon: number }, loops: LoopLite[], places?: TraceData["places"]): TraceData {
+  const t: TraceData = { knobs: null, beams: [], expands: new Map(), edges: [], nodes: new Map(), loops, places, origin };
+  for (const e of events) {
+    if (e.type === "knobs") t.knobs = e.values;
+    else if (e.type === "beam") t.beams.push(e);
+    else if (e.type === "expand") t.expands.set(e.id, e);
+    else if (e.type === "edge") t.edges.push(e);
+    else if (e.type === "node") t.nodes.set(e.code, e);
+  }
+  return t;
+}
+
 export default function WalkWatch() {
-  const [f, setF] = useState({
-    ...HOME,
-    from: addDays(today(), 39),
-    to: addDays(today(), 69),
-    minNights: 14,
-    maxNights: 16,
-    nppLo: 2,
-    nppHi: 3,
-    region: "sea",
-    tradeoff: "price",
-    budget: 0,
-    must: "",
-  });
+  const [f, setF] = useState({ ...HOME, from: addDays(today(), 39), to: addDays(today(), 69), minNights: 14, maxNights: 16, nppLo: 2, nppHi: 3, region: "sea", tradeoff: "price", budget: 0, must: "" });
   const set = (p: Partial<typeof f>) => setF((x) => ({ ...x, ...p }));
   const [running, setRunning] = useState(false);
   const [knobs, setKnobs] = useState<Record<string, string | number> | null>(null);
@@ -44,11 +59,9 @@ export default function WalkWatch() {
   const [beams, setBeams] = useState<Beam[]>([]);
   const [edges, setEdges] = useState<EdgeEv[]>([]);
   const [nodes, setNodes] = useState<Map<string, NodeEv>>(new Map());
-  const [loops, setLoops] = useState<WalkLoop[]>([]);
+  const [loops, setLoops] = useState<LoopLite[]>([]);
   const [done, setDone] = useState<{ ms: number; result: WalkResult } | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [sel, setSel] = useState<number | null>(null);
-  const [selLoop, setSelLoop] = useState<string | null>(null);
   const [runKey, setRunKey] = useState("");
   const abort = useRef<AbortController | null>(null);
 
@@ -66,8 +79,6 @@ export default function WalkWatch() {
     setLoops([]);
     setDone(null);
     setError(null);
-    setSel(null);
-    setSelLoop(null);
     setRunKey(String(Date.now()));
     const q = {
       origin: { lat: Number(f.lat), lon: Number(f.lon), label: f.label },
@@ -116,91 +127,13 @@ export default function WalkWatch() {
     }
   };
 
-  // Every state seen (beam rows and expansions), for paths and the columns.
-  const states = useMemo(() => {
-    const m = new Map<number, WalkBeamRow & { kept: boolean; depth: number }>();
-    for (const b of beams) {
-      for (const r of b.dropped) if (!m.has(r.id)) m.set(r.id, { ...r, kept: false, depth: b.depth });
-      for (const r of b.kept) m.set(r.id, { ...r, kept: true, depth: b.depth });
-    }
-    return m;
-  }, [beams]);
-  // Where a city is: the nodes the walk expanded, the far ends of the edges it found, home.
-  const where = useMemo(() => {
-    const m = new Map<string, [number, number]>();
-    m.set("HOME", [Number(f.lon), Number(f.lat)]);
-    for (const e of edges) if (e.lat || e.lon) m.set(e.to, [e.lon, e.lat]);
-    for (const [k, n] of nodes) m.set(k, [n.lon, n.lat]);
-    return m;
-  }, [edges, nodes, f.lat, f.lon]);
-
-  const pathIds = (id: number | null): number[] => {
-    const out: number[] = [];
-    const seen = new Set<number>();
-    for (let x = id; x != null && x >= 0 && !seen.has(x); x = states.get(x)?.parent ?? expands.get(x)?.parent ?? null) {
-      seen.add(x);
-      out.unshift(x);
-    }
-    return out;
-  };
-  const selExpand = sel != null ? expands.get(sel) : undefined;
-  const selPath = useMemo(() => pathIds(sel), [sel, states, expands]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const { dots, lines } = useMemo(() => {
-    const dots: MapDot[] = [];
-    const lines: MapLine[] = [];
-    const seenDot = new Set<string>();
-    const dot = (code: string, color: string, size: number, label?: string) => {
-      const p = where.get(code);
-      if (!p || seenDot.has(code + color)) return;
-      seenDot.add(code + color);
-      dots.push({ id: code + color, lon: p[0], lat: p[1], color, size, label });
-    };
-    for (const e of edges.slice(0, 1500)) {
-      const a = where.get(e.from);
-      const b = e.home ? where.get("HOME") : where.get(e.to);
-      if (!a || !b) continue;
-      lines.push({ id: `${e.from}>${e.to}`, from: a, to: b, color: e.chosen ? "#7cc4ff" : "#7cc4ff", width: e.chosen ? 1.8 : 0.6, opacity: e.chosen ? 0.75 : 0.18, dashed: e.kind !== "fly" });
-    }
-    for (const [code, n] of nodes) dot(code, "#7cc4ff", 4, n.name);
-    // The selected loop, else the selected state's path, in mint.
-    const loop = selLoop ? loops.find((l) => l.id === selLoop) : undefined;
-    if (loop) {
-      const pts: [number, number][] = [[Number(f.lon), Number(f.lat)], ...loop.stops.map((x) => [x.lon, x.lat] as [number, number]), [Number(f.lon), Number(f.lat)]];
-      pts.slice(1).forEach((p, i) => lines.push({ id: `loop${i}`, from: pts[i], to: p, color: "#6ff0c4", width: 3, opacity: 1 }));
-      loop.stops.forEach((x) => dots.push({ id: `l${x.code}`, lon: x.lon, lat: x.lat, color: "#6ff0c4", size: 6, label: `${x.name} ${x.nights}n` }));
-    } else if (selPath.length) {
-      const codes = selPath.map((id) => states.get(id)?.city ?? expands.get(id)?.city ?? "");
-      for (let i = 1; i < codes.length; i++) {
-        const a = where.get(codes[i - 1]);
-        const b = where.get(codes[i]);
-        if (a && b) lines.push({ id: `p${i}`, from: a, to: b, color: "#6ff0c4", width: 3, opacity: 1 });
-      }
-      codes.forEach((c) => dot(c, "#6ff0c4", 6));
-      // Its candidates, fanned out: the winners per city brighter.
-      if (selExpand) {
-        const a = where.get(selExpand.city);
-        for (const c of selExpand.candidates) {
-          const b = where.get(c.to);
-          if (a && b) lines.push({ id: `c${c.to}${c.date}${c.price}`, from: a, to: b, color: c.best ? "#ffb454" : "#ff6b8a", width: c.best ? 1.6 : 0.8, opacity: c.best ? 0.9 : 0.4, dashed: c.kind !== "fly" });
-        }
-      }
-    }
-    return { dots, lines };
-  }, [edges, nodes, where, selPath, selExpand, selLoop, loops, states, expands, f.lat, f.lon]);
-
-  const depths = useMemo(() => {
-    const out: (WalkBeamRow & { kept: boolean; depth: number })[][] = [];
-    for (const st of states.values()) (out[st.depth] ??= []).push(st);
-    return out.map((col) => (col ?? []).sort((a, b) => Number(b.kept) - Number(a.kept) || a.priority - b.priority));
-  }, [states]);
-
+  const trace: TraceData = { knobs, beams, expands, edges, nodes, loops, origin: { lat: Number(f.lat), lon: Number(f.lon) } };
   return (
     <>
       <p className={s.lead}>
         The loop builder, step by step. From home it asks one question, <b>where is cheap from here</b>, then asks it again from each place it lands, keeps the best few half-built trips (the
         beam) and closes the ones that can still get home. Every way out gets a cost: <b>price + hours + changes of plane − what the place is worth</b>. Budget 0 replays it on what the fare
-        memory already knows, so it costs nothing; give it searches to see it ask Kiwi live.
+        memory already knows, so it costs nothing; give it searches to see it ask Kiwi live. The Live tab shows the same view for the loops the app built while you used it.
       </p>
       <div className={s.form}>
         <label className={s.field}>
@@ -266,7 +199,112 @@ export default function WalkWatch() {
         {f.budget > 0 && <span className={s.warn}>spends up to {f.budget} live Kiwi searches</span>}
       </div>
       {error && <p className={s.warn}>{error}</p>}
+      <WalkTrace
+        t={trace}
+        fitKey={runKey}
+        status={done ? `${done.result.loops.length} kept · ${done.result.searched} live searches · ${done.result.expanded} states · ${(done.ms / 1000).toFixed(1)} s` : running ? "walking…" : ""}
+        empty={running ? "Walking…" : (done?.result.note ?? "Run it to see.")}
+        lines={[...progress, ...(done?.result.considered ?? [])]}
+      />
+    </>
+  );
+}
 
+/** The drawing of a walk: knobs, the map, the loops, the beam depth by depth and the selected state's candidates. */
+export function WalkTrace({ t, fitKey, status, empty, lines }: { t: TraceData; fitKey: string; status?: string; empty?: string; lines?: string[] }) {
+  const { knobs, beams, expands, edges, nodes, loops, places, origin } = t;
+  const [sel, setSel] = useState<number | null>(null);
+  const [selLoop, setSelLoop] = useState<string | null>(null);
+
+  const states = useMemo(() => {
+    const m = new Map<number, WalkBeamRow & { kept: boolean; depth: number }>();
+    for (const b of beams) {
+      for (const r of b.dropped) if (!m.has(r.id)) m.set(r.id, { ...r, kept: false, depth: b.depth });
+      for (const r of b.kept) m.set(r.id, { ...r, kept: true, depth: b.depth });
+    }
+    return m;
+  }, [beams]);
+  // Where a city is: the trace's own list, the nodes the walk expanded, the far ends of the edges it found, home.
+  const where = useMemo(() => {
+    const m = new Map<string, [number, number]>();
+    for (const [k, v] of Object.entries(places ?? {})) m.set(k, [v[0], v[1]]);
+    m.set("HOME", [origin.lon, origin.lat]);
+    for (const e of edges) if (e.lat || e.lon) m.set(e.to, [e.lon, e.lat]);
+    for (const [k, n] of nodes) m.set(k, [n.lon, n.lat]);
+    return m;
+  }, [edges, nodes, places, origin.lat, origin.lon]);
+
+  const selExpand = sel != null ? expands.get(sel) : undefined;
+  const selPath = useMemo(() => {
+    const out: number[] = [];
+    const seen = new Set<number>();
+    for (let x: number | null = sel; x != null && x >= 0 && !seen.has(x); x = states.get(x)?.parent ?? expands.get(x)?.parent ?? null) {
+      seen.add(x);
+      out.unshift(x);
+    }
+    return out;
+  }, [sel, states, expands]);
+
+  const { dots, lines: mapLines } = useMemo(() => {
+    const dots: MapDot[] = [];
+    const lines: MapLine[] = [];
+    const seenDot = new Set<string>();
+    const dot = (code: string, color: string, size: number, label?: string) => {
+      const p = where.get(code);
+      if (!p || seenDot.has(code + color)) return;
+      seenDot.add(code + color);
+      dots.push({ id: code + color, lon: p[0], lat: p[1], color, size, label });
+    };
+    for (const e of edges.slice(0, 1500)) {
+      const a = where.get(e.from);
+      const b = e.home ? where.get("HOME") : where.get(e.to);
+      if (!a || !b) continue;
+      lines.push({ id: `${e.from}>${e.to}`, from: a, to: b, color: "#7cc4ff", width: e.chosen ? 1.8 : 0.6, opacity: e.chosen ? 0.75 : 0.18, dashed: e.kind !== "fly" });
+    }
+    // A stored walk has no edge events: the beam's states stand for them.
+    if (!edges.length) {
+      for (const st of states.values()) {
+        const parent = states.get(st.parent);
+        const a = parent ? where.get(parent.city) : where.get("HOME");
+        const b = where.get(st.city);
+        if (a && b) lines.push({ id: `s${st.id}`, from: a, to: b, color: "#7cc4ff", width: st.kept ? 1.4 : 0.6, opacity: st.kept ? 0.6 : 0.2 });
+      }
+      for (const st of states.values()) if (st.kept) dot(st.city, "#7cc4ff", 4, st.name);
+    }
+    for (const [code, n] of nodes) dot(code, "#7cc4ff", 4, n.name);
+    // The selected loop, else the selected state's path, in mint.
+    const loop = selLoop ? loops.find((l) => l.id === selLoop) : undefined;
+    if (loop) {
+      const pts: [number, number][] = [[origin.lon, origin.lat], ...loop.stops.map((x) => [x.lon, x.lat] as [number, number]), [origin.lon, origin.lat]];
+      pts.slice(1).forEach((p, i) => lines.push({ id: `loop${i}`, from: pts[i], to: p, color: "#6ff0c4", width: 3, opacity: 1 }));
+      loop.stops.forEach((x) => dots.push({ id: `l${x.code}`, lon: x.lon, lat: x.lat, color: "#6ff0c4", size: 6, label: `${x.name} ${x.nights}n` }));
+    } else if (selPath.length) {
+      const codes = selPath.map((id) => states.get(id)?.city ?? expands.get(id)?.city ?? "");
+      for (let i = 1; i < codes.length; i++) {
+        const a = where.get(codes[i - 1]);
+        const b = where.get(codes[i]);
+        if (a && b) lines.push({ id: `p${i}`, from: a, to: b, color: "#6ff0c4", width: 3, opacity: 1 });
+      }
+      codes.forEach((c) => dot(c, "#6ff0c4", 6));
+      if (selExpand) {
+        const a = where.get(selExpand.city);
+        for (const c of selExpand.candidates) {
+          const b = where.get(c.to);
+          if (a && b) lines.push({ id: `c${c.to}${c.date}${c.price}`, from: a, to: b, color: c.best ? "#ffb454" : "#ff6b8a", width: c.best ? 1.6 : 0.8, opacity: c.best ? 0.9 : 0.4, dashed: c.kind !== "fly" });
+        }
+      }
+    }
+    return { dots, lines };
+  }, [edges, nodes, where, selPath, selExpand, selLoop, loops, states, origin.lat, origin.lon]);
+
+  const depths = useMemo(() => {
+    const out: (WalkBeamRow & { kept: boolean; depth: number })[][] = [];
+    for (const st of states.values()) (out[st.depth] ??= []).push(st);
+    return out.map((col) => (col ?? []).sort((a, b) => Number(b.kept) - Number(a.kept) || a.priority - b.priority));
+  }, [states]);
+
+  return (
+    <>
       {knobs && (
         <div className={s.card} style={{ marginBottom: 14 }}>
           <h3>The knobs this run used</h3>
@@ -283,7 +321,7 @@ export default function WalkWatch() {
 
       <div className={s.grid2}>
         <div>
-          <AdminMap dots={dots} lines={lines} height={420} fitKey={runKey + (selLoop ?? "") + (sel ?? "")} />
+          <AdminMap dots={dots} lines={mapLines} height={420} fitKey={fitKey + (selLoop ?? "") + (sel ?? "")} />
           <div className={s.legend}>
             <span>
               <i style={{ background: "#7cc4ff" }} />
@@ -304,8 +342,8 @@ export default function WalkWatch() {
           </div>
         </div>
         <div className={s.card}>
-          <h3>Loops closed {done ? `· ${done.result.loops.length} kept · ${done.result.searched} live searches · ${done.result.expanded} states · ${(done.ms / 1000).toFixed(1)} s` : ""}</h3>
-          {!loops.length && <p className={s.muted}>{running ? "Walking…" : done?.result.note ?? "Run it to see."}</p>}
+          <h3>Loops closed{status ? ` · ${status}` : ""}</h3>
+          {!loops.length && <p className={s.muted}>{empty ?? "No loop closed."}</p>}
           {loops.map((l) => (
             <button key={l.id} className={s.loop} data-sel={selLoop === l.id ? 1 : 0} onClick={() => setSelLoop(selLoop === l.id ? null : l.id)}>
               <b>€{l.total}</b>
@@ -322,17 +360,16 @@ export default function WalkWatch() {
               )}
             </button>
           ))}
-          <h3 style={{ marginTop: 12 }}>What it said</h3>
-          <div className={s.progress}>
-            {progress.map((p, i) => (
-              <div key={i}>{p}</div>
-            ))}
-            {done?.result.considered.map((c, i) => (
-              <div key={`c${i}`} className={s.muted}>
-                {c}
+          {!!lines?.length && (
+            <>
+              <h3 style={{ marginTop: 12 }}>What it said</h3>
+              <div className={s.progress}>
+                {lines.map((p, i) => (
+                  <div key={i}>{p}</div>
+                ))}
               </div>
-            ))}
-          </div>
+            </>
+          )}
         </div>
       </div>
 

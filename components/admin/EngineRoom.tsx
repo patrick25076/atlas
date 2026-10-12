@@ -6,8 +6,10 @@ import { GRAPH_TABLE, MACHINE, type Node } from "./machine";
 import WalkWatch from "./WalkWatch";
 import GraphView from "./GraphView";
 import GraphTrips from "./GraphTrips";
+import LiveRuns from "./LiveRuns";
 
 // The engine room: how Atlas thinks. Five views:
+//   Live          what the app did for every search, chat turn, loop and way home, as it happens (the run log)
 //   The machine   every front door, engine and source of data, and which uses which
 //   Watch a loop  the graph walk with its trace: every candidate weighed, the beam, the loops
 //   Price graph   what last night's flight graph and the fare memory hold, city by city
@@ -15,6 +17,7 @@ import GraphTrips from "./GraphTrips";
 //   Graph trips   the Dijkstra on euros with, for each flight, the flights it was chosen over
 
 const TABS = [
+  { key: "live", label: "Live" },
   { key: "machine", label: "The machine" },
   { key: "walk", label: "Watch a loop" },
   { key: "graph", label: "Price graph" },
@@ -23,12 +26,12 @@ const TABS = [
 type Tab = (typeof TABS)[number]["key"];
 
 export default function EngineRoom() {
-  const [tab, setTab] = useState<Tab>("machine");
+  const [tab, setTab] = useState<Tab>("live");
   return (
     <div className={s.page}>
       <header className={s.head}>
         <h1>
-          Engine room<small>how Atlas thinks · local only</small>
+          Engine room<small>how Atlas thinks</small>
         </h1>
         <div className={s.tabs} role="tablist">
           {TABS.map((t) => (
@@ -42,6 +45,7 @@ export default function EngineRoom() {
         </a>
       </header>
       <main className={s.body}>
+        {tab === "live" && <LiveRuns />}
         {tab === "machine" && <Machine />}
         {tab === "walk" && <WalkWatch />}
         {tab === "graph" && <GraphView />}

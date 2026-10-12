@@ -29,8 +29,9 @@ access code._
    make iOS zoom in, every button is thumb-sized, the sheet stays above the keyboard and clear
    of the notch and the home bar, and the globe draws at 30 frames a second to save battery.
    On its side the phone gets the wide layout without the command line.
-8. **The engine room** (your machine only): run `pnpm dev` and open http://localhost:3210/admin to see how Atlas
-   thinks: every engine and what it uses, a loop being built step by step with every option it weighed, what the
+8. **The engine room**: open https://atlas-kappa-wheat.vercel.app/admin (type the owner's key once, it is
+   ATLAS_ADMIN_KEY in .env.local). The Live tab shows everything the app does as you use it, step by step; the
+   other tabs show how Atlas thinks: every engine and what it uses, a loop being built step by step with every option it weighed, what the
    price graph knows city by city and day by day, and why each flight of a trip beat the others. Notes in
    docs/plans/engine-room.md.
 

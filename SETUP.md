@@ -267,3 +267,10 @@ from the exact commit on GitHub (Claude does it with `vercel api /v13/deployment
 2. GitHub → Settings → Applications → Vercel → Configure: make sure the app still has access to the `atlas`
    repository (it became public on 10 October; access set to "selected repositories" can drop it).
 3. Push any small commit and check that a deployment appears under the commit on GitHub within a minute.
+
+## 18. The engine room on the live site (done 12 October)
+
+`/admin` on the live site asks for the owner's key once per browser (90 days). The key is `ATLAS_ADMIN_KEY`:
+in `.env.local` (copy it from there) and in Vercel's production env. To change it, set a new value in both
+places and redeploy; every browser is then signed out of the engine room. To turn the run log off without
+touching the code, set `ATLAS_RUN_LOG=0` on Vercel.

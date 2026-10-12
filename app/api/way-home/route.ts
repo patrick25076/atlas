@@ -1,4 +1,5 @@
 import { TtlLru } from "@/lib/memo";
+import { newRun, saveRun, small, step, withRun } from "@/lib/run-log";
 import { bad, iataList, iso2, isoDay, latLon, today } from "@/lib/params";
 import { homeCountryOf, wayHome, WayHomeInputError, WAY_HOME_MAX_DAYS, type WayHomeResult } from "@/lib/way-home";
 
@@ -73,11 +74,22 @@ export async function GET(request: Request) {
   const key = JSON.stringify([from.toLowerCase(), codeRaw, cc, fromDate, toDate, direct, homeCountry, origin.lat.toFixed(3), origin.lon.toFixed(3), gateways]);
   const hit = memo.get(key);
   if (hit) return Response.json(withNotes(hit, notes), { headers: { "Cache-Control": "private, max-age=300", "X-Way-Home": "memo" } });
+  // The run log (the engine room's Live tab): the question and a short form of the calendar it answered.
+  const rec = newRun(request, { kind: "way-home", source: "Trip page", title: `Ways home from ${from || codeRaw}, ${fromDate} to ${toDate}${direct ? ", direct" : ""}`, input: { from: from || codeRaw, code: codeRaw, cc, fromDate, toDate, direct, home: homeCountry, gateways } });
+  const t0 = Date.now();
   try {
-    const r = await wayHome({ from: from || codeRaw, ...(codeRaw ? { code: codeRaw } : {}), ...(cc ? { country: cc } : {}), fromDate, toDate, direct, home: homeCountry, origin, gateways });
+    const r = await withRun(rec, () => wayHome({ from: from || codeRaw, ...(codeRaw ? { code: codeRaw } : {}), ...(cc ? { country: cc } : {}), fromDate, toDate, direct, home: homeCountry, origin, gateways }));
     if (!r.failed && !r.refused) memo.set(key, r);
+    if (rec) {
+      step("engine", `Ways home: ${r.days.filter((d) => d.cheapest || d.direct).length} days with a flight, ${r.searched} live searches${r.failed ? `, ${r.failed} failed` : ""}`, { ms: Date.now() - t0, ...(r.refused ? { error: "live prices rate-limited" } : {}), data: small(r) }, rec);
+      await saveRun(rec);
+    }
     return Response.json(withNotes(r, notes), { headers: { "Cache-Control": "private, max-age=300", "X-Way-Home": "live" } });
   } catch (err) {
+    if (rec) {
+      rec.error = err instanceof Error ? err.message.slice(0, 300) : String(err);
+      await saveRun(rec);
+    }
     if (err instanceof WayHomeInputError) return bad(err.message);
     console.log(`way-home: ${err instanceof Error ? err.message.slice(0, 160) : err}`);
     return Response.json({ error: "the way home could not be searched right now" }, { status: 502 });

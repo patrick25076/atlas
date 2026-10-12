@@ -35,6 +35,7 @@ import countriesJson from "@/public/data/countries.json";
 import { countryAllowed } from "./been";
 import { countryLabel, resolveGateway } from "./board";
 import { cheapestTripsIn, everywhereIn, homeAirportsFor, loadFlightGraph, type FlightGraph, type TripsQuery } from "./flight-graph";
+import { step } from "./run-log";
 import { findDeals, isCityTarget, REGION_COUNTRIES, regionCountries } from "./finder";
 import { countryGroup, walkTrips, type WalkParams } from "./graph-walk";
 import { groupTrip, GroupInputError } from "./group";
@@ -523,6 +524,7 @@ export async function runSearch(q: SearchQuery, emit: (line: SearchLine) => void
   if (hit) {
     if (hit.graph) emit({ graph: true });
     const shown = rank(applyFilters(hit.pool, q.filters, been), plan.rate).slice(0, MAX_RESULTS);
+    step("memo", `Answered from the 30-minute memo: ${shown.length} trips, no engine ran`);
     if (shown.length) emit({ results: shown });
     return finishFrom(hit);
   }
@@ -537,6 +539,7 @@ export async function runSearch(q: SearchQuery, emit: (line: SearchLine) => void
   };
   let run = runs.get(key);
   if (run) {
+    step("shared", "The same search was already running for someone else: joined it");
     for (const line of run.lines) listen(line);
     run.subs.add(listen);
   } else {
@@ -591,6 +594,9 @@ async function execute(p: Plan, emit: (line: SearchLine) => void, nobodyLeft: ()
   let abandoned = false;
   const startCount = kiwiStats().today;
   const spent = () => Math.max(0, kiwiStats().today - startCount);
+  step("plan", `Plan: ${p.target.kind === "anywhere" ? "anywhere" : p.target.kind}, ${p.out ? `${p.out} to ${p.back ?? "one way"}` : `${p.from} to ${p.to}`}${p.include ? ` including ${p.include}` : ""}, ${p.nights[0]} to ${p.nights[1]} nights, ${p.npp[0]} to ${p.npp[1]} a place, shape ${p.shape}, budget ${p.budget} live searches`, {
+    data: { target: p.target, from: p.from, to: p.to, out: p.out, back: p.back, include: p.include, nights: p.nights, nightsPerPlace: p.npp, shape: p.shape, oneWay: p.oneWay, budget: p.budget, hourEuro: p.rate, airports: p.airports, exclude: p.exclude, notes: p.notes },
+  });
 
   /** Adds results: placed, badged, Been and target checked, the cheaper of two ids kept; new and improved ones go out. */
   const add = (list: TripResult[], quiet = false): TripResult[] => {
@@ -634,8 +640,10 @@ async function execute(p: Plan, emit: (line: SearchLine) => void, nobodyLeft: ()
       if (!g.edges.length) notes.push("the flight graph is still filling tonight; live engines answered instead");
       else {
         // Added quietly, so the {graph: true} line goes out before the graph's results.
+        const tg = Date.now();
         const fresh = add(graphTrips(g, p, notes), true);
         graphCount = fresh.length;
+        step("graph", `Price graph (Dijkstra on euros over ${g.edges.length.toLocaleString("en-GB")} flights): ${graphCount} trips`, { ms: Date.now() - tg, data: { trips: rank(fresh, p.rate).slice(0, 8).map(tripLine) } });
         if (graphCount > 0) {
           graphAnswered = true;
           engines.push("graph");
@@ -667,6 +675,7 @@ async function execute(p: Plan, emit: (line: SearchLine) => void, nobodyLeft: ()
     const need = task.min;
     if (need > left && !(task.mustRun && !graphAnswered && left > 0) && !task.free) {
       if (task.skipNote) notes.push(task.skipNote);
+      step("skip", `${task.label}: not run, it needs about ${task.min} live searches and ${left} were left`, { data: { engine: task.engine, est: task.est } });
       continue;
     }
     if (need > left && task.mustRun && !graphAnswered && left > 0) notes.push(`${task.label} usually takes about ${task.est} live searches, more than the budget of ${p.budget}; it ran anyway because the flight graph had nothing for this search`);
@@ -678,16 +687,23 @@ async function execute(p: Plan, emit: (line: SearchLine) => void, nobodyLeft: ()
   await Promise.all(
     chosen.map(async ({ task, budget }) => {
       engines.push(task.engine);
+      const te = Date.now();
+      const before = spent();
+      const found: TripResult[] = [];
+      const taskNotes: string[] = [];
       try {
-        await task.run(budget, { add, say, note: (n) => noteFrom(task.engine, n), deadline });
+        await task.run(budget, { add: (r) => found.push(...add(r)), say, note: (n) => (n ? (taskNotes.push(n), noteFrom(task.engine, n)) : undefined), deadline });
+        step("engine", `${task.label}: ${found.length} new or cheaper trips`, { ms: Date.now() - te, data: { engine: task.engine, budget, spentAbout: spent() - before, notes: taskNotes, trips: rank(found, p.rate).slice(0, 6).map(tripLine) } });
       } catch (err) {
         errorFrom(task.engine, err);
+        step("engine", `${task.label} failed`, { ms: Date.now() - te, error: err instanceof Error ? err.message : String(err), data: { engine: task.engine, budget } });
       }
     }),
   );
 
   const all = rank([...pool.values()], p.rate);
   const shownCount = all.length;
+  step("rank", `Ranked ${shownCount} trips by money door to door${p.rate ? ` plus ${p.rate} euro an hour` : ""}; ${spent()} live searches in all`, { ms: Date.now() - t0, data: { top: all.slice(0, 10).map(tripLine), notes } });
   if (!shownCount && !notes.length) notes.push("nothing fits this search; try a wider window, more nights or another place");
   const done: SearchDone = { count: Math.min(MAX_RESULTS, shownCount), searched: spent(), engines: [...new Set(engines)], ...(notes.length ? { note: notes.join("; ") } : {}) };
   const answer: Answer = { pool: all.slice(0, POOL_MAX), done, graph: graphAnswered };
@@ -1092,4 +1108,9 @@ async function runScan(p: Plan, to: string, months: number, ctx: TaskCtx): Promi
 /** For the chat and tests: the label of an airport or city code. */
 export function placeName(code: string): string {
   return locate(code)?.name ?? resolveGateway(code)?.label ?? code;
+}
+
+/** One trip as the run log keeps it: what a person reads in a list. */
+function tripLine(t: TripResult) {
+  return { title: t.title, price: t.price, ground: t.groundPrice ?? 0, out: t.out, back: t.back, nights: t.nights, hours: t.hours, engine: t.engine, source: t.source, stops: t.stops.map((x) => `${x.name} ${x.nights}n`).join(", ") };
 }

@@ -25,7 +25,10 @@ for Vietnam or Laos.
 - **A long layover is a free night.** A live ticket with a layover of 18 to 60 hours in a city the walk knows becomes
   a stop of its own (that city, those nights), its hours not charged as travel, worth a little less than a real stop.
   Not yet seen live (the cheapest fares rarely have one); the rule is in place and traced.
-- **The engine room** (`pnpm dev`, then http://localhost:3210/admin; 404 in production unless ATLAS_ADMIN=1):
+- **The engine room**, at /admin on the live site (the owner's key once per browser, ATLAS_ADMIN_KEY) and under `pnpm dev`:
+  - *Live*: every search, chat turn, loop and way home the app ran, a moment after it finished, from the run log
+    (lib/run-log.ts, Postgres `runs`, kept 7 days): each step with its time and errors, each chat tool with what the
+    model asked and what came back, each loop with its beam and every way out it weighed. Filter to this browser.
   - *The machine*: every front door, engine and source of data, what uses what, the algorithm and what it minimises;
     the table of which feature uses which graph.
   - *Watch a loop*: the graph walk with its trace: the knobs of the run, the beam depth by depth (kept and dropped),

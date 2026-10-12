@@ -20,7 +20,7 @@ const edgeRow = (e: FlightEdge) => ({ from: e.f, fromCity: e.fc, to: e.t, toCity
 const airportsOf = (c: string) => (CITIES[c]?.airports?.length ? CITIES[c].airports : [c]);
 
 export async function GET(request: Request) {
-  if (!adminAllowed()) return adminRefused();
+  if (!adminAllowed(request)) return adminRefused();
   const p = new URL(request.url).searchParams;
   const op = p.get("op") ?? "stats";
   const g = await loadFlightGraph();

@@ -2,7 +2,8 @@ import { logSearch } from "@/lib/db";
 import { keepAlive } from "@/lib/memo";
 import { bad } from "@/lib/params";
 import { checkSearch, runSearch, SearchInputError, type SearchLine } from "@/lib/search";
-import { parseSearchQuery } from "@/lib/trip-result";
+import { doorPrice, parseSearchQuery, type TripResult } from "@/lib/trip-result";
+import { newRun, roughly, saveRun, withRun } from "@/lib/run-log";
 
 // GET /api/search?q=<encoded SearchQuery JSON>   (the contract: lib/trip-result.ts, docs/plans/one-search.md)
 // The one search: the flight graph first (no Kiwi search), then the live engines the query calls for, within a
@@ -36,6 +37,17 @@ export async function GET(request: Request) {
   if (problem) return bad(problem);
 
   const encoder = new TextEncoder();
+  // The run log (the engine room's Live tab): the question with the place rounded to a town, then every engine's step.
+  const to = query.to.kind === "anywhere" ? "anywhere" : query.to.kind === "region" ? query.to.key : query.to.name;
+  const when = query.when.kind === "dates" ? `${query.when.out}${query.when.back ? ` to ${query.when.back}` : " one way"}` : query.when.kind === "window" ? `${query.when.from} to ${query.when.to}` : query.when.kind === "month" ? query.when.month : "anytime";
+  const rec = newRun(request, {
+    kind: "search",
+    source: "Search tab",
+    title: `${query.from.label} to ${to}, ${when}${query.nights ? `, ${query.nights[0]} to ${query.nights[1]} nights` : ""}${query.shape && query.shape !== "any" ? `, ${query.shape}` : ""}`,
+    input: { ...query, from: { ...query.from, lat: roughly(query.from.lat), lon: roughly(query.from.lon) } },
+  });
+  const seen = new Map<string, TripResult>();
+  return withRun(rec, () => {
   // The client leaving (a new search, a closed tab) stops this caller listening, so a repeat of the
   // same search joins the run live instead of waiting behind an orphan, and a run nobody follows
   // starts no live engine it has not started yet.
@@ -58,21 +70,25 @@ export async function GET(request: Request) {
       const alive = keepAlive(send);
       const say = (line: SearchLine | { error: string }) => {
         alive.touch();
+        if ("results" in line) for (const r of line.results) seen.set(r.id, r);
         send(line);
       };
       const t0 = Date.now();
       try {
         const done = await runSearch(query, say, leave.signal);
+        if (rec) rec.result = { done, top: [...seen.values()].sort((a, b) => doorPrice(a) - doorPrice(b)).slice(0, 10).map((t) => ({ title: t.title, door: doorPrice(t), tickets: t.price, out: t.out, back: t.back, engine: t.engine, source: t.source })) };
         if (leave.signal.aborted) return;
         say({ done });
         // The usage log, never awaited: the kind of search, never the traveller's place or names.
         const where = query.to.kind === "anywhere" ? "anywhere" : query.to.kind === "region" ? `region:${query.to.key}` : `${query.to.kind}:${query.to.name}`;
         void logSearch("search", { to: where, when: query.when.kind, shape: query.shape ?? "any", advanced: Object.keys(query.advanced ?? {}), budget: query.budget, excluded: query.exclude?.length ?? 0, searched: done.searched, engines: done.engines }, done.count, Date.now() - t0).catch(() => null);
       } catch (err) {
+        if (rec) rec.error = err instanceof Error ? err.message.slice(0, 300) : String(err);
         if (leave.signal.aborted) return;
         say({ error: err instanceof SearchInputError ? err.message : err instanceof Error ? err.message.slice(0, 200) : "the search failed" });
       } finally {
         alive.stop();
+        await saveRun(rec);
         try {
           controller.close();
         } catch {
@@ -82,4 +98,5 @@ export async function GET(request: Request) {
     },
   });
   return new Response(stream, { headers: { "Content-Type": "application/x-ndjson; charset=utf-8", "Cache-Control": "no-store" } });
+  });
 }

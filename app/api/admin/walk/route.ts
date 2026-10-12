@@ -40,7 +40,7 @@ const num = (v: unknown, lo: number, hi: number, d?: number): number | undefined
 };
 
 export async function GET(request: Request) {
-  if (!adminAllowed()) return adminRefused();
+  if (!adminAllowed(request)) return adminRefused();
   let q: Q;
   try {
     q = JSON.parse(new URL(request.url).searchParams.get("q") ?? "{}");

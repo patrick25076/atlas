@@ -120,10 +120,71 @@ async function createTables(db: NonNullable<ReturnType<typeof client>>): Promise
       per_night numeric(10,2) not null, seen_at timestamptz not null default now()
     )`;
     await db`create index if not exists hotel_prices_city_idx on hotel_prices (city_code, seen_at desc)`;
+    // The run log (lib/run-log.ts): what Atlas did for each search, chat turn and walk, for the engine room.
+    await db`create table if not exists runs (
+      id bigserial primary key, at timestamptz not null default now(),
+      kind text not null, source text not null, device text not null, title text not null,
+      ms int, errors int not null default 0, body jsonb not null
+    )`;
+    await db`create index if not exists runs_at_idx on runs (at desc)`;
     return true;
   } catch (err) {
     console.log(`db: schema ${err instanceof Error ? err.message.slice(0, 200) : err}`);
     return false;
+  }
+}
+
+// ---------------------------------------------------------------------------------------
+// The run log (lib/run-log.ts writes, the engine room reads).
+
+export type RunRow = { id: number; at: string; kind: string; source: string; device: string; title: string; ms: number | null; errors: number };
+/** Days a run is kept. */
+const RUN_KEEP_DAYS = 7;
+
+/** One run, its body already JSON. Now and then the runs past RUN_KEEP_DAYS are dropped. */
+export async function insertRun(r: { kind: string; source: string; device: string; title: string; ms: number; errors: number; body: string }): Promise<boolean> {
+  const db = client();
+  if (!db || !(await ensureSchema())) return false;
+  try {
+    await db`insert into runs (kind, source, device, title, ms, errors, body) values (${r.kind}, ${r.source}, ${r.device}, ${r.title}, ${r.ms}, ${r.errors}, ${r.body}::text::jsonb)`;
+    if (Math.random() < 0.03) await db`delete from runs where at < now() - (${RUN_KEEP_DAYS} || ' days')::interval`;
+    return true;
+  } catch (err) {
+    console.log(`db: run ${err instanceof Error ? err.message.slice(0, 160) : err}`);
+    return false;
+  }
+}
+
+/** The newest runs (after an id, for polling), without their bodies. */
+export async function listRuns(opts: { after?: number; limit?: number; device?: string; kind?: string } = {}): Promise<RunRow[]> {
+  const db = client();
+  if (!db || !(await ensureSchema())) return [];
+  const limit = Math.max(1, Math.min(200, opts.limit ?? 60));
+  try {
+    const rows = await db<{ id: string; at: Date; kind: string; source: string; device: string; title: string; ms: number | null; errors: number }[]>`
+      select id, at, kind, source, device, title, ms, errors from runs
+      where true ${opts.after ? db`and id > ${opts.after}` : db``} ${opts.device ? db`and device = ${opts.device}` : db``} ${opts.kind ? db`and kind = ${opts.kind}` : db``}
+      order by id desc limit ${limit}`;
+    return rows.map((x) => ({ id: Number(x.id), at: new Date(x.at).toISOString(), kind: x.kind, source: x.source, device: x.device, title: x.title, ms: x.ms, errors: x.errors }));
+  } catch (err) {
+    console.log(`db: runs ${err instanceof Error ? err.message.slice(0, 160) : err}`);
+    return [];
+  }
+}
+
+/** One run with its body. */
+export async function getRun(id: number): Promise<(RunRow & { body: unknown }) | null> {
+  const db = client();
+  if (!db || !(await ensureSchema())) return null;
+  try {
+    const rows = await db<{ id: string; at: Date; kind: string; source: string; device: string; title: string; ms: number | null; errors: number; body: unknown }[]>`select * from runs where id = ${id}`;
+    const x = rows[0];
+    // A row written as a JSON string (before ::text::jsonb) still reads as the object it holds.
+    const body = typeof x?.body === "string" ? JSON.parse(x.body) : x?.body;
+    return x ? { id: Number(x.id), at: new Date(x.at).toISOString(), kind: x.kind, source: x.source, device: x.device, title: x.title, ms: x.ms, errors: x.errors, body } : null;
+  } catch (err) {
+    console.log(`db: run ${err instanceof Error ? err.message.slice(0, 160) : err}`);
+    return null;
   }
 }
 

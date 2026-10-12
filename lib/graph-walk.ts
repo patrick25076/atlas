@@ -27,6 +27,7 @@ import { driveMinutes, flightMinutes, haversineKm } from "./geo";
 import { reachFrom } from "./ground";
 import { kiwiDate, kiwiStats, kiwiThrottled, searchFlight, THROTTLED_MESSAGE, type KiwiItinerary } from "./kiwi";
 import { TtlLru } from "./memo";
+import { currentRun, roughly, step } from "./run-log";
 import type { Airport, City, CityPlaces, CountryInfo, HeritageRow } from "./types";
 import { findCityCode, REGIONS, resolveCountries, wishTilt } from "./wild";
 
@@ -549,6 +550,15 @@ export async function walkTrips(p: WalkParams): Promise<WalkResult> {
   const t0 = Date.now();
   const emit = p.onEvent ?? (() => {});
   const say = (text: string) => emit({ type: "progress", text });
+  // The trace: streamed to the engine room when asked (p.trace), and kept for the run log when this walk runs inside a
+  // logged request (a search, a chat turn), so the Live tab can replay how it decided.
+  const rec = currentRun();
+  const traceOn = !!p.trace || !!rec;
+  const traceBuf: WalkEvent[] = [];
+  const traceOut = (e: WalkEvent) => {
+    if (p.trace) emit(e);
+    if (rec) traceBuf.push(e);
+  };
   const at = () => new Date().toISOString();
   const considered: string[] = [];
   const fail = (note: string): WalkResult => ({ loops: [], searched: 0, failed: 0, fromMemory: 0, expanded: 0, considered, note, generatedAt: at() });
@@ -931,9 +941,9 @@ export async function walkTrips(p: WalkParams): Promise<WalkResult> {
   const pathOf = (x: State) => [p.origin.label, ...x.stops.map((y) => y.name)].join(" → ");
   const beamRow = (x: State): WalkBeamRow => ({ id: x.id, parent: x.parent, city: x.city, name: x.name, date: x.date, money: Math.round(x.money), cost: Math.round(x.cost), priority: Math.round(x.priority), path: pathOf(x) });
   const traceExpand = (x: State, tr: TraceBox) =>
-    emit({ type: "expand", id: x.id, parent: x.parent, depth: x.depth, city: x.city, name: x.name, date: x.date, window: tr.window, cost: Math.round(x.cost), path: pathOf(x), notes: tr.notes, candidates: tr.offered.map(({ key, ...c }) => ({ ...c, best: tr.best.get(c.to) === key })).sort((y, z) => y.cost - z.cost) });
-  if (p.trace)
-    emit({
+    traceOut({ type: "expand", id: x.id, parent: x.parent, depth: x.depth, city: x.city, name: x.name, date: x.date, window: tr.window, cost: Math.round(x.cost), path: pathOf(x), notes: tr.notes, candidates: tr.offered.map(({ key, ...c }) => ({ ...c, best: tr.best.get(c.to) === key })).sort((y, z) => y.cost - z.cost) });
+  if (traceOn)
+    traceOut({
       type: "knobs",
       values: {
         tradeoff,
@@ -1340,7 +1350,7 @@ export async function walkTrips(p: WalkParams): Promise<WalkResult> {
     const width = depth === 0 ? 1 : pickWidth(level[0]);
     if (depth > 0 && width < beam) considered.push(`depth ${depth}: beam ${width} instead of ${beam}, keeping ${needToClose(level[0])} of the ${searchesLeft()} searches left for the cheapest branch's hops and way home`);
     const picked = depth === 0 ? level.slice(0, 1) : pickBeam(level, depth, bestKnown, width);
-    if (p.trace) emit({ type: "beam", depth, width, kept: picked.map(beamRow), dropped: level.filter((x) => !picked.includes(x)).slice(0, 20).map(beamRow) });
+    if (traceOn) traceOut({ type: "beam", depth, width, kept: picked.map(beamRow), dropped: level.filter((x) => !picked.includes(x)).slice(0, 20).map(beamRow) });
     // The states of a depth are expanded side by side: their searches go through Kiwi's gate together (six at a
     // time), so a seven-stop walk takes seven rounds of searches, not twenty. The budget is reserved per search.
     let stop = false;
@@ -1418,7 +1428,7 @@ export async function walkTrips(p: WalkParams): Promise<WalkResult> {
         const hoursCost = hv * chargedHours(e.leg.kind, travelMinutes(e.leg, lay));
         const b = bonus(e.to, s) + layoverBonus(lay);
         const cost = e.leg.price + hoursCost + stopsPenalty(stopsOnTicket) - b;
-        if (p.trace) {
+        if (traceOn) {
           const c = spot(e.to);
           tr.offered.push({ key: e, to: e.to, name: c?.name ?? e.leg.toName, country: c?.country ?? "", kind: e.leg.kind, source: e.leg.source, date: e.leg.date, price: e.leg.price, minutes: e.leg.minutes, stops: stopsOnTicket, hoursCost: Math.round(hoursCost), stopsCost: stopsPenalty(stopsOnTicket), bonus: Math.round(b), cost: Math.round(cost), best: false, ...(lay ? { layover: { name: lay.name, hours: lay.hours } } : {}) });
         }
@@ -1504,7 +1514,7 @@ export async function walkTrips(p: WalkParams): Promise<WalkResult> {
         push(child(s, edge, hv, stops));
       }
       } finally {
-        if (p.trace) traceExpand(s, tr);
+        if (traceOn) traceExpand(s, tr);
       }
     };
     await Promise.all(picked.map(expand));
@@ -1535,5 +1545,41 @@ export async function walkTrips(p: WalkParams): Promise<WalkResult> {
   else if (late) note = `Kiwi was slow: ${loops.length} loop${loops.length === 1 ? "" : "s"} found before the run reached its time limit.`;
   const top = loops.slice(0, MAX_LOOPS);
   say(`Done: ${top.length} loop${top.length === 1 ? "" : "s"}, ${searched} live search${searched === 1 ? "" : "es"}${failed ? `, ${failed} failed` : ""}, ${expanded} states expanded.`);
+  if (rec) {
+    // Where every place of the trace is, so the Live tab can draw it without the city list.
+    const places: Record<string, [number, number, string]> = {};
+    const put = (code: string) => {
+      const c = code === HOME ? { lat: roughly(p.origin.lat) ?? 0, lon: roughly(p.origin.lon) ?? 0, name: p.origin.label } : spot(code);
+      if (c && !places[code]) places[code] = [c.lon, c.lat, c.name];
+    };
+    put(HOME);
+    for (const e of traceBuf) {
+      if (e.type === "expand") {
+        put(e.city);
+        for (const c of e.candidates.slice(0, 25)) put(c.to);
+      } else if (e.type === "beam") for (const r of [...e.kept, ...e.dropped]) put(r.city);
+    }
+    const trace = traceBuf.map((e) => (e.type === "expand" ? { ...e, candidates: e.candidates.slice(0, 25) } : e));
+    step(
+      "walk",
+      `Graph walk from ${p.origin.label}, ${p.from} to ${p.to}${targeted ? " (targeted at a region)" : ""}: ${top.length} loop${top.length === 1 ? "" : "s"}, ${searched} live search${searched === 1 ? "" : "es"}, ${expanded} states`,
+      {
+        ms: Date.now() - t0,
+        ...(note && !top.length ? { error: note } : {}),
+        data: {
+          trace,
+          places,
+          loops: top.map((l) => ({ id: l.id, title: l.title, total: l.total, flights: l.flights, ground: l.ground, nights: l.nights, hours: l.hours, score: l.score, start: l.start, end: l.end, why: l.why, stops: l.stops.map((x) => ({ code: x.code, name: x.name, nights: x.nights, lat: x.lat, lon: x.lon })) })),
+          considered,
+          searched,
+          failed,
+          fromMemory,
+          expanded,
+          note,
+        },
+      },
+      rec,
+    );
+  }
   return { loops: top, searched, failed, fromMemory, expanded, considered, note, partial: partial || undefined, generatedAt: at() };
 }

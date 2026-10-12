@@ -2,6 +2,7 @@ import { parseExclude } from "@/lib/been";
 import { logSearch } from "@/lib/db";
 import { walkTrips, wantsUnique, type WalkEvent, type WalkResult } from "@/lib/graph-walk";
 import { InFlight, keepAlive, TtlLru } from "@/lib/memo";
+import { newRun, saveRun, withRun } from "@/lib/run-log";
 import { bad, iataList, intIn, iso2, isoDay, latLon, oneOf } from "@/lib/params";
 import { parseCities, parseCountries, parseNightsRange, REGIONS } from "@/lib/wild";
 
@@ -129,11 +130,14 @@ export async function GET(request: Request) {
           else if (e.type === "loop") say({ loop: e.loop });
         };
         // The signal is the first caller's: a second caller sharing the walk must not cut it short by leaving.
+        // The run log (the engine room's Live tab): the walk adds its whole trace as a step.
+        const rec = newRun(request, { kind: "walk", source: "Loop on the globe", title: `Loop from ${label}, ${from} to ${to}, ${minNights} to ${maxNights} nights${region ? `, ${region}` : ""}`, input: { g: gateways, home, from, to, minNights, maxNights, nightsPerStop, maxStops, budget, tradeoff, region, must: must.codes, avoid, prefer: prefer.codes } });
         const { promise, mine } = inflight.run(key, () =>
-          walkTrips({ origin: { lat: point.lat, lon: point.lon, label }, gateways, home, from, to, minNights, maxNights, nightsPerStop: nightsPerStop ?? undefined, maxStops, beam, budget, maxGroundMin, tradeoff, exclude, mustInclude: must.codes, avoid, prefer: prefer.codes, allowedCountries: countries.codes, region: region || undefined, style: style || undefined, signal: gone.signal, onEvent }),
+          withRun(rec, () => walkTrips({ origin: { lat: point.lat, lon: point.lon, label }, gateways, home, from, to, minNights, maxNights, nightsPerStop: nightsPerStop ?? undefined, maxStops, beam, budget, maxGroundMin, tradeoff, exclude, mustInclude: must.codes, avoid, prefer: prefer.codes, allowedCountries: countries.codes, region: region || undefined, style: style || undefined, signal: gone.signal, onEvent })),
         );
         if (!mine) say({ progress: "The same walk is running for someone else; waiting for it." });
         const result = await promise;
+        if (mine) await saveRun(rec);
         // A walk the breaker refused, or that lost as many searches as it made, is a weak answer and must not stand
         // for an hour: the next ask gets a fresh try (and the fare memory keeps what this one did find).
         if (mine && !result.partial && !(result.failed > 0 && result.failed >= result.searched)) memo.set(key, result);
