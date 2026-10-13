@@ -33,9 +33,9 @@ import airportsJson from "@/public/data/airports.json";
 import citiesJson from "@/public/data/cities.json";
 import countriesJson from "@/public/data/countries.json";
 import { countryAllowed } from "./been";
-import { airportCity, countryLabel, hubDegree, resolveGateway } from "./board";
+import { airportCity, cityLikeliness, countryLabel, hubDegree, resolveGateway } from "./board";
 import { homeFares } from "./tp-map";
-import { cheapestTripsIn, everywhereIn, homeAirportsFor, loadFlightGraph, withExtraEdges, type FlightGraph, type RawEdge, type TripsQuery } from "./flight-graph";
+import { cheapestTripsIn, everywhereIn, flightTaste, homeAirportsFor, loadFlightGraph, withExtraEdges, type FlightGraph, type RawEdge, type TripsQuery } from "./flight-graph";
 import { step } from "./run-log";
 import { SHARED_TTL_MS, sharedGet, sharedPut } from "./shared-cache";
 import { findDeals, isCityTarget, REGION_COUNTRIES, regionCountries } from "./finder";
@@ -163,8 +163,9 @@ for (const [code, c] of Object.entries(CITIES)) {
 
 /**
  * The city a place of To means: the code the search bar sent (a city or one of its airports)
- * first; then the name, and when several cities share it, the one nearest the traveller (a
- * traveller in Europe typing Cordoba means Spain); then the gazetteer's own reading.
+ * first; then the name, and when several cities share it, the likeliest from where the traveller
+ * is, size against distance (lib/board.ts cityLikeliness: Cordoba from Europe is Spain's, Sydney is
+ * Australia's, never Nova Scotia's); then the gazetteer's own reading.
  */
 function cityFor(name: string, code: string | undefined, near: { lat: number; lon: number }): string | null {
   if (code) {
@@ -176,7 +177,7 @@ function cityFor(name: string, code: string | undefined, near: { lat: number; lo
   const lm = landmarkOf(name);
   if (lm) return lm.code && CITIES[lm.code] ? lm.code : null;
   const same = CITIES_BY_NAME.get(fold(name)) ?? [];
-  if (same.length > 1) return [...same].sort((a, b) => haversineKm(near.lat, near.lon, CITIES[a].lat, CITIES[a].lon) - haversineKm(near.lat, near.lon, CITIES[b].lat, CITIES[b].lon))[0];
+  if (same.length > 1) return [...same].sort((a, b) => cityLikeliness(b, near) - cityLikeliness(a, near))[0];
   return same[0] ?? findCityCode(name);
 }
 
@@ -308,7 +309,11 @@ export function moneyOf(t: TripResult, rate: number): number {
   // A long stay is ranked by what the engine ranks it by: the whole stay, all in.
   const raw = t.kind === "long-stay" ? (t.raw as { total?: number } | undefined)?.total : undefined;
   const base = typeof raw === "number" ? raw : t.price + (t.groundPrice ?? 0);
-  return base + rate * (t.hours ?? 0);
+  // The flights' taste, as the price map counts it (lib/flight-graph.ts flightTaste): changes, twice on a long haul,
+  // airlines past two, hours past twenty. The tradeoff is read back from the hour's euros (0, 6, 18).
+  const tradeoff = rate <= 0 ? "price" : rate < HOUR_EURO.comfort ? "balanced" : "comfort";
+  const taste = t.legs.reduce((a, l) => a + (l.kind === "fly" ? flightTaste(l.stops, l.minutes, l.carrier, tradeoff) : 0), 0);
+  return base + rate * (t.hours ?? 0) + taste;
 }
 export function rank(list: TripResult[], rate: number): TripResult[] {
   return [...list].sort((a, b) => moneyOf(a, rate) - moneyOf(b, rate) || (a.hours ?? 0) - (b.hours ?? 0) || a.id.localeCompare(b.id));

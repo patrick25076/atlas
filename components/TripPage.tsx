@@ -583,7 +583,7 @@ export default function TripPage({ trip: given, query, onBack, onFocus, onItiner
       {/* ---------- ways home ---------- */}
       {lastStop && trip.kind !== "group" && (
         <WaysHome
-          from={{ name: lastStop.name, code: lastStop.code, lat: lastStop.lat, lon: lastStop.lon }}
+          from={{ name: lastStop.name, code: lastStop.code, country: lastStop.country, lat: lastStop.lat, lon: lastStop.lon }}
           around={day10(end)}
           notBefore={lastStop.arrive ? addDays(day10(lastStop.arrive), 1) : undefined}
           query={query}

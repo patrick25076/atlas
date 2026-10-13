@@ -1,6 +1,6 @@
 // The breadth of the price map (docs/plans/one-brain.md, step 1): Travelpayouts' cache of recent Aviasales fares,
-// read for about 250 departure cities, so the cheapest-path search knows far more places to fly on to than Kiwi's
-// nightly "anywhere" search gives it (15 answers, about 11 places a city). For each city and each of the next three
+// read for about 420 departure cities (every country's two biggest with a large airport, the regions' hubs, our homes), so the cheapest-path search knows far more places to fly on to than Kiwi's
+// nightly "anywhere" search gives it (15 answers, about 11 places a city). For each city and each of the next five
 // months, two questions, both free and outside Kiwi's limit:
 //   group_by=directions  the cheapest fare to every place seen that month (Hanoi: 161 places, Budapest: 158)
 //   no grouping          the cheapest fare of each day of the month (where to on a given day)
@@ -43,7 +43,9 @@ const posInt = (v: string | undefined, fallback: number, max: number) => {
 const TOP = posInt(process.env.TP_TOP, 80, 300);
 const PAUSE_MS = posInt(process.env.TP_PAUSE_MS, 180, 5000);
 const CONCURRENCY = posInt(process.env.TP_CONCURRENCY, 3, 6);
-const MONTHS = posInt(process.env.TP_MONTHS, 3, 6);
+// Five months, not three: a February trip asked in October had no Australian domestic flight in the map, and only
+// the wild walk's live hops found one (the owner's search, 2026-10-13).
+const MONTHS = posInt(process.env.TP_MONTHS, 5, 6);
 const TEST = process.env.TP_PRODUCTION !== "1" || !!process.env.TP_ORIGINS?.trim() || !!process.env.TP_MONTHS?.trim();
 const today = new Date().toISOString().slice(0, 10);
 

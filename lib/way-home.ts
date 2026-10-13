@@ -16,7 +16,7 @@
 import airportsJson from "@/public/data/airports.json";
 import citiesJson from "@/public/data/cities.json";
 import countriesJson from "@/public/data/countries.json";
-import { countryAirports, graphEnd, graphMinutes } from "./board";
+import { cityLikeliness, countryAirports, graphEnd, graphMinutes } from "./board";
 import { cheapestSeen, type FareSeen } from "./db";
 import { driveMinutes, haversineKm, nearestGateways } from "./geo";
 import { BUDGET_MESSAGE, kiwiDate, kiwiStats, searchFlight, THROTTLED_MESSAGE, type KiwiItinerary } from "./kiwi";
@@ -110,11 +110,13 @@ const CITY_LIST = Object.entries(CITIES);
 const byPop = (a: [string, City], b: [string, City]) => (b[1].pop ?? b[1].airports.length) - (a[1].pop ?? a[1].airports.length);
 /** What decides between cities of one name: the code given, then the country given, then the one nearest the traveller. */
 export type PlaceHint = { code?: string; country?: string; near?: { lat: number; lon: number } };
-/** Cities of one name in the order the hint prefers: in its country first, then nearest its point, then the biggest. */
+/**
+ * Cities of one name in the order the hint prefers: in its country first, then the likeliest from its point, size
+ * against distance (Sydney from Brasov is Australia's; nearest alone once gave Sydney, Nova Scotia, 2026-10-13).
+ */
 function preferred(list: [string, City][], hint: PlaceHint): [string, City][] {
   const cc = hint.country?.toUpperCase();
-  const km = (c: City) => (hint.near ? haversineKm(hint.near.lat, hint.near.lon, c.lat, c.lon) : 0);
-  return [...list].sort((a, b) => Number(b[1].country === cc) - Number(a[1].country === cc) || km(a[1]) - km(b[1]) || byPop(a, b));
+  return [...list].sort((a, b) => Number(b[1].country === cc) - Number(a[1].country === cc) || cityLikeliness(b[0], hint.near) - cityLikeliness(a[0], hint.near) || byPop(a, b));
 }
 
 /** True for an airport in a country under a travel warning, unless the place itself is in that country. */

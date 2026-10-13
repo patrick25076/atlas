@@ -220,7 +220,8 @@ function ToField({ value, onChange, resolver }: { value: SearchQuery["to"]; onCh
     for (const r of regions) if (matches(r.f, q)) out.push(r);
     for (const c of lists.countries) if (matches(c.f, q) && out.length < 6) out.push({ key: `c:${c.code}`, label: c.name, sub: "Country", to: { kind: "country", name: c.name, code: c.code } });
     const cityHits = lists.cities.filter((c) => matches(c.f, q)).slice(0, 6);
-    for (const c of cityHits) out.push({ key: `p:${c.code}`, label: c.name, sub: `City, ${countryName(c.country)}`, to: { kind: "place", name: c.name } });
+    // The code goes with the name: two cities share "Sydney", and the one picked here is the one searched.
+    for (const c of cityHits) out.push({ key: `p:${c.code}`, label: c.name, sub: `City, ${countryName(c.country)}`, to: { kind: "place", name: c.name, code: c.code } });
     if (q.length >= 3 && cityHits.length < 3) {
       const seen = new Set(cityHits.map((c) => c.f));
       for (const t of lists.towns) {
@@ -268,7 +269,7 @@ function ToField({ value, onChange, resolver }: { value: SearchQuery["to"]; onCh
     const only: SearchQuery["to"][] = [
       ...regionHits.map((r) => ({ kind: "region", key: r.key }) as const),
       ...countryHits.map((c) => ({ kind: "country", name: c.name, code: c.code }) as const),
-      ...cityHits.slice(0, 2).map((c) => ({ kind: "place", name: c.name }) as const),
+      ...cityHits.slice(0, 2).map((c) => ({ kind: "place", name: c.name, code: c.code }) as const),
       ...townHits.map((t) => ({ kind: "place", name: t.name }) as const),
     ];
     if (only.length === 1) return { to: only[0] };

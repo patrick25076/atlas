@@ -166,3 +166,14 @@ search directly (cheapestTripsIn, with and without each rule), found these.
 Also: a graph step with 0 trips now says why; an empty answer is no longer cached for the hour; a mended query is
 cached under the question as asked. A regression caught by the benchmark on the way: a place's country made any stop
 in Peru count as Machu Picchu (0 trips), fixed before it shipped.
+
+## Australia: why the wild loop beat the search (13 October)
+
+The owner searched Sydney for two weeks in February and got 3 changes over America for 1,437 euro; the wild loop
+through Oceania found Qatar through Doha, 1 change, and six cities for 1,504. Read from the two runs in the Live tab:
+
+| Cause | Fixed |
+| --- | --- |
+| "Sydney" was Sydney, Nova Scotia (YQY): of two cities with one name, the search took the nearest, and Canada is nearer to Brasov. The way home from Sydney did the same. The wild loop asked for a region, so it never met the name | of cities sharing a name, the likeliest: population over (1 + km/2000) squared (lib/board.ts cityLikeliness). Sydney and Melbourne are Australia's, Cordoba and Valencia Spain's from Europe, Santiago Chile's. The To box now sends the code of the city picked, and a trip's way home the stop's own code and country |
+| A change of plane was 25 euro whether it was a 2 h hop or a 35 h journey, an hour 6 euro, and four airlines on separate tickets nothing: 3 changes on Pegasus, AirAsia X, AirAsia and Jetstar for 550 beat Qatar's 1 change for 695. The walk prices an hour at 9 to 12 | flightTaste (lib/flight-graph.ts), in the map's search and in the final ranking alike: a change twice the style's on a long haul (over 8 h), every airline past two the same again, hours past 20 counted twice. Sydney now: a return for 1,035 euro with 2 changes each way on two airlines; Qatar's 1 change heads the loops |
+| In February the map had no Australian domestic flight: the nightly Travelpayouts import covered three months, so the map's loop was empty and only the walk, asking live at each hop, found one | the import covers five months. Every live answer is also kept in the fare memory for three days: an hour after the owner's wild loop, the map alone answered the same Oceania loop with 13 trips, Qatar out, Jetstar between, 1,499 euro |

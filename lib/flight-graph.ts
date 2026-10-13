@@ -536,6 +536,27 @@ const HOUR_EURO: Record<Tradeoff, number> = { price: 0, balanced: 6, comfort: 18
 /** A change of plane on a ticket, in euros on top of its fare, per tradeoff (the walk's STOP_EURO): the owner wants
  * fewer stops, so even at Cheapest a nonstop beats a one-stop that is a few euros cheaper. Ranking only, never a price. */
 const STOP_EURO: Record<Tradeoff, number> = { price: 12, balanced: 25, comfort: 60 };
+/** A flight this long (minutes in the air and between) is a long haul: a missed connection there costs a day. */
+const LONG_HAUL_MIN = 8 * 60;
+/** Past this many hours one journey tires twice as fast: each hour more costs the hour's euros again. */
+const TIRED_AFTER_H = 20;
+
+/**
+ * The taste cost of one flight on top of its fare and its hours (never in a price): each change of plane STOP_EURO,
+ * twice that on a long haul; one more for every airline past two (separate tickets, a self-transfer between low-cost
+ * carriers); and the hours past TIRED_AFTER_H counted twice. Brasov to Cairns with 3 changes on Pegasus, AirAsia X,
+ * AirAsia and Jetstar in 35 h for 550 euro beat Qatar through Doha, 1 change, 24 h, 695 euro, when a change was 25
+ * euro whatever the flight and an hour 6 (the owner's search to Australia, 2026-10-13); with this it loses by about 140.
+ */
+export function flightTaste(stops: number | undefined, minutes: number | undefined, carrier: string | undefined, tradeoff: Tradeoff): number {
+  const unit = STOP_EURO[tradeoff];
+  const m = Math.max(0, minutes ?? 0);
+  const changes = Math.max(0, stops ?? 0) * unit * (m > LONG_HAUL_MIN ? 2 : 1);
+  const airlines = carrier ? new Set(carrier.split(",").map((x) => x.trim()).filter(Boolean)).size : 0;
+  const tickets = Math.max(0, airlines - 2) * unit;
+  const tired = Math.max(0, m / 60 - TIRED_AFTER_H) * HOUR_EURO[tradeoff];
+  return changes + tickets + tired;
+}
 /** Other flights shown beside each flight of a traced trip: out of the same city, a day either side. */
 const TRACE_ALTERNATIVES = 8;
 /** A tie on euros is broken by minutes: this small a weight never outvotes a whole euro over a 100-hour trip. */
@@ -933,7 +954,8 @@ export function cheapestTripsIn(g: FlightGraph, q: TripsQuery): TripsResult {
   const minPlaces = Math.max(1, Math.min(maxPlaces, Math.round(q.minPlaces ?? 1)));
   const top = Math.max(1, Math.min(30, Math.round(q.top ?? TOP)));
   const rate = HOUR_EURO[q.tradeoff ?? "price"] / 60;
-  const stopPen = (n: number | undefined) => Math.max(0, n || 0) * STOP_EURO[q.tradeoff ?? "price"];
+  const tradeoff = q.tradeoff ?? "price";
+  const stopPen = (e: { s?: number; m?: number; c?: string }) => flightTaste(e.s, e.m, e.c, tradeoff);
   const groundMax = q.groundMaxMin == null ? DEFAULT_GROUND_MIN : Math.max(0, Math.min(720, Math.round(q.groundMaxMin)));
   const exclude = (q.exclude ?? []).map((c) => c.trim().toUpperCase());
   const avoid = resolveAvoid(q.avoid);
@@ -1075,7 +1097,7 @@ export function cheapestTripsIn(g: FlightGraph, q: TripsQuery): TripsResult {
         const minutes = h.minutes + e.m;
         const mm = mustBits(e.tc);
         if (!roomFor(1, mm)) continue;
-        push({ kind: 0, city: e.tc, day: e.an, places: 1, start: d, cost: costOf(euros, minutes) + stopPen(e.s), euros, minutes, visited: [e.tc], parent: doorLabel(h, d), fe: i, pen: stopPen(e.s), mm });
+        push({ kind: 0, city: e.tc, day: e.an, places: 1, start: d, cost: costOf(euros, minutes) + stopPen(e), euros, minutes, visited: [e.tc], parent: doorLabel(h, d), fe: i, pen: stopPen(e), mm });
       }
     }
   }
@@ -1090,7 +1112,7 @@ export function cheapestTripsIn(g: FlightGraph, q: TripsQuery): TripsResult {
     if (incN != null && endDay < incN) return;
     const euros = l.euros + close.reduce((a, x) => a + x.price, 0);
     const minutes = l.minutes + close.reduce((a, x) => a + x.minutes, 0);
-    const cost = costOf(euros, minutes) + (l.pen ?? 0) + close.reduce((a, x) => a + (x.kind === "fly" ? stopPen(x.stops) : 0), 0);
+    const cost = costOf(euros, minutes) + (l.pen ?? 0) + close.reduce((a, x) => a + (x.kind === "fly" ? stopPen({ s: x.stops, m: x.minutes, c: x.carrier }) : 0), 0);
     const seq = l.visited.join(">");
     const prev = doneSeqs.get(seq);
     if (prev != null && done[prev].cost + TIE * done[prev].minutes <= cost + TIE * minutes) return;
@@ -1154,7 +1176,7 @@ export function cheapestTripsIn(g: FlightGraph, q: TripsQuery): TripsResult {
       if (!roomFor(l.places + 1, mm)) continue;
       const euros = l.euros + e.p;
       const minutes = l.minutes + e.m;
-      const pen = (l.pen ?? 0) + stopPen(e.s);
+      const pen = (l.pen ?? 0) + stopPen(e);
       push({ kind: 0, city: e.tc, day: e.an, places: l.places + 1, start: l.start, cost: costOf(euros, minutes) + pen, euros, minutes, visited: [...l.visited, e.tc], parent: li, fe: i, pen, mm });
     }
     if (groundMax <= 0) continue;

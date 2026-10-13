@@ -508,6 +508,39 @@
       "gold": {
         "note": "2026-10-12 in production: 0 trips (the walk asked for 58 to 60 nights); 2026-10-13: the bar wins, 30 nights, 20 trips"
       }
+    },
+    {
+      "id": "sydney-two-weeks",
+      "label": "Sydney, 14 to 17 nights in February (the name two cities share)",
+      "query": {
+        "to": {
+          "kind": "place",
+          "name": "Sydney"
+        },
+        "when": {
+          "kind": "window",
+          "from": "+111d",
+          "to": "+145d"
+        },
+        "nights": [
+          14,
+          17
+        ],
+        "prefs": {
+          "pace": "balanced",
+          "avoid": [],
+          "taste": "mixed",
+          "groundOk": true,
+          "tradeoff": "balanced",
+          "nightsPerPlace": [
+            2,
+            3
+          ]
+        }
+      },
+      "gold": {
+        "note": "2026-10-13: was Sydney, Nova Scotia (YQY), 3 changes over America, 1,437 euro; now Sydney, Australia: a return about 1,035 euro with 2 changes each way, Qatar through Doha in the loops"
+      }
     }
   ]
 }

@@ -1057,7 +1057,7 @@ if (want("search")) {
   }
   {
     const sys = chatSystem(chatContext({ origin: { lat: 45.657, lon: 25.601, label: "Brasov" }, gateways: ["GHV", "SBZ", "OTP"], home: "RO", today }));
-    verdict("prompt: one search", /The app is one search/.test(sys) && /call search ONCE/.test(sys) && /make it direct" is the same query with direct true/.test(sys) && /walk_trips with mustInclude/.test(sys), "one query, one call, refine it, must-include through the walk");
+    verdict("prompt: one search", /The app is one search/.test(sys) && /call search ONCE/.test(sys) && /make it direct" is the same query with direct true/.test(sys) && /search with mustInclude/.test(sys), "one query, one call, refine it, must-include places through search (2026-10-12; the walk only for a fixed way out)");
     // The bus details the chat sends for a search and a trip.
     const sd: SearchDetail = { query: { from: { label: "Brașov", lat: 45.657, lon: 25.601, airports: ["GHV"], home: "RO" }, to: { kind: "anywhere" }, when: { kind: "anytime" } } };
     verdict("bus: atlas:search", !("error" in parseSearchQuery(sd.query)), "the detail carries a query the Search tab accepts");

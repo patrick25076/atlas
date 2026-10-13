@@ -74,6 +74,20 @@ export function hubDegree(cityCode: string): number {
   return degree.get(cityCode) ?? 0;
 }
 
+/**
+ * How likely a traveller at `near` means this city when several share its name: its size against its distance,
+ * population over (1 + km / 2000) squared. Sydney is Australia's from Brasov (Sydney, Nova Scotia is nearer and 50
+ * times smaller, and the search once flew the owner there over America, 2026-10-13); Melbourne is Australia's, not
+ * Florida's; Cordoba and Valencia are Spain's from Europe; Santiago is Chile's; London is England's even from Toronto.
+ */
+export function cityLikeliness(cityCode: string, near?: { lat: number; lon: number }): number {
+  const c = CITIES[cityCode];
+  if (!c) return 0;
+  const size = c.pop ?? Math.max(20_000, hubDegree(cityCode) * 20_000);
+  const km = near ? haversineKm(near.lat, near.lon, c.lat, c.lon) : 0;
+  return size / (1 + km / 2000) ** 2;
+}
+
 /** Of a visitor's airports, the one with the most flights (Otopeni over Ghimbav): the key a trip is stored under. */
 export function mainGateway(codes: string[]): string {
   return [...codes].sort((a, b) => hubDegree(cityOf.get(b) ?? b) - hubDegree(cityOf.get(a) ?? a))[0] ?? codes[0];

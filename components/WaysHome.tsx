@@ -123,7 +123,7 @@ export function useNearView<T extends Element>(onNear: () => void, enabled = tru
 
 type Props = {
   /** The place the traveller flies home from: the trip's last stop. */
-  from: { name: string; code?: string; lat: number; lon: number };
+  from: { name: string; code?: string; country?: string; lat: number; lon: number };
   /** The trip's own last day, YYYY-MM-DD: the window is the days around it. */
   around: string;
   query?: SearchQuery;
@@ -157,6 +157,9 @@ export default function WaysHome({ from, around, notBefore, query, currentDay, c
 
   const url = useMemo(() => {
     const p = new URLSearchParams({ from: from.name, fromDate, toDate });
+    // The stop's own city and country, so a name two cities share (Sydney) is the one the trip went to.
+    if (from.code && /^[A-Z]{3}$/.test(from.code)) p.set("code", from.code);
+    if (from.country && /^[A-Z]{2}$/.test(from.country)) p.set("cc", from.country);
     if (query?.filters?.direct) p.set("direct", "1");
     if (query?.from) {
       if (query.from.home) p.set("home", query.from.home);
@@ -172,7 +175,7 @@ export default function WaysHome({ from, around, notBefore, query, currentDay, c
       if (g.length) p.set("g", g.join(","));
     }
     return `/api/way-home?${p}`;
-  }, [from.name, fromDate, toDate, query?.filters?.direct, query?.from]);
+  }, [from.name, from.code, from.country, fromDate, toDate, query?.filters?.direct, query?.from]);
 
   const load = () => {
     setState({ status: "loading" });

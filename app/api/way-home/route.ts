@@ -11,8 +11,8 @@ import { homeCountryOf, wayHome, WayHomeInputError, WAY_HOME_MAX_DAYS, type WayH
 // the traveller's own airports, shown first. Without a home point the app's default traveller (Brasov, Romania) is
 // assumed and the answer says so. The window is at most 14 days; a first day in the past starts today.
 // code (a city or airport code, such as a trip stop's) and cc (the place's country) decide between places of one
-// name: Florence with code=FLR is Italy, never South Carolina. Without them a shared name is read as the one nearest
-// the traveller's home point. from may be left out when code is given.
+// name: Florence with code=FLR is Italy, never South Carolina. Without them a shared name is the likeliest from the
+// traveller's home point, size against distance (Sydney is Australia's from Brasov). from may be left out when code is given.
 // JSON: { days: [{ date, cheapest?, direct? }], bestDirect?, cheapest?, cheapestDoorToDoor?, homeLegs: [{ airport,
 // minutes, price, ... }], searched, note?, ... }. Searches: one or two one-way searches over the window, then up to
 // two more (four with direct=1) aimed at one home airport each; six at most, and a repeat within a day is free
