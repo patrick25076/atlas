@@ -35,7 +35,8 @@ import countriesJson from "@/public/data/countries.json";
 import { countryAllowed } from "./been";
 import { airportCity, cityLikeliness, countryLabel, hubDegree, resolveGateway } from "./board";
 import { homeFares } from "./tp-map";
-import { cheapestTripsIn, everywhereIn, flightTaste, homeAirportsFor, loadFlightGraph, withExtraEdges, type FlightGraph, type RawEdge, type TripsQuery } from "./flight-graph";
+import { cheapestTripsIn, everywhereIn, homeAirportsFor, loadFlightGraph, withExtraEdges, type FlightGraph, type RawEdge, type TripsQuery } from "./flight-graph";
+import { tripTaste } from "./taste";
 import { step } from "./run-log";
 import { SHARED_TTL_MS, sharedGet, sharedPut } from "./shared-cache";
 import { findDeals, isCityTarget, REGION_COUNTRIES, regionCountries } from "./finder";
@@ -309,11 +310,10 @@ export function moneyOf(t: TripResult, rate: number): number {
   // A long stay is ranked by what the engine ranks it by: the whole stay, all in.
   const raw = t.kind === "long-stay" ? (t.raw as { total?: number } | undefined)?.total : undefined;
   const base = typeof raw === "number" ? raw : t.price + (t.groundPrice ?? 0);
-  // The flights' taste, as the price map counts it (lib/flight-graph.ts flightTaste): changes, twice on a long haul,
-  // airlines past two, hours past twenty. The tradeoff is read back from the hour's euros (0, 6, 18).
+  // The flights' taste (lib/taste.ts tripTaste): changes, twice on a long haul, airlines past two, hours past twenty;
+  // none at Cheapest. The tradeoff is read back from the hour's euros (0, 6, 18); the Search tab sorts the same way.
   const tradeoff = rate <= 0 ? "price" : rate < HOUR_EURO.comfort ? "balanced" : "comfort";
-  const taste = t.legs.reduce((a, l) => a + (l.kind === "fly" ? flightTaste(l.stops, l.minutes, l.carrier, tradeoff) : 0), 0);
-  return base + rate * (t.hours ?? 0) + taste;
+  return base + rate * (t.hours ?? 0) + tripTaste(t.legs, tradeoff);
 }
 export function rank(list: TripResult[], rate: number): TripResult[] {
   return [...list].sort((a, b) => moneyOf(a, rate) - moneyOf(b, rate) || (a.hours ?? 0) - (b.hours ?? 0) || a.id.localeCompare(b.id));

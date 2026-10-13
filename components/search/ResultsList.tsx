@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { SearchQuery, TripResult } from "@/lib/trip-result";
 import { readNdjson } from "@/lib/boards-client";
+import { tripTaste } from "@/lib/taste";
 import TripCard from "./TripCard";
 import s from "./search.module.css";
 
@@ -132,7 +133,10 @@ export function moneyOf(t: TripResult): number {
 export function sortTrips(list: TripResult[], key: SortKey): TripResult[] {
   const hours = (t: TripResult) => t.hours ?? 99;
   const w = EURO_PER_HOUR[key] ?? 0;
-  return [...list].sort((a, b) => moneyOf(a) + w * hours(a) - (moneyOf(b) + w * hours(b)) || hours(a) - hours(b) || a.id.localeCompare(b.id));
+  // Balanced and Comfort count the flights' taste as the server does (lib/taste.ts: changes, twice on a long haul,
+  // airlines past two, hours past twenty), so 3 changes on four airlines to Australia never tops a 1-change Qatar.
+  const score = (t: TripResult) => moneyOf(t) + w * hours(t) + tripTaste(t.legs, key);
+  return [...list].sort((a, b) => score(a) - score(b) || hours(a) - hours(b) || a.id.localeCompare(b.id));
 }
 
 type Props = {
