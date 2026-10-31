@@ -4,7 +4,7 @@
     "url": "https://davidmegginson.github.io/ourairports-data/airports.csv",
     "licence": "Public domain",
     "note": "Airports with scheduled passenger service and an IATA code.",
-    "fetchedAt": "2026-10-30T10:00:18.580Z",
+    "fetchedAt": "2026-10-31T09:38:36.296Z",
     "rows": 4010,
     "file": "public/data/airports.json"
   },
@@ -31,7 +31,7 @@
     "url": "https://api.travelpayouts.com/data/en/cities.json",
     "licence": "Travelpayouts static data (free for partner use)",
     "note": "City IATA code → name, coordinates, airports on the globe (biggest first).",
-    "fetchedAt": "2026-10-30T10:00:20.060Z",
+    "fetchedAt": "2026-10-31T09:38:37.799Z",
     "rows": 3159,
     "file": "public/data/cities.json"
   },
@@ -40,7 +40,7 @@
     "url": "https://api.travelpayouts.com/data/en/countries.json",
     "licence": "Travelpayouts static data (free for partner use)",
     "note": "Country name and currency code.",
-    "fetchedAt": "2026-10-30T10:00:22.061Z",
+    "fetchedAt": "2026-10-31T09:39:10.571Z",
     "rows": 253,
     "file": "public/data/countries.json"
   },
@@ -48,8 +48,8 @@
     "source": "Frankfurter (ECB reference rates)",
     "url": "https://api.frankfurter.dev/v1/latest?base=EUR",
     "licence": "Free, commercial use allowed",
-    "note": "Rates per EUR as of 2026-10-29.",
-    "fetchedAt": "2026-10-30T10:00:22.061Z",
+    "note": "Rates per EUR as of 2026-10-30.",
+    "fetchedAt": "2026-10-31T09:39:10.571Z",
     "rows": 104,
     "file": "public/data/countries.json"
   },
@@ -58,7 +58,7 @@
     "url": "https://query.wikidata.org/",
     "licence": "CC0",
     "note": "Practical country facts.",
-    "fetchedAt": "2026-10-30T10:00:22.061Z",
+    "fetchedAt": "2026-10-31T09:39:10.571Z",
     "rows": 223,
     "file": "public/data/countries.json"
   },
@@ -67,7 +67,7 @@
     "url": "https://www.auswaertiges-amt.de/opendata/travelwarning",
     "licence": "Open data of the Auswärtiges Amt",
     "note": "Full and partial travel warnings per country.",
-    "fetchedAt": "2026-10-30T10:00:22.061Z",
+    "fetchedAt": "2026-10-31T09:39:10.571Z",
     "rows": 200,
     "file": "public/data/countries.json"
   },
@@ -85,7 +85,7 @@
     "url": "https://api.met.no/weatherapi/locationforecast/2.0/documentation",
     "licence": "CC BY 4.0 (Norwegian Meteorological Institute)",
     "note": "7-day forecast for cities with a large or medium airport; sea temperature where a ferry port is within 15 km.",
-    "fetchedAt": "2026-10-30T10:05:30.388Z",
+    "fetchedAt": "2026-10-31T09:41:32.337Z",
     "rows": 2805,
     "file": "public/data/weather.json"
   },
