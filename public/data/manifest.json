@@ -4,7 +4,7 @@
     "url": "https://davidmegginson.github.io/ourairports-data/airports.csv",
     "licence": "Public domain",
     "note": "Airports with scheduled passenger service and an IATA code.",
-    "fetchedAt": "2026-11-02T11:05:29.706Z",
+    "fetchedAt": "2026-11-03T10:52:02.504Z",
     "rows": 4008,
     "file": "public/data/airports.json"
   },
@@ -22,7 +22,7 @@
     "url": "https://api.travelpayouts.com/data/en/airlines.json",
     "licence": "Travelpayouts static data (free for partner use)",
     "note": "IATA airline code → name.",
-    "fetchedAt": "2026-11-02T11:05:32.765Z",
+    "fetchedAt": "2026-11-03T10:52:05.638Z",
     "rows": 1178,
     "file": "public/data/airlines.json"
   },
@@ -31,7 +31,7 @@
     "url": "https://api.travelpayouts.com/data/en/cities.json",
     "licence": "Travelpayouts static data (free for partner use)",
     "note": "City IATA code → name, coordinates, airports on the globe (biggest first).",
-    "fetchedAt": "2026-11-02T11:05:31.428Z",
+    "fetchedAt": "2026-11-03T10:52:04.318Z",
     "rows": 3159,
     "file": "public/data/cities.json"
   },
@@ -40,7 +40,7 @@
     "url": "https://api.travelpayouts.com/data/en/countries.json",
     "licence": "Travelpayouts static data (free for partner use)",
     "note": "Country name and currency code.",
-    "fetchedAt": "2026-11-02T11:05:33.621Z",
+    "fetchedAt": "2026-11-03T10:52:06.486Z",
     "rows": 253,
     "file": "public/data/countries.json"
   },
@@ -48,8 +48,8 @@
     "source": "Frankfurter (ECB reference rates)",
     "url": "https://api.frankfurter.dev/v1/latest?base=EUR",
     "licence": "Free, commercial use allowed",
-    "note": "Rates per EUR as of 2026-10-30.",
-    "fetchedAt": "2026-11-02T11:05:33.621Z",
+    "note": "Rates per EUR as of 2026-11-02.",
+    "fetchedAt": "2026-11-03T10:52:06.486Z",
     "rows": 104,
     "file": "public/data/countries.json"
   },
@@ -58,7 +58,7 @@
     "url": "https://query.wikidata.org/",
     "licence": "CC0",
     "note": "Practical country facts.",
-    "fetchedAt": "2026-11-02T11:05:33.621Z",
+    "fetchedAt": "2026-11-03T10:52:06.486Z",
     "rows": 223,
     "file": "public/data/countries.json"
   },
@@ -67,7 +67,7 @@
     "url": "https://www.auswaertiges-amt.de/opendata/travelwarning",
     "licence": "Open data of the Auswärtiges Amt",
     "note": "Full and partial travel warnings per country.",
-    "fetchedAt": "2026-11-02T11:05:33.621Z",
+    "fetchedAt": "2026-11-03T10:52:06.486Z",
     "rows": 200,
     "file": "public/data/countries.json"
   },
@@ -75,9 +75,9 @@
     "source": "Nager.Date public holidays",
     "url": "https://nagerholidays.com/api/v4",
     "licence": "Open source (Nager.Date), free API",
-    "note": "Holidays from 2026-11-02 to 2027-12-07, 204 countries.",
-    "fetchedAt": "2026-11-02T11:05:45.302Z",
-    "rows": 2814,
+    "note": "Holidays from 2026-11-03 to 2027-12-08, 204 countries.",
+    "fetchedAt": "2026-11-03T10:52:28.720Z",
+    "rows": 2829,
     "file": "public/data/holidays.json"
   },
   "weather": {
@@ -85,8 +85,8 @@
     "url": "https://api.met.no/weatherapi/locationforecast/2.0/documentation",
     "licence": "CC BY 4.0 (Norwegian Meteorological Institute)",
     "note": "7-day forecast for cities with a large or medium airport; sea temperature where a ferry port is within 15 km.",
-    "fetchedAt": "2026-11-02T11:07:11.601Z",
-    "rows": 2805,
+    "fetchedAt": "2026-11-03T10:53:55.050Z",
+    "rows": 2806,
     "file": "public/data/weather.json"
   },
   "towns": {
