@@ -2898,7 +2898,7 @@
 	{"iata":"SBH","icao":"TFFJ","name":"St. Jean Airport","city":"Gustavia","country":"BL","region":"BL-U-A","size":"medium","lat":17.9044,"lon":-62.8433},
 	{"iata":"SCE","icao":"KUNV","name":"State College Regional Airport","city":"State College","country":"US","region":"US-PA","size":"medium","lat":40.8494,"lon":-77.8485},
 	{"iata":"STW","icao":"URMT","name":"Stavropol Shpakovskoye Airport","city":"Stavropol","country":"RU","region":"RU-STA","size":"medium","lat":45.1092,"lon":42.1128},
-	{"iata":"SML","icao":"MYLS","name":"Stella Maris Airport","city":"Stella Maris","country":"BS","region":"BS-LI","size":"medium","lat":23.5823,"lon":-75.2686},
+	{"iata":"SML","icao":"MYLS","name":"Stella Maris Airport","city":"Stella Maris","country":"BS","region":"BS-LI","size":"medium","lat":23.583,"lon":-75.2689},
 	{"iata":"SWO","icao":"KSWO","name":"Stillwater Regional Airport","city":"Stillwater","country":"US","region":"US-OK","size":"medium","lat":36.1621,"lon":-97.0856},
 	{"iata":"BMA","icao":"ESSB","name":"Stockholm-Bromma Airport","city":"Stockholm","country":"SE","region":"SE-AB","size":"medium","lat":59.3544,"lon":17.9417},
 	{"iata":"SCK","icao":"KSCK","name":"Stockton Metropolitan Airport","city":"Stockton","country":"US","region":"US-CA","size":"medium","lat":37.8933,"lon":-121.2381},
