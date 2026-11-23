@@ -94,8 +94,8 @@
     "url": "https://download.geonames.org/export/dump/cities15000.zip",
     "licence": "CC BY 4.0",
     "note": "Towns over 15,000 people with population; 2394 airport cities got a population.",
-    "fetchedAt": "2026-11-16T12:04:51.418Z",
-    "rows": 34216,
+    "fetchedAt": "2026-11-23T13:41:46.857Z",
+    "rows": 34248,
     "file": "public/data/towns.json"
   },
   "cityPlaces": {
@@ -147,9 +147,9 @@
     "source": "Kiwi.com flight search (public MCP), one-way",
     "url": "https://mcp.kiwi.com/",
     "licence": "Kiwi.com public MCP, no key; prices and booking links as returned",
-    "note": "Cheapest one-way dates out of and back into OTP, CLJ, IAS, TSR for 117 cities, 2026-11-18 to 2027-01-02. 0 searches failed.",
-    "fetchedAt": "2026-11-16T12:18:50.115Z",
-    "rows": 5612,
+    "note": "Cheapest one-way dates out of and back into OTP, CLJ, IAS, TSR for 117 cities, 2026-11-25 to 2027-01-09. 0 searches failed.",
+    "fetchedAt": "2026-11-23T13:54:07.880Z",
+    "rows": 5610,
     "file": "public/data/oneway.json"
   },
   "fame": {
