@@ -2714,7 +2714,6 @@
 	{"iata":"RST","icao":"KRST","name":"Rochester International Airport","city":"Rochester","country":"US","region":"US-MN","size":"medium","lat":43.9083,"lon":-92.5},
 	{"iata":"RSD","icao":"MYER","name":"Rock Sound International Airport","city":"Rock Sound","country":"BS","region":"BS-SE","size":"medium","lat":24.8916,"lon":-76.1776},
 	{"iata":"ROK","icao":"YBRK","name":"Rockhampton Airport","city":"Rockhampton","country":"AU","region":"AU-QLD","size":"medium","lat":-23.38,"lon":150.4754},
-	{"iata":"BJC","icao":"KBJC","name":"Rocky Mountain Metropolitan Airport","city":"Denver","country":"US","region":"US-CO","size":"medium","lat":39.9088,"lon":-105.117},
 	{"iata":"RDZ","icao":"LFCR","name":"Rodez–Aveyron Airport","city":"Rodez/Marcillac","country":"FR","region":"FR-OCC","size":"medium","lat":44.4079,"lon":2.4827},
 	{"iata":"MFR","icao":"KMFR","name":"Rogue Valley International-Medford Airport","city":"Medford","country":"US","region":"US-OR","size":"medium","lat":42.3742,"lon":-122.873},
 	{"iata":"ROI","icao":"VTUV","name":"Roi Et Airport","city":"Roi Et","country":"TH","region":"TH-45","size":"medium","lat":16.1168,"lon":103.774},
