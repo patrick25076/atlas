@@ -3461,6 +3461,7 @@
 	{"iata":"GYZ","icao":"AU-0456","name":"Gruyere Airport","city":"Cosmo Newbery","country":"AU","region":"AU-WA","size":"small","lat":-28.0345,"lon":123.8151},
 	{"iata":"GUZ","icao":"SNGA","name":"Guarapari Airport","city":"Guarapari","country":"BR","region":"BR-ES","size":"small","lat":-20.6465,"lon":-40.4919},
 	{"iata":"GGJ","icao":"SSGY","name":"Guaíra Airport","city":"Guaíra","country":"BR","region":"BR-PR","size":"small","lat":-24.0811,"lon":-54.1917},
+	{"iata":"OOD","icao":"YKDD","name":"Gudai Darri Mine Airport","city":"Gudai Darri Mine","country":"AU","region":"AU-WA","size":"small","lat":-22.5043,"lon":119.0768},
 	{"iata":"GUB","icao":"MMGR","name":"Guerrero Negro Airport","city":"San Quintín","country":"MX","region":"MX-BCN","size":"small","lat":28.0261,"lon":-114.024},
 	{"iata":"KBU","icao":"WAOK","name":"Gusti Syamsir Alam Airport","city":"Stagen","country":"ID","region":"ID-KS","size":"small","lat":-3.2948,"lon":116.1638},
 	{"iata":"AKS","icao":"AGGA","name":"Gwaunaru'u Airport","city":"Auki","country":"SB","region":"SB-ML","size":"small","lat":-8.7026,"lon":160.682},
